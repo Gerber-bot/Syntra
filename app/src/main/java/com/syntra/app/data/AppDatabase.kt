@@ -178,6 +178,9 @@ interface ExerciseAliasDao {
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertAll(aliases: List<ExerciseAliasEntity>)
 
+    @Query("DELETE FROM exercise_aliases WHERE normalizedAlias = :normalizedAlias")
+    suspend fun deleteByAlias(normalizedAlias: String)
+
     @Query("DELETE FROM exercise_aliases")
     suspend fun deleteAll()
 }

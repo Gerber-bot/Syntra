@@ -61,7 +61,8 @@ object IrisXClassifier {
      */
     fun detectMuscleGroup(
         exerciseName: String,
-        learnedAliases: Map<String, String> = emptyMap()
+        learnedAliases: Map<String, String> = emptyMap(),
+        muscleOverrides: Map<String, String> = emptyMap()
     ): String {
         val norm = normalize(exerciseName)
         if (norm.isBlank()) return "General"
@@ -70,6 +71,10 @@ object IrisXClassifier {
         val learnedCanonical = learnedAliases[norm] ?: learnedAliases[exerciseName]
         val nameToCheck = learnedCanonical ?: exerciseName
         val normToCheck = normalize(nameToCheck)
+
+        // 1b. Explicit user muscle group override check
+        muscleOverrides[normToCheck]?.let { return it }
+        muscleOverrides[norm]?.let { return it }
 
         // 2. ExerciseCatalog direct match or alias match
         for (catEx in ExerciseCatalog.DEFAULT_CATALOG) {
@@ -118,7 +123,8 @@ object IrisXClassifier {
     fun classifyWorkout(
         sessionTitle: String,
         exerciseNames: List<String>,
-        learnedAliases: Map<String, String> = emptyMap()
+        learnedAliases: Map<String, String> = emptyMap(),
+        muscleOverrides: Map<String, String> = emptyMap()
     ): ClassificationResult {
         val normTitle = normalize(sessionTitle)
 
@@ -134,7 +140,7 @@ object IrisXClassifier {
         var legExercises = 0
 
         for (ex in exerciseNames) {
-            val muscle = detectMuscleGroup(ex, learnedAliases)
+            val muscle = detectMuscleGroup(ex, learnedAliases, muscleOverrides)
             muscleBreakdown[muscle] = (muscleBreakdown[muscle] ?: 0) + 1
 
             when (muscle) {

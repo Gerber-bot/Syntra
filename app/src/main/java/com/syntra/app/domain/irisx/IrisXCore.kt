@@ -19,6 +19,7 @@ interface IrisXRepository {
     suspend fun findExerciseByNormalized(normalized: String): ExerciseEntity?
     suspend fun updateExercise(exercise: ExerciseEntity)
     suspend fun getLearnedAliases(): Map<String, String>
+    suspend fun getMuscleOverrides(): Map<String, String> = emptyMap()
     suspend fun saveLearnedAlias(alias: String, canonical: String)
     suspend fun deleteLearnedAlias(alias: String)
     suspend fun saveMemory(memoryType: String, sourceKey: String, targetValue: String)
@@ -49,6 +50,12 @@ class RoomIrisXRepository(private val db: AppDatabase) : IrisXRepository {
     override suspend fun getLearnedAliases(): Map<String, String> {
         val memories = db.irisxMemoryDao().findByType("ALIAS")
         return memories.associate { it.sourceKey to it.targetValue }
+    }
+
+    override suspend fun getMuscleOverrides(): Map<String, String> {
+        val memories = db.irisxMemoryDao().findByType("CLASSIFICATION_OVERRIDE")
+        val exerciseGroups = db.exerciseDao().getAll().associate { it.normalizedName to it.muscleGroup }
+        return exerciseGroups + memories.associate { it.sourceKey to it.targetValue }
     }
 
     override suspend fun saveLearnedAlias(alias: String, canonical: String) {
@@ -97,6 +104,7 @@ class RoomIrisXRepository(private val db: AppDatabase) : IrisXRepository {
         if (existing != null) {
             db.irisxMemoryDao().deleteById(existing.id)
         }
+        db.exerciseAliasDao().deleteByAlias(normAlias)
     }
 
     override suspend fun saveMemory(memoryType: String, sourceKey: String, targetValue: String) {
@@ -228,8 +236,12 @@ class IrisXCore(
 
         val exerciseNames = sets.map { exercises[it.exerciseId] ?: "Ejercicio #${it.exerciseId}" }.distinct()
         val learnedAliases = getLearnedAliases()
-        val classification = IrisXClassifier.classifyWorkout(latest.title, exerciseNames, learnedAliases)
-        val metrics = com.syntra.app.domain.SportsMetricsCalculator.calculateSessionVolume(sets)
+        val muscleOverrides = repository.getMuscleOverrides()
+        val classification = IrisXClassifier.classifyWorkout(latest.title, exerciseNames, learnedAliases, muscleOverrides)
+        val metrics = com.syntra.app.domain.SportsMetricsCalculator.calculateSessionVolume(
+            sets = sets,
+            exerciseNamesById = exercises
+        )
 
         val summaryText = buildString {
             append("Última sesión: ${latest.title} ($dateStr)\n")
@@ -346,7 +358,8 @@ class IrisXCore(
 
     private suspend fun handleClassifySession(sessionTitle: String, exerciseNames: List<String>): IrisXResponse {
         val learnedAliases = getLearnedAliases()
-        val classification = IrisXClassifier.classifyWorkout(sessionTitle, exerciseNames, learnedAliases)
+        val muscleOverrides = repository.getMuscleOverrides()
+        val classification = IrisXClassifier.classifyWorkout(sessionTitle, exerciseNames, learnedAliases, muscleOverrides)
 
         val response = buildString {
             append("Categoría: ${classification.primaryCategory.displayName}\n")

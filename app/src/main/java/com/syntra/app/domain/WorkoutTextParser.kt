@@ -41,6 +41,8 @@ object WorkoutTextParser {
     private val ambiguousSumRegex = Regex("(?i)\\b(\\d+)\\s*\\+\\s*(\\d+)\\b")
     private val dumbbellRegex = Regex("(?i)\\b(?:mancuernas?|por brazo|cada mano|c/u)\\b")
     private val assistedRegex = Regex("(?i)\\b(?:asistid[oa]s?|ayuda)\\b")
+    private val unilateralRegex = Regex("(?i)\\b(?:unilateral|a un brazo|a una mano|a una pierna|bulgaras?|búlgaras?|serrucho)\\b")
+    private val weightedBwRegex = Regex("(?i)\\b(?:lastre|lastrad[oa]s?)\\b")
 
     fun normalize(value: String): String = Normalizer.normalize(value.trim().lowercase(Locale.ROOT), Normalizer.Form.NFD)
         .replace(Regex("\\p{M}+"), "")
@@ -127,6 +129,8 @@ object WorkoutTextParser {
             // Detect modifiers
             val isDumbbell = dumbbellRegex.containsMatchIn(line)
             val isAssistedLine = assistedRegex.containsMatchIn(line)
+            val isUnilateralLine = unilateralRegex.containsMatchIn(line)
+            val isWeightedBwLine = weightedBwRegex.containsMatchIn(line)
 
             // Resolve aliases & canonical name
             val resolvedName = aliasIndex[normalize(cleanName)] ?: cleanName
@@ -136,6 +140,7 @@ object WorkoutTextParser {
             // Parse sets and weights
             var currentWeight: Int? = null
             var currentAssisted = isAssistedLine
+            var currentWeightedBw = isWeightedBwLine
             val sets = mutableListOf<ParsedSet>()
 
             for (match in tokenRegex.findAll(values)) {
@@ -143,6 +148,7 @@ object WorkoutTextParser {
                 if (kilos != null) {
                     val rawClean = kilos.replace(',', '.')
                     val isNegative = rawClean.startsWith("-")
+                    val isPositivePlus = rawClean.startsWith("+")
                     val absVal = rawClean.removePrefix("+").removePrefix("-").toDoubleOrNull()
                     if (absVal == null || absVal <= 0 || absVal > 1000) {
                         warnings += "Línea ${lineNumber + 1}: carga fuera de rango ($kilos)."
@@ -150,15 +156,21 @@ object WorkoutTextParser {
                     } else {
                         currentWeight = (absVal * 1000).roundToInt()
                         currentAssisted = isAssistedLine || isNegative
+                        currentWeightedBw = isWeightedBwLine || isPositivePlus
                     }
                 } else {
                     val reps = match.groups[2]?.value?.toIntOrNull()
                     if (currentWeight != null && reps != null && reps in 1..99) {
+                        val noteTags = buildList {
+                            if (isUnilateralLine) add("[UNILATERAL]")
+                            if (currentWeightedBw && !currentAssisted) add("[LASTRE]")
+                        }.joinToString(" ")
                         sets += ParsedSet(
                             weightGrams = currentWeight,
                             repetitions = reps,
                             isAssisted = currentAssisted,
-                            isDumbbell = isDumbbell
+                            isDumbbell = isDumbbell,
+                            note = noteTags
                         )
                     }
                 }

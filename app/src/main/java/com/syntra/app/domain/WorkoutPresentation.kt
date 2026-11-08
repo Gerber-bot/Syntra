@@ -23,7 +23,10 @@ data class CompactSetGroup(
         val base = WorkoutPresentation.formatWeightKg(weightGrams)
         return when {
             isAssisted -> "-$base (asistido)"
+            isDumbbell && note.contains("[UNILATERAL]") -> "$base (mancuerna unilat.)"
             isDumbbell -> "$base (mancuerna)"
+            note == "[LASTRE]" -> "+$base (lastre)"
+            note == "[UNILATERAL]" -> "$base (unilateral)"
             note.isNotBlank() -> "$base ($note)"
             else -> base
         }
