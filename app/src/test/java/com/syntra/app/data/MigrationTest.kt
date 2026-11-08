@@ -147,4 +147,103 @@ class MigrationTest {
         stmt.close()
         connection.close()
     }
+
+    @Test
+    fun `migration with populated workouts and exercises preserves all data and applies defaults`() {
+        val connection = DriverManager.getConnection("jdbc:sqlite::memory:")
+        val stmt = connection.createStatement()
+
+        // 1. Create Schema Version 1
+        stmt.execute("""
+            CREATE TABLE IF NOT EXISTS `exercises` (
+                `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                `displayName` TEXT NOT NULL,
+                `normalizedName` TEXT NOT NULL,
+                `muscleGroup` TEXT NOT NULL,
+                `equipment` TEXT,
+                `createdAtMillis` INTEGER NOT NULL
+            )
+        """.trimIndent())
+
+        stmt.execute("""
+            CREATE TABLE IF NOT EXISTS `workout_sessions` (
+                `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                `title` TEXT NOT NULL,
+                `startedAtMillis` INTEGER NOT NULL,
+                `finishedAtMillis` INTEGER
+            )
+        """.trimIndent())
+
+        stmt.execute("""
+            CREATE TABLE IF NOT EXISTS `workout_sets` (
+                `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                `sessionId` INTEGER NOT NULL,
+                `exerciseId` INTEGER NOT NULL,
+                `orderInExercise` INTEGER NOT NULL,
+                `loadGrams` INTEGER NOT NULL,
+                `repetitions` INTEGER NOT NULL,
+                `rir` INTEGER
+            )
+        """.trimIndent())
+
+        // Insert v1 data
+        stmt.execute("""
+            INSERT INTO exercises (id, displayName, normalizedName, muscleGroup, equipment, createdAtMillis)
+            VALUES (10, 'Sentadilla', 'sentadilla', 'Piernas', 'Barra', 1690000000000)
+        """.trimIndent())
+
+        stmt.execute("""
+            INSERT INTO workout_sessions (id, title, startedAtMillis, finishedAtMillis)
+            VALUES (20, 'Pierna pesada', 1690000000000, 1690003600000)
+        """.trimIndent())
+
+        stmt.execute("""
+            INSERT INTO workout_sets (id, sessionId, exerciseId, orderInExercise, loadGrams, repetitions, rir)
+            VALUES (100, 20, 10, 1, 100000, 5, 2)
+        """.trimIndent())
+
+        // Run Migration
+        stmt.execute("ALTER TABLE exercises ADD COLUMN secondaryMuscleGroups TEXT NOT NULL DEFAULT ''")
+        stmt.execute("ALTER TABLE exercises ADD COLUMN exerciseType TEXT NOT NULL DEFAULT 'strength'")
+        stmt.execute("ALTER TABLE exercises ADD COLUMN status TEXT NOT NULL DEFAULT 'CONFIRMED'")
+
+        stmt.execute("ALTER TABLE workout_sessions ADD COLUMN notes TEXT NOT NULL DEFAULT ''")
+
+        stmt.execute("ALTER TABLE workout_sets ADD COLUMN executionOrder INTEGER NOT NULL DEFAULT 0")
+        stmt.execute("ALTER TABLE workout_sets ADD COLUMN isAssisted INTEGER NOT NULL DEFAULT 0")
+        stmt.execute("ALTER TABLE workout_sets ADD COLUMN isDumbbell INTEGER NOT NULL DEFAULT 0")
+        stmt.execute("ALTER TABLE workout_sets ADD COLUMN note TEXT NOT NULL DEFAULT ''")
+        stmt.execute("ALTER TABLE workout_sets ADD COLUMN plannedTarget TEXT")
+
+        // Verify exercise preserved and new columns have defaults
+        val exRs = stmt.executeQuery("SELECT displayName, secondaryMuscleGroups, exerciseType, status FROM exercises WHERE id = 10")
+        assertTrue(exRs.next())
+        assertEquals("Sentadilla", exRs.getString("displayName"))
+        assertEquals("", exRs.getString("secondaryMuscleGroups"))
+        assertEquals("strength", exRs.getString("exerciseType"))
+        assertEquals("CONFIRMED", exRs.getString("status"))
+        exRs.close()
+
+        // Verify session preserved and notes default to empty
+        val sessRs = stmt.executeQuery("SELECT title, notes FROM workout_sessions WHERE id = 20")
+        assertTrue(sessRs.next())
+        assertEquals("Pierna pesada", sessRs.getString("title"))
+        assertEquals("", sessRs.getString("notes"))
+        sessRs.close()
+
+        // Verify set preserved and new fields have defaults
+        val setRs = stmt.executeQuery("SELECT loadGrams, repetitions, executionOrder, isAssisted, isDumbbell, note, plannedTarget FROM workout_sets WHERE id = 100")
+        assertTrue(setRs.next())
+        assertEquals(100000, setRs.getInt("loadGrams"))
+        assertEquals(5, setRs.getInt("repetitions"))
+        assertEquals(0, setRs.getInt("executionOrder"))
+        assertEquals(0, setRs.getInt("isAssisted"))
+        assertEquals(0, setRs.getInt("isDumbbell"))
+        assertEquals("", setRs.getString("note"))
+        assertEquals(null, setRs.getString("plannedTarget"))
+        setRs.close()
+
+        stmt.close()
+        connection.close()
+    }
 }
