@@ -41,7 +41,24 @@ object WorkoutCategoryClassifier {
     private val fullBodyKeywords = setOf("full body", "fullbody", "cuerpo completo", "total body")
     private val genericTitles = setOf("entrenamiento", "sesion", "rutina", "gym", "gimnasio", "entreno", "workout")
 
-    fun classify(title: String, exerciseMuscleGroups: List<String> = emptyList()): WorkoutCategoryKey {
+    fun classify(
+        title: String,
+        exerciseMuscleGroups: List<String> = emptyList(),
+        exerciseNames: List<String> = emptyList(),
+        learnedAliases: Map<String, String> = emptyMap()
+    ): WorkoutCategoryKey {
+        // If exerciseNames are available, we leverage IrisXClassifier directly
+        if (exerciseNames.isNotEmpty()) {
+            val irisResult = com.syntra.app.domain.irisx.IrisXClassifier.classifyWorkout(
+                sessionTitle = title,
+                exerciseNames = exerciseNames,
+                learnedAliases = learnedAliases
+            )
+            if (irisResult.primaryCategory != WorkoutCategoryKey.SIN_CLASIFICAR) {
+                return irisResult.primaryCategory
+            }
+        }
+
         val norm = normalize(title)
         if (norm.isBlank()) {
             return classifyFromMuscleGroups(exerciseMuscleGroups)

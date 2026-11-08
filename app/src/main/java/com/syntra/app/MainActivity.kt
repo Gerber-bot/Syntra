@@ -32,6 +32,10 @@ import com.syntra.app.data.backup.BackupManager
 import com.syntra.app.data.backup.BackupValidationResult
 import com.syntra.app.data.backup.SyntraBackupPayload
 import com.syntra.app.domain.*
+import com.syntra.app.domain.irisx.IrisXClassifier
+import com.syntra.app.ui.exercises.ExerciseLibraryDialog
+import com.syntra.app.ui.irisx.IrisXConsoleDialog
+import com.syntra.app.ui.parser.EditExercisePreviewDialog
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.text.DateFormat
@@ -79,8 +83,28 @@ private fun TrainerApp(db: AppDatabase) {
     var error by remember { mutableStateOf<String?>(null) }
     var page by remember { mutableStateOf("Inicio") }
     var isEditingProfile by remember { mutableStateOf(false) }
+    var showIrisXConsole by remember { mutableStateOf(false) }
 
-    LaunchedEffect(db) { profileFlow.first(); loaded = true }
+    LaunchedEffect(db) {
+        val existing = db.exerciseDao().getAll()
+        if (existing.isEmpty()) {
+            db.exerciseDao().insertAll(ExerciseCatalog.toEntities())
+            for (catEx in ExerciseCatalog.DEFAULT_CATALOG) {
+                val entity = db.exerciseDao().findByNormalizedName(catEx.normalizedName)
+                if (entity != null) {
+                    val aliases = catEx.aliases.map {
+                        ExerciseAliasEntity(
+                            exerciseId = entity.id,
+                            normalizedAlias = WorkoutTextParser.normalize(it)
+                        )
+                    }
+                    db.exerciseAliasDao().insertAll(aliases)
+                }
+            }
+        }
+        profileFlow.first()
+        loaded = true
+    }
 
     if (!loaded) {
         Box(
@@ -135,6 +159,18 @@ private fun TrainerApp(db: AppDatabase) {
     Scaffold(
         containerColor = Color.Black,
         contentWindowInsets = WindowInsets.safeDrawing,
+        floatingActionButton = {
+            if (!isEditingProfile) {
+                ExtendedFloatingActionButton(
+                    onClick = { showIrisXConsole = true },
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = Color.Black,
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Text("✦ IrisX", fontWeight = FontWeight.Bold)
+                }
+            }
+        },
         bottomBar = {
             NavigationBar(
                 containerColor = Color(0xFF141414),
@@ -238,12 +274,20 @@ private fun TrainerApp(db: AppDatabase) {
                         ProfileViewScreen(
                             profile = profile!!,
                             db = db,
-                            onStartEdit = { isEditingProfile = true }
+                            onStartEdit = { isEditingProfile = true },
+                            onOpenIrisX = { showIrisXConsole = true }
                         )
                     }
                 }
             }
         }
+    }
+
+    if (showIrisXConsole) {
+        IrisXConsoleDialog(
+            db = db,
+            onDismiss = { showIrisXConsole = false }
+        )
     }
 }
 
@@ -251,7 +295,8 @@ private fun TrainerApp(db: AppDatabase) {
 private fun ProfileViewScreen(
     profile: ProfileEntity,
     db: AppDatabase,
-    onStartEdit: () -> Unit
+    onStartEdit: () -> Unit,
+    onOpenIrisX: () -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -259,6 +304,7 @@ private fun ProfileViewScreen(
     var statusMessage by remember { mutableStateOf<String?>(null) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var pendingRestorePayload by remember { mutableStateOf<SyntraBackupPayload?>(null) }
+    var showExerciseLibrary by remember { mutableStateOf(false) }
 
     val exportLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/json")
@@ -559,7 +605,53 @@ private fun ProfileViewScreen(
                         }
                     }
                 }
+
+                OutlinedButton(
+                    onClick = onOpenIrisX,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("✦ Abrir consola de IrisX", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                }
             }
+        }
+
+        // Card 5: Biblioteca de ejercicios (FASE 5)
+        val exerciseCount by remember(db) { db.exerciseDao().observeAll() }.collectAsState(initial = emptyList())
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF161616)),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    text = "Biblioteca de ejercicios",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Text(
+                    text = "Explorá el catálogo de ${exerciseCount.size} ejercicios, consultá grupos musculares, creá nuevos o editá su estado.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Button(
+                    onClick = { showExerciseLibrary = true },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Explorar biblioteca", color = Color.Black, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+
+        if (showExerciseLibrary) {
+            ExerciseLibraryDialog(
+                db = db,
+                onDismiss = { showExerciseLibrary = false }
+            )
         }
 
         Spacer(Modifier.height(8.dp))
@@ -1088,8 +1180,50 @@ private fun ParserScreen(
     val preview = remember(input, analyzed, knownNames, mergedAliases) {
         if (analyzed) WorkoutTextParser.parse(input, aliases = mergedAliases, knownExercises = knownNames) else null
     }
-    val compactExercises = remember(preview) {
-        preview?.let { WorkoutPresentation.toCompactList(it.exercises) } ?: emptyList()
+    val rawParsedExercises = remember(preview) { preview?.exercises ?: emptyList() }
+    var editedExercises by remember(rawParsedExercises) { mutableStateOf(rawParsedExercises) }
+    var exerciseToEdit by remember { mutableStateOf<ParsedExercise?>(null) }
+
+    val currentExercises = editedExercises
+    val compactExercises = remember(currentExercises) {
+        WorkoutPresentation.toCompactList(currentExercises)
+    }
+
+    if (exerciseToEdit != null) {
+        EditExercisePreviewDialog(
+            exercise = exerciseToEdit!!,
+            onDismiss = { exerciseToEdit = null },
+            onSave = { updated, learnAlias, originalName ->
+                editedExercises = editedExercises.map { if (it.name == originalName) updated else it }
+                if (learnAlias) {
+                    scope.launch {
+                        val normAlias = WorkoutTextParser.normalize(originalName)
+                        val normCanonical = WorkoutTextParser.normalize(updated.name)
+                        val now = System.currentTimeMillis()
+                        db.irisxMemoryDao().insert(
+                            IrisxMemoryEntity(
+                                memoryType = "ALIAS",
+                                sourceKey = normAlias,
+                                targetValue = updated.name,
+                                confidence = 1.0,
+                                createdAtMillis = now,
+                                updatedAtMillis = now
+                            )
+                        )
+                        val ex = db.exerciseDao().findByNormalizedName(normCanonical)
+                        if (ex != null) {
+                            db.exerciseAliasDao().insert(
+                                ExerciseAliasEntity(
+                                    exerciseId = ex.id,
+                                    normalizedAlias = normAlias
+                                )
+                            )
+                        }
+                    }
+                }
+                exerciseToEdit = null
+            }
+        )
     }
 
     // Modal de confirmación para guardado atómico (FASE 5)
@@ -1113,7 +1247,7 @@ private fun ParserScreen(
                         color = MaterialTheme.colorScheme.primary
                     )
                     Text(
-                        text = "• ${compactExercises.size} ejercicios • ${preview.seriesCount} series en total",
+                        text = "• ${compactExercises.size} ejercicios • ${currentExercises.sumOf { it.sets.size }} series en total",
                         color = Color.White,
                         style = MaterialTheme.typography.bodyMedium
                     )
@@ -1150,7 +1284,7 @@ private fun ParserScreen(
                                         )
                                     )
                                     var execOrder = 1
-                                    preview.exercises.forEach { ex ->
+                                    currentExercises.forEach { ex ->
                                         val norm = WorkoutTextParser.normalize(ex.name)
                                         var exEntity = db.exerciseDao().findByNormalizedName(norm)
                                         if (exEntity == null) {
@@ -1317,18 +1451,31 @@ private fun ParserScreen(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(
-                                text = exercise.name,
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                            if (exercise.isNewExercise) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
                                 Text(
-                                    text = "✨ Nuevo",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = Color(0xFF81C784)
+                                    text = exercise.name,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary
                                 )
+                                if (exercise.isNewExercise) {
+                                    Text(
+                                        text = "✨ Nuevo",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = Color(0xFF81C784)
+                                    )
+                                }
+                            }
+                            OutlinedButton(
+                                onClick = {
+                                    exerciseToEdit = currentExercises.find { it.name == exercise.name }
+                                },
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                            ) {
+                                Text("✎ Editar", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
                             }
                         }
 
@@ -1470,13 +1617,30 @@ private fun HistoryScreen(
 ) {
     val sessions by remember(db) { db.workoutSessionDao().observeAll() }.collectAsState(initial = emptyList())
     val exercises by remember(db) { db.exerciseDao().observeAll() }.collectAsState(initial = emptyList())
+    val allSets by remember(db) { db.workoutSetDao().observeAll() }.collectAsState(initial = emptyList())
+    val memories by remember(db) { db.irisxMemoryDao().observeAll() }.collectAsState(initial = emptyList())
     val exerciseNameMap = remember(exercises) { exercises.associate { it.id to it.displayName } }
+    val memoryAliases = remember(memories) {
+        memories.filter { it.memoryType == "ALIAS" }.associate { it.sourceKey to it.targetValue }
+    }
+    val sessionExerciseNames = remember(allSets, exerciseNameMap) {
+        allSets.groupBy { it.sessionId }.mapValues { entry ->
+            entry.value.mapNotNull { exerciseNameMap[it.exerciseId] }.distinct()
+        }
+    }
     val scope = rememberCoroutineScope()
     var sessionToDelete by remember { mutableStateOf<WorkoutSessionEntity?>(null) }
     var selectedCategory by remember { mutableStateOf<WorkoutCategoryKey?>(null) }
 
-    val sessionCategoryMap = remember(sessions) {
-        sessions.associate { s -> s.id to WorkoutCategoryClassifier.classify(s.title) }
+    val sessionCategoryMap = remember(sessions, sessionExerciseNames, memoryAliases) {
+        sessions.associate { s ->
+            val exNames = sessionExerciseNames[s.id] ?: emptyList()
+            s.id to WorkoutCategoryClassifier.classify(
+                title = s.title,
+                exerciseNames = exNames,
+                learnedAliases = memoryAliases
+            )
+        }
     }
     val categorySummaries = remember(sessions, sessionCategoryMap) {
         WorkoutCategoryClassifier.buildSummaries(sessions, sessionCategoryMap)
@@ -1727,6 +1891,7 @@ private fun HistoryScreen(
                     items(categorySessions, key = { it.id }) { session ->
                         SessionHistoryCard(
                             session = session,
+                            categoryKey = currentCat,
                             db = db,
                             exerciseNameMap = exerciseNameMap,
                             onDelete = { sessionToDelete = session }
@@ -1741,6 +1906,7 @@ private fun HistoryScreen(
 @Composable
 private fun SessionHistoryCard(
     session: WorkoutSessionEntity,
+    categoryKey: WorkoutCategoryKey? = null,
     db: AppDatabase,
     exerciseNameMap: Map<Long, String>,
     onDelete: () -> Unit
@@ -1749,6 +1915,12 @@ private fun SessionHistoryCard(
     val sets by remember(session.id) { db.workoutSetDao().observeForSession(session.id) }.collectAsState(initial = emptyList())
     val dateStr = remember(session.startedAtMillis) {
         DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(session.startedAtMillis))
+    }
+
+    val isCategoryRedundant = remember(session.title, categoryKey) {
+        val titleNorm = session.title.trim().lowercase()
+        val catNorm = categoryKey?.displayName?.trim()?.lowercase() ?: ""
+        titleNorm == catNorm || titleNorm == "entrenamiento" || titleNorm == "rutina" || titleNorm.isBlank()
     }
 
     Card(
@@ -1763,17 +1935,26 @@ private fun SessionHistoryCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(Modifier.weight(1f)) {
-                    Text(
-                        text = session.title,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White
-                    )
-                    Text(
-                        text = dateStr,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary
-                    )
+                    if (isCategoryRedundant) {
+                        Text(
+                            text = dateStr,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+                    } else {
+                        Text(
+                            text = session.title,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+                        Text(
+                            text = dateStr,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     TextButton(onClick = { expanded = !expanded }) {
@@ -1834,14 +2015,22 @@ private fun SessionHistoryCard(
                                 text = compEx.name,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.primary,
-                                style = MaterialTheme.typography.bodyMedium
+                                style = MaterialTheme.typography.bodyMedium,
+                                modifier = Modifier.weight(1f, fill = false)
                             )
                             if (compEx.plannedTarget != null) {
-                                Text(
-                                    text = "Plan: ${compEx.plannedTarget}",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = Color.LightGray
-                                )
+                                Spacer(Modifier.width(8.dp))
+                                Surface(
+                                    color = Color(0xFF262626),
+                                    shape = RoundedCornerShape(4.dp)
+                                ) {
+                                    Text(
+                                        text = "🎯 ${compEx.plannedTarget}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = Color.LightGray,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                    )
+                                }
                             }
                         }
 

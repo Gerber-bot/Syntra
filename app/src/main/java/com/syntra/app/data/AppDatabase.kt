@@ -223,6 +223,9 @@ interface WorkoutSetDao {
     @Query("SELECT * FROM workout_sets")
     suspend fun getAll(): List<WorkoutSetEntity>
 
+    @Query("SELECT * FROM workout_sets")
+    fun observeAll(): Flow<List<WorkoutSetEntity>>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(set: WorkoutSetEntity): Long
 

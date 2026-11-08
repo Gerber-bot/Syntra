@@ -118,4 +118,13 @@ class WorkoutCategoryClassifierTest {
         assertEquals(2L, sorted[0].id)
         assertEquals(1L, sorted[1].id)
     }
+
+    @Test
+    fun `classifies generic session using exerciseNames with IrisXClassifier delegation`() {
+        val cat = WorkoutCategoryClassifier.classify(
+            title = "Entrenamiento",
+            exerciseNames = listOf("Press banco plano", "Inclinado Hammer", "A la frente con W")
+        )
+        assertEquals(WorkoutCategoryKey.PECHO, cat)
+    }
 }

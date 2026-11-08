@@ -1,53 +1,60 @@
-# Syntra — Estado de la entrega 0.2.1
+# Syntra — Estado de la entrega 0.3.0 (Sprint 03)
 
-## Implementado en código (v0.2.1)
+## Implementado en código (v0.3.0 — Sprint 03: Núcleo inteligente IrisX)
 
-### Reorganización jerárquica del historial deportivo
-- **Nivel 1: Pantalla principal de categorías**:
-  - Clasificación en categorías estructuradas: Piernas (🦵), Pecho (🛡️), Espalda (🏹), Hombros (🏋️), Brazos (💪), Full Body (⚡), Otras / Sin clasificar (📁) y categoría general Todas (★).
-  - Cada categoría presenta su nombre, contador de sesiones y fecha del entrenamiento más reciente.
-  - Estados vacíos informativos con botón directo para analizar e iniciar un nuevo entrenamiento.
-- **Nivel 2: Sesiones por categoría y fecha**:
-  - Al pulsar una categoría, se despliegan sus sesiones ordenadas cronológicamente desde la más reciente (`startedAtMillis DESC`).
-  - Navegación superior con botón de retorno `← Categorías` y encabezado contextual.
-  - Cada tarjeta de sesión muestra fecha/hora, título, contador de ejercicios y series totales.
-- **Nivel 3: Detalle de sesión en formato oficial**:
-  - Vista detallada por sesión que mantiene una única tarjeta por ejercicio (`CompactExercise`).
-  - Tabla de series agrupadas consecutivas (`Series | Peso | Repeticiones`) con sombreado sutil alternado.
-  - Conservación del orden de ejecución y diálogo de eliminación segura con confirmación atómica.
-- **Clasificador determinista (`WorkoutCategoryClassifier`)**:
-  - Normalización de tildes, mayúsculas y singular/plural sin alterar la base de datos.
-  - Detección de palabras clave y fallback a grupos musculares de ejercicios para títulos genéricos.
-  - Clasificación conservadora: nombres ambiguos o no reconocidos van a "Otras / Sin clasificar".
-  - **Cero cambios de esquema de base de datos**: Se mantiene `syntra.db` en versión 2 intacta, preservando perfiles, pesajes, ejercicios, sesiones, series, alias e IrisX Memory con 100% de compatibilidad.
+### 1. Núcleo inteligente IrisX Core (`IrisXCore.kt`)
+- **Arquitectura limpia y desacoplada**: Despachador determinista local de intenciones bajo el contrato `IrisXRepository` / `RoomIrisXRepository`.
+- **Intenciones soportadas offline**:
+  - `QueryLastWorkout`: Resumen de la última sesión (categoría, tipo de sesión, ejercicios, series totales y volumen de carga en kg).
+  - `LearnAlias`: Aprendizaje de equivalencias personalizadas con guardado en `irisx_memories` y propagación a `exercise_aliases`.
+  - `UpdateExerciseMuscle`: Actualización persistente del grupo muscular con registro de `CLASSIFICATION_OVERRIDE`.
+  - `QueryExercise`: Consulta rápida de equipamiento, grupo principal y secundarios desde biblioteca y catálogo.
+  - `ClassifySession`: Clasificación determinista de listas de ejercicios.
+  - `GeneralQuery`: Manejo de saludos, ayuda de comandos y sugerencias contextuales sin modelos externos.
+
+### 2. Clasificador inteligente multi-nivel (`IrisXClassifier.kt`)
+- **Clasificación semántica profunda**:
+  - Categoría principal (`primaryCategory`): Piernas, Pecho, Espalda, Hombros, Brazos, Full Body o Sin clasificar.
+  - Categorías secundarias ordenadas por volumen de ejercicios.
+  - Tipo de sesión (`sessionType`): Empuje (Push), Tirón (Pull), Piernas (Legs), Torso, Full Body, Brazos o Mixto.
+  - Desglose por grupo muscular (`muscleBreakdown`) y detección de ambigüedad (`isAmbiguous`).
+  - Generación de razonamiento explícito en lenguaje natural ("4 Pecho, 2 Tríceps, 1 Hombros. Patrón: Empuje (Push)").
+- **Resolución de causa raíz de la auditoría**:
+  - Sesiones con títulos genéricos ("Entrenamiento", "Gimnasio", "Sesión") ahora clasifican e inspeccionan los ejercicios reales con soporte para jerga de gimnasio ("banco plano", "inclinado hammer", "cruce de polea", "a la frente con w", "tríceps con triángulo", "camilla adelante").
+
+### 3. Expansión del catálogo de ejercicios (`ExerciseCatalog.kt`)
+- Incorporación de 28 ejercicios canónicos completos con soporte amplio para variantes de poleas, máquinas Hammer, mancuernas, barras y peso corporal.
+- Auto-poblado inteligente inicial en `AppDatabase` si la tabla está vacía, respetando cualquier ejercicio existente.
+
+### 4. Edición interactiva previa al guardado (`EditExercisePreviewDialog.kt`)
+- En `ParserScreen`, cada tarjeta de ejercicio cuenta con el botón `✎ Editar`.
+- Permite modificar nombre del ejercicio, series individuales (peso en kg y repeticiones), agregar/eliminar series y ajustar el objetivo planificado (`🎯 Plan`).
+- Si el nombre del ejercicio fue modificado, ofrece la opción de **enseñar automáticamente a IrisX el nuevo alias** para que las próximas sesiones lo reconozcan sin intervención manual.
+
+### 5. Biblioteca interactiva de ejercicios (`ExerciseLibraryDialog.kt`)
+- Accesible desde la pestaña **Perfil** mediante tarjeta dedicada.
+- Búsqueda en tiempo real por nombre, equipamiento o grupo muscular.
+- Filtro por chips de grupos musculares (`Todos`, `Piernas`, `Pecho`, `Espalda`, `Hombros`, `Brazos`, `Glúteos`, `General`).
+- Visualización de estado (`Confirmado` o `Pendiente`).
+- Modal para creación de nuevos ejercicios y edición de grupos musculares existentes.
+
+### 6. Consola interactiva de IrisX (`IrisXConsoleDialog.kt`)
+- Botón flotante persistente `✦ IrisX` en la interfaz.
+- Consola conversacional local offline con burbujas de diálogo y chips de sugerencias rápidas.
+- Respuesta inmediata y determinista ejecutada directamente contra Room y SQLite.
+
+### 7. Ajustes visuales y ergonomía en Historial (`HistoryScreen`)
+- Eliminación del título redundante de la categoría (ej. "Piernas" dentro de la categoría Piernas): la fecha y hora se enfatizan como encabezado principal.
+- Corrección de espaciado y encapsulado del badge `🎯 Plan` con contenedor redondeado `Surface` para prevenir solapamiento con nombres largos.
+- Clasificación de sesiones en el historial alimentada por `IrisXClassifier` cruzando sesiones con sus series y alias aprendidos.
 
 ---
 
 ## Verificado realmente
 
-- **60 pruebas unitarias automatizadas ejecutadas mediante Gradle** (`.\gradlew.bat test`): 0 fallos.
-  - Cobertura de clasificación de categorías exactas y derivadas (`WorkoutCategoryClassifierTest`).
-  - Cobertura de clasificación de títulos genéricos según grupos musculares de ejercicios.
-  - Cobertura de sesiones sin clasificar para títulos ambiguos o vacíos.
-  - Cobertura de agregación de resúmenes (`buildSummaries`), contadores y timestamps más recientes.
-  - Cobertura de orden cronológico en sesiones del mismo día.
-  - Cobertura de pruebas de migración no destructiva y rollback de respaldos SAF (`MigrationTest`, `BackupManagerRollbackTest`, `BackupSerializerTest`).
-  - Cobertura de persistencia transaccional y analizador de entrenamientos (`WorkoutSessionPersistenceTest`, `WorkoutTextParserSprint02Test`).
-- **Compilación exitosa del APK debug v0.2.1** (`.\gradlew.bat :app:assembleDebug`).
-- **Inspección del binario** (`apkanalyzer` y `apksigner`):
-  - Ubicación: `app/build/outputs/apk/debug/app-debug.apk` (12,256,786 bytes)
-  - Paquete: `com.syntra.app`
-  - VersionCode: `5`
-  - VersionName: `0.2.1`
-  - Permisos: Exclusivamente `DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION`. Sin permisos invasivos ni de red.
-  - Firma: Certificado debug SHA-256 idéntico a las entregas anteriores.
-
----
-
-## Matriz de compatibilidad
-
-- **Gradle**: 9.6.0 (wrapper configurado).
-- **AGP**: 9.5.0 (Kotlin Built-in nativo).
-- **Compose Compiler**: 2.4.10.
-- **Android SDK**: API 37 (`android-37.0`), Build-Tools 35.0.0 / 36.0.0 aislados en `.android-sdk`.
-- **Room Database**: Versión 2 (sin cambios de esquema respecto a v0.2.0; retrocompatibilidad total garantizada).
+- **68 pruebas unitarias automatizadas ejecutadas mediante Gradle** (`.\gradlew.bat testDebugUnitTest`): 0 fallos.
+  - 4 pruebas unitarias de `IrisXClassifierTest` (verificación de sesión de auditoría con 7 ejercicios de jerga -> Pecho / Empuje, sesiones de Tirón, Piernas con camilla/búlgaras, y alias aprendidos).
+  - 4 pruebas unitarias de `IrisXCoreTest` (enrutamiento de intenciones, guardado y recuperación de alias, resumen de última sesión y consulta de catálogo).
+  - 60 pruebas unitarias heredadas intactas (`WorkoutCategoryClassifierTest`, `WorkoutPresentationTest`, `MigrationTest`, `WorkoutSessionPersistenceTest`, `BackupManagerRollbackTest`, `BackupSerializerTest`, `WorkoutTextParserTest`, etc.).
+- **Esquema de base de datos intacto en versión 2**: Sin migraciones destructivas ni roturas de esquemas existentes.
+- **Modelo offline-first sin dependencias de red**: 0 llamadas externas o permisos de red.
