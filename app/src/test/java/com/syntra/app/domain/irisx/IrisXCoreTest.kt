@@ -38,6 +38,10 @@ class FakeIrisXRepository : IrisXRepository {
         learnedAliases[alias] = canonical
     }
 
+    override suspend fun deleteLearnedAlias(alias: String) {
+        learnedAliases.remove(alias)
+    }
+
     override suspend fun saveMemory(memoryType: String, sourceKey: String, targetValue: String) {
         memories.add(Triple(memoryType, sourceKey, targetValue))
     }
@@ -144,5 +148,33 @@ class IrisXCoreTest {
         val msg = (response as IrisXResponse.Success).message
         assertTrue(msg.contains("Press militar"))
         assertTrue(msg.contains("Hombros"))
+    }
+
+    @Test
+    fun `detects conflict when learning alias that already points to different exercise`() = runBlocking {
+        fakeRepo.learnedAliases["rdl"] = "Peso muerto rumano"
+
+        // User attempts to assign rdl to Sentadilla without force
+        val response = irisXCore.execute(IrisXIntent.LearnAlias("rdl", "Sentadilla", force = false))
+        assertTrue("Should require confirmation", response is IrisXResponse.RequiresConfirmation)
+        val conf = response as IrisXResponse.RequiresConfirmation
+        assertTrue(conf.question.contains("Peso muerto rumano"))
+        assertEquals("confirmar alias rdl = Sentadilla", conf.confirmCommand)
+
+        // Alias in repository must NOT have been overwritten
+        assertEquals("Peso muerto rumano", fakeRepo.learnedAliases["rdl"])
+
+        // Now user confirms with force
+        val forceResponse = irisXCore.execute(IrisXIntent.LearnAlias("rdl", "Sentadilla", force = true))
+        assertTrue(forceResponse is IrisXResponse.Success)
+        assertEquals("Sentadilla", fakeRepo.learnedAliases["rdl"])
+    }
+
+    @Test
+    fun `delete alias removes equivalence from memory`() = runBlocking {
+        fakeRepo.learnedAliases["camilla"] = "Extensión de cuádriceps"
+        val response = irisXCore.execute(IrisXIntent.DeleteAlias("camilla"))
+        assertTrue(response is IrisXResponse.Success)
+        assertTrue(fakeRepo.learnedAliases.isEmpty())
     }
 }

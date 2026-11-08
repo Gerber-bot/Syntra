@@ -10,16 +10,6 @@ class IrisXClassifierTest {
 
     @Test
     fun `audit session with gym vernacular is classified as Pecho, Empuje and has secondary categories`() {
-        // Exact session reported in audit:
-        // Title: "Entrenamiento"
-        // Exercises:
-        // - Press banco plano (Pecho)
-        // - Inclinado con mancuernas (Pecho)
-        // - Inclinado Hammer (Pecho)
-        // - Cruce de polea (Pecho)
-        // - Vuelo lateral (Hombros)
-        // - A la frente con W (Tríceps)
-        // - Tríceps con triángulo (Tríceps)
         val exerciseNames = listOf(
             "Press banco plano",
             "Inclinado con mancuernas",
@@ -77,8 +67,87 @@ class IrisXClassifierTest {
     }
 
     @Test
+    fun `chest specific session is classified as Pecho`() {
+        val exerciseNames = listOf(
+            "Press de banca",
+            "Press inclinado con mancuernas",
+            "Aperturas con mancuernas",
+            "Fondos"
+        )
+
+        val result = IrisXClassifier.classifyWorkout("Pecho plano e inclinado", exerciseNames)
+        assertEquals(WorkoutCategoryKey.PECHO, result.primaryCategory)
+        assertEquals("Empuje (Push)", result.sessionType)
+    }
+
+    @Test
+    fun `shoulders specific session is classified as Hombros`() {
+        val exerciseNames = listOf(
+            "Press militar",
+            "Elevaciones laterales",
+            "Pájaros / Vuelos posteriores",
+            "Face pull"
+        )
+
+        val result = IrisXClassifier.classifyWorkout("Rutina de deltoides", exerciseNames)
+        assertEquals(WorkoutCategoryKey.HOMBROS, result.primaryCategory)
+    }
+
+    @Test
+    fun `arms session is classified as Brazos`() {
+        val exerciseNames = listOf(
+            "Curl de bíceps en banco Scott",
+            "Curl martillo",
+            "Extensiones de tríceps en polea",
+            "Press francés / A la frente"
+        )
+
+        val result = IrisXClassifier.classifyWorkout("Brazos", exerciseNames)
+        assertEquals(WorkoutCategoryKey.BRAZOS, result.primaryCategory)
+        assertEquals("Brazos", result.sessionType)
+    }
+
+    @Test
+    fun `full body session is classified as Full Body`() {
+        val exerciseNames = listOf(
+            "Sentadilla",
+            "Press de banca",
+            "Remo con barra",
+            "Press militar"
+        )
+
+        val result = IrisXClassifier.classifyWorkout("Full Body A", exerciseNames)
+        assertEquals(WorkoutCategoryKey.FULL_BODY, result.primaryCategory)
+        assertEquals("Full Body", result.sessionType)
+    }
+
+    @Test
+    fun `mixed or ambiguous session identifies ambiguity and presents proposed category`() {
+        // Tie between 1 Leg and 1 Chest exercise
+        val exerciseNames = listOf(
+            "Sentadilla",
+            "Press de banca"
+        )
+
+        val result = IrisXClassifier.classifyWorkout("Rutina corta", exerciseNames)
+        assertTrue("Equal split should mark isAmbiguous = true", result.isAmbiguous)
+        assertEquals("Mixto", result.sessionType)
+    }
+
+    @Test
+    fun `unknown exercises yield low confidence and unclassified status`() {
+        val exerciseNames = listOf(
+            "Movimiento experimental alfa",
+            "Maniobra desconocida beta"
+        )
+
+        val result = IrisXClassifier.classifyWorkout("Entrenamiento X", exerciseNames)
+        assertEquals(WorkoutCategoryKey.SIN_CLASIFICAR, result.primaryCategory)
+        assertEquals(0.1, result.confidence, 0.05)
+    }
+
+    @Test
     fun `learned alias is respected by classifier`() {
-        // Unknown custom exercise "Mi super maquina"
         val customName = "Mi super maquina"
         val learnedAliases = mapOf("mi super maquina" to "Press de banca")
 

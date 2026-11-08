@@ -56,7 +56,8 @@ data class WorkoutSetBackupDto(
     val rir: Int? = null,
     val isAssisted: Boolean = false,
     val isDumbbell: Boolean = false,
-    val note: String = ""
+    val note: String = "",
+    val plannedTarget: String? = null
 )
 
 data class IrisxMemoryBackupDto(

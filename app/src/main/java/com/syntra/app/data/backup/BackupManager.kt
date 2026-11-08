@@ -80,7 +80,8 @@ class BackupManager(private val db: AppDatabase) {
                 rir = set.rir,
                 isAssisted = set.isAssisted,
                 isDumbbell = set.isDumbbell,
-                note = set.note
+                note = set.note,
+                plannedTarget = set.plannedTarget
             )
         }
 
@@ -98,7 +99,7 @@ class BackupManager(private val db: AppDatabase) {
 
         return SyntraBackupPayload(
             formatVersion = BackupSerializer.CURRENT_FORMAT_VERSION,
-            appVersion = "0.2.0",
+            appVersion = "0.3.0",
             exportedAtMillis = System.currentTimeMillis(),
             profile = profileDto,
             weighIns = weighIns,
@@ -231,7 +232,8 @@ class BackupManager(private val db: AppDatabase) {
                             rir = set.rir,
                             isAssisted = set.isAssisted,
                             isDumbbell = set.isDumbbell,
-                            note = set.note
+                            note = set.note,
+                            plannedTarget = set.plannedTarget
                         )
                     }
                 )

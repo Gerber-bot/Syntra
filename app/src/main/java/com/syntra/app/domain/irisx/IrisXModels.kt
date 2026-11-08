@@ -27,7 +27,8 @@ sealed class IrisXIntent {
     data class ClassifySession(val sessionTitle: String, val exerciseNames: List<String>) : IrisXIntent()
     object QueryLastWorkout : IrisXIntent()
     data class QueryExercise(val exerciseName: String) : IrisXIntent()
-    data class LearnAlias(val alias: String, val canonical: String) : IrisXIntent()
+    data class LearnAlias(val alias: String, val canonical: String, val force: Boolean = false) : IrisXIntent()
+    data class DeleteAlias(val alias: String) : IrisXIntent()
     data class UpdateExerciseMuscle(val exerciseName: String, val muscleGroup: String) : IrisXIntent()
     data class GeneralQuery(val text: String) : IrisXIntent()
 }

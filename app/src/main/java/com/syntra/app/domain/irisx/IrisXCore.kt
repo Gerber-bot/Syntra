@@ -20,6 +20,7 @@ interface IrisXRepository {
     suspend fun updateExercise(exercise: ExerciseEntity)
     suspend fun getLearnedAliases(): Map<String, String>
     suspend fun saveLearnedAlias(alias: String, canonical: String)
+    suspend fun deleteLearnedAlias(alias: String)
     suspend fun saveMemory(memoryType: String, sourceKey: String, targetValue: String)
 }
 
@@ -86,6 +87,18 @@ class RoomIrisXRepository(private val db: AppDatabase) : IrisXRepository {
         }
     }
 
+    override suspend fun deleteLearnedAlias(alias: String) {
+        val normAlias = Normalizer.normalize(alias.trim().lowercase(Locale.ROOT), Normalizer.Form.NFD)
+            .replace(Regex("\\p{M}+"), "")
+            .replace(Regex("[^a-z0-9\\s]"), " ")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+        val existing = db.irisxMemoryDao().findByTypeAndKey("ALIAS", normAlias)
+        if (existing != null) {
+            db.irisxMemoryDao().deleteById(existing.id)
+        }
+    }
+
     override suspend fun saveMemory(memoryType: String, sourceKey: String, targetValue: String) {
         val existing = db.irisxMemoryDao().findByTypeAndKey(memoryType, sourceKey)
         val now = System.currentTimeMillis()
@@ -133,15 +146,31 @@ class IrisXCore(
             return IrisXIntent.QueryLastWorkout
         }
 
-        // 2. Learn alias: e.g. "alias camilla adelante = extension de cuadriceps" or "aprender alias X es Y"
+        // 2. Confirm forced alias overwrite: "confirmar alias X = Y"
+        val confirmAliasRegex = Regex("^confirmar\\s+alias\\s+(.+?)\\s*(?:=|es|->)\\s*(.+)$", RegexOption.IGNORE_CASE)
+        val confirmAliasMatch = confirmAliasRegex.find(trimmed)
+        if (confirmAliasMatch != null) {
+            val (alias, canonical) = confirmAliasMatch.destructured
+            return IrisXIntent.LearnAlias(alias.trim(), canonical.trim(), force = true)
+        }
+
+        // 3. Delete alias: "eliminar alias X" or "borrar alias X"
+        val deleteAliasRegex = Regex("^(?:eliminar|borrar)\\s+alias\\s+(.+)$", RegexOption.IGNORE_CASE)
+        val deleteAliasMatch = deleteAliasRegex.find(trimmed)
+        if (deleteAliasMatch != null) {
+            val alias = deleteAliasMatch.groupValues[1].trim()
+            return IrisXIntent.DeleteAlias(alias)
+        }
+
+        // 4. Learn alias: e.g. "alias camilla adelante = extension de cuadriceps" or "aprender alias X es Y"
         val aliasRegex = Regex("^(?:aprender\\s+)?alias\\s+(.+?)\\s*(?:=|es|->)\\s*(.+)$", RegexOption.IGNORE_CASE)
         val aliasMatch = aliasRegex.find(trimmed)
         if (aliasMatch != null) {
             val (alias, canonical) = aliasMatch.destructured
-            return IrisXIntent.LearnAlias(alias.trim(), canonical.trim())
+            return IrisXIntent.LearnAlias(alias.trim(), canonical.trim(), force = false)
         }
 
-        // 3. Update exercise muscle group: e.g. "musculo sentadilla = piernas" or "grupo sentadilla es piernas"
+        // 5. Update exercise muscle group: e.g. "musculo sentadilla = piernas" or "grupo sentadilla es piernas"
         val muscleRegex = Regex("^(?:musculo|grupo)\\s+(.+?)\\s*(?:=|es|->)\\s*(.+)$", RegexOption.IGNORE_CASE)
         val muscleMatch = muscleRegex.find(trimmed)
         if (muscleMatch != null) {
@@ -149,7 +178,7 @@ class IrisXCore(
             return IrisXIntent.UpdateExerciseMuscle(exName.trim(), group.trim())
         }
 
-        // 4. Query exercise info: "ejercicio sentadilla" or "info sentadilla" or "buscar sentadilla"
+        // 6. Query exercise info: "ejercicio sentadilla" or "info sentadilla" or "buscar sentadilla"
         val exerciseQueryRegex = Regex("^(?:ejercicio|info|buscar)\\s+(.+)$", RegexOption.IGNORE_CASE)
         val exerciseMatch = exerciseQueryRegex.find(trimmed)
         if (exerciseMatch != null) {
@@ -157,7 +186,7 @@ class IrisXCore(
             return IrisXIntent.QueryExercise(exName)
         }
 
-        // 5. Classify session text: "clasificar [ejercicios separados por comas o saltos]"
+        // 7. Classify session text: "clasificar [ejercicios separados por comas o saltos]"
         val classifyRegex = Regex("^clasificar(?:\\s+sesion)?\\s*:\\s*(.+)$", RegexOption.IGNORE_CASE)
         val classifyMatch = classifyRegex.find(trimmed)
         if (classifyMatch != null) {
@@ -175,7 +204,8 @@ class IrisXCore(
     suspend fun execute(intent: IrisXIntent): IrisXResponse {
         return when (intent) {
             is IrisXIntent.QueryLastWorkout -> handleQueryLastWorkout()
-            is IrisXIntent.LearnAlias -> handleLearnAlias(intent.alias, intent.canonical)
+            is IrisXIntent.LearnAlias -> handleLearnAlias(intent.alias, intent.canonical, intent.force)
+            is IrisXIntent.DeleteAlias -> handleDeleteAlias(intent.alias)
             is IrisXIntent.UpdateExerciseMuscle -> handleUpdateExerciseMuscle(intent.exerciseName, intent.muscleGroup)
             is IrisXIntent.QueryExercise -> handleQueryExercise(intent.exerciseName)
             is IrisXIntent.ClassifySession -> handleClassifySession(intent.sessionTitle, intent.exerciseNames)
@@ -199,12 +229,15 @@ class IrisXCore(
         val exerciseNames = sets.map { exercises[it.exerciseId] ?: "Ejercicio #${it.exerciseId}" }.distinct()
         val learnedAliases = getLearnedAliases()
         val classification = IrisXClassifier.classifyWorkout(latest.title, exerciseNames, learnedAliases)
+        val metrics = com.syntra.app.domain.SportsMetricsCalculator.calculateSessionVolume(sets)
 
-        val totalVolumeKg = sets.sumOf { (it.loadGrams / 1000.0) * it.repetitions }
         val summaryText = buildString {
             append("Última sesión: ${latest.title} ($dateStr)\n")
             append("Categoría: ${classification.primaryCategory.displayName} (${classification.sessionType})\n")
-            append("Series totales: ${sets.size} | Volumen: ${String.format(Locale.ROOT, "%.1f", totalVolumeKg)} kg\n")
+            append("Series totales: ${sets.size} | Carga externa: ${String.format(Locale.ROOT, "%.1f", metrics.totalExternalKg)} kg\n")
+            if (metrics.dumbbellSetsCount > 0 || metrics.assistedSetsCount > 0) {
+                append("(${metrics.regularSetsCount} series barra/máq., ${metrics.dumbbellSetsCount} mancuernas [c/u], ${metrics.assistedSetsCount} asistidas)\n")
+            }
             append("Ejercicios:\n")
             exerciseNames.forEach { ex ->
                 append("• $ex\n")
@@ -218,7 +251,7 @@ class IrisXCore(
         )
     }
 
-    private suspend fun handleLearnAlias(alias: String, canonical: String): IrisXResponse {
+    private suspend fun handleLearnAlias(alias: String, canonical: String, force: Boolean): IrisXResponse {
         val normAlias = normalize(alias)
         val normCanonical = normalize(canonical)
 
@@ -227,8 +260,18 @@ class IrisXCore(
         }
 
         val existingAliases = repository.getLearnedAliases()
-        if (existingAliases[normAlias]?.equals(canonical, ignoreCase = true) == true) {
+        val previousCanonical = existingAliases[normAlias]
+
+        if (previousCanonical != null && previousCanonical.equals(canonical, ignoreCase = true)) {
             return IrisXResponse.Success("Ya tenía registrado que '$alias' es '$canonical'.")
+        }
+
+        // Conflict check: existing alias points to a different canonical and wasn't confirmed with force
+        if (previousCanonical != null && !previousCanonical.equals(canonical, ignoreCase = true) && !force) {
+            return IrisXResponse.RequiresConfirmation(
+                question = "El alias '$alias' ya estaba asignado a '$previousCanonical'. ¿Deseás sobrescribirlo con '$canonical'?",
+                confirmCommand = "confirmar alias $alias = $canonical"
+            )
         }
 
         repository.saveLearnedAlias(normAlias, canonical.trim())
@@ -236,6 +279,20 @@ class IrisXCore(
         return IrisXResponse.Success(
             message = "He aprendido que '$alias' corresponde a '$canonical'. Las próximas sesiones se reconocerán automáticamente.",
             actionTaken = "LEARN_ALIAS"
+        )
+    }
+
+    private suspend fun handleDeleteAlias(alias: String): IrisXResponse {
+        val normAlias = normalize(alias)
+        val existingAliases = repository.getLearnedAliases()
+        if (existingAliases[normAlias] == null) {
+            return IrisXResponse.Unrecognized("No tenía ningún alias registrado para '$alias'.")
+        }
+
+        repository.deleteLearnedAlias(normAlias)
+        return IrisXResponse.Success(
+            message = "He eliminado la equivalencia para '$alias'.",
+            actionTaken = "DELETE_ALIAS"
         )
     }
 

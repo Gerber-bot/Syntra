@@ -59,7 +59,8 @@ class BackupSerializerTest {
                     rir = 2,
                     isAssisted = false,
                     isDumbbell = false,
-                    note = "RPE 8"
+                    note = "RPE 8",
+                    plannedTarget = "4x10-12"
                 )
             ),
             irisxMemories = listOf(
@@ -68,6 +69,15 @@ class BackupSerializerTest {
                     memoryType = "ALIAS",
                     sourceKey = "rdl",
                     targetValue = "Peso muerto rumano",
+                    confidence = 1.0,
+                    createdAtMillis = 1690000000000L,
+                    updatedAtMillis = 1690000000000L
+                ),
+                IrisxMemoryBackupDto(
+                    id = 2,
+                    memoryType = "PREFERENCE",
+                    sourceKey = "warmup_rest_sec",
+                    targetValue = "90",
                     confidence = 1.0,
                     createdAtMillis = 1690000000000L,
                     updatedAtMillis = 1690000000000L
@@ -109,10 +119,13 @@ class BackupSerializerTest {
         assertEquals(70000, restored.workoutSets[0].loadGrams)
         assertEquals(10, restored.workoutSets[0].repetitions)
         assertEquals(2, restored.workoutSets[0].rir)
+        assertEquals("4x10-12", restored.workoutSets[0].plannedTarget)
 
-        assertEquals(1, restored.irisxMemories.size)
+        assertEquals(2, restored.irisxMemories.size)
         assertEquals("rdl", restored.irisxMemories[0].sourceKey)
         assertEquals("Peso muerto rumano", restored.irisxMemories[0].targetValue)
+        assertEquals("PREFERENCE", restored.irisxMemories[1].memoryType)
+        assertEquals("90", restored.irisxMemories[1].targetValue)
     }
 
     @Test

@@ -95,6 +95,7 @@ object BackupSerializer {
                 put("isAssisted", set.isAssisted)
                 put("isDumbbell", set.isDumbbell)
                 put("note", set.note)
+                put("plannedTarget", set.plannedTarget ?: JSONObject.NULL)
             })
         }
         root.put("workoutSets", setsArr)
@@ -291,7 +292,8 @@ object BackupSerializer {
                         rir = if (item.isNull("rir")) null else item.optInt("rir"),
                         isAssisted = item.optBoolean("isAssisted", false),
                         isDumbbell = item.optBoolean("isDumbbell", false),
-                        note = item.optString("note", "")
+                        note = item.optString("note", ""),
+                        plannedTarget = if (item.isNull("plannedTarget")) null else item.optString("plannedTarget")
                     )
                 )
             }
