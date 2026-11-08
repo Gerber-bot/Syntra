@@ -4,7 +4,7 @@ import java.util.Locale
 
 /**
  * Compact presentation model for workout sets.
- * Groups consecutive sets of the same exercise with identical load.
+ * Groups consecutive sets of the same exercise with identical load into table rows.
  * Preserves execution order and does not merge non-consecutive groups.
  */
 data class CompactSetGroup(
@@ -70,7 +70,7 @@ object WorkoutPresentation {
     }
 
     /**
-     * Converts a ParsedExercise to its compact presentation representation.
+     * Converts a single ParsedExercise to its compact presentation representation.
      */
     fun toCompact(exercise: ParsedExercise): CompactExercise {
         return CompactExercise(
@@ -80,9 +80,25 @@ object WorkoutPresentation {
     }
 
     /**
-     * Converts a list of ParsedExercise to compact representations.
+     * Consolidates parsed exercises into ONE card per exercise.
+     * Multiple lines of the same exercise (with same or different weights)
+     * are merged into a single CompactExercise whose table contains multiple rows.
      */
     fun toCompactList(exercises: List<ParsedExercise>): List<CompactExercise> {
-        return exercises.map { toCompact(it) }
+        if (exercises.isEmpty()) return emptyList()
+
+        val exerciseMap = linkedMapOf<String, Pair<String, MutableList<ParsedSet>>>()
+        for (exercise in exercises) {
+            val key = WorkoutTextParser.normalize(exercise.name)
+            val entry = exerciseMap.getOrPut(key) { Pair(exercise.name, mutableListOf()) }
+            entry.second.addAll(exercise.sets)
+        }
+
+        return exerciseMap.values.map { (displayName, allSets) ->
+            CompactExercise(
+                name = displayName,
+                groups = groupConsecutiveSets(allSets)
+            )
+        }
     }
 }

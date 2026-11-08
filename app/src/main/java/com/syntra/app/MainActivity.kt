@@ -74,6 +74,8 @@ private fun TrainerApp(db: AppDatabase) {
     var loaded by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var page by remember { mutableStateOf("Inicio") }
+    var isEditingProfile by remember { mutableStateOf(false) }
+
     LaunchedEffect(db) { profileFlow.first(); loaded = true }
 
     if (!loaded) {
@@ -86,43 +88,42 @@ private fun TrainerApp(db: AppDatabase) {
         return
     }
 
-    if (profile == null || page == "Perfil") {
+    // Initial Onboarding flow (only when no profile exists in database)
+    if (profile == null) {
         Scaffold(
             containerColor = Color.Black,
             contentWindowInsets = WindowInsets.safeDrawing
         ) { innerPadding ->
             ProfileForm(
-                current = profile,
+                current = null,
                 error = error,
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(innerPadding)
                     .imePadding(),
-                onCancel = { page = "Inicio" }
-            ) { name, preferred, height, grams, activity, goal ->
-                scope.launch {
-                    try {
-                        val now = System.currentTimeMillis()
-                        val previous = profile
-                        db.withTransaction {
-                            db.profileDao().save(ProfileEntity(
-                                name = name, preferredName = preferred, heightCm = height,
-                                initialWeightGrams = previous?.initialWeightGrams ?: grams,
-                                activityLevel = activity, goal = goal,
-                                createdAtMillis = previous?.createdAtMillis ?: now,
-                                updatedAtMillis = now
-                            ))
-                            if (previous == null) {
+                onCancel = {},
+                onSave = { name, preferred, height, grams, activity, goal ->
+                    scope.launch {
+                        try {
+                            val now = System.currentTimeMillis()
+                            db.withTransaction {
+                                db.profileDao().save(ProfileEntity(
+                                    name = name, preferredName = preferred, heightCm = height,
+                                    initialWeightGrams = grams,
+                                    activityLevel = activity, goal = goal,
+                                    createdAtMillis = now,
+                                    updatedAtMillis = now
+                                ))
                                 db.weighInDao().insert(WeighInEntity(measuredAtMillis = now, weightGrams = grams))
                             }
+                            error = null
+                            page = "Inicio"
+                        } catch (e: Exception) {
+                            error = "No se pudieron guardar los datos iniciales. Reintentá."
                         }
-                        error = null
-                        page = "Inicio"
-                    } catch (e: Exception) {
-                        error = "No se pudieron guardar los datos. Intentalo nuevamente."
                     }
                 }
-            }
+            )
         }
         return
     }
@@ -138,7 +139,10 @@ private fun TrainerApp(db: AppDatabase) {
                 listOf("Inicio", "Peso", "Analizar", "Perfil").forEach { destination ->
                     NavigationBarItem(
                         selected = page == destination,
-                        onClick = { page = destination },
+                        onClick = {
+                            page = destination
+                            if (destination != "Perfil") isEditingProfile = false
+                        },
                         icon = {
                             Text(
                                 text = when(destination) { "Inicio" -> "⌂"; "Peso" -> "⚖"; "Analizar" -> "✎"; else -> "⚙" },
@@ -166,6 +170,11 @@ private fun TrainerApp(db: AppDatabase) {
                 .padding(horizontal = 16.dp, vertical = 8.dp)
         ) {
             when(page) {
+                "Inicio" -> HomeScreen(
+                    profile = profile!!,
+                    db = db,
+                    onNavigate = { targetPage -> page = targetPage }
+                )
                 "Peso" -> WeightScreen(db, error) { input ->
                     val grams = weightGrams(input)
                     if (grams == null) {
@@ -182,9 +191,139 @@ private fun TrainerApp(db: AppDatabase) {
                     }
                 }
                 "Analizar" -> ParserScreen()
-                else -> HomeScreen(profile!!, db)
+                "Perfil" -> {
+                    if (isEditingProfile) {
+                        ProfileForm(
+                            current = profile,
+                            error = error,
+                            modifier = Modifier.fillMaxSize(),
+                            onCancel = { isEditingProfile = false },
+                            onSave = { name, preferred, height, grams, activity, goal ->
+                                scope.launch {
+                                    try {
+                                        val now = System.currentTimeMillis()
+                                        db.profileDao().save(ProfileEntity(
+                                            name = name, preferredName = preferred, heightCm = height,
+                                            initialWeightGrams = profile!!.initialWeightGrams,
+                                            activityLevel = activity, goal = goal,
+                                            createdAtMillis = profile!!.createdAtMillis,
+                                            updatedAtMillis = now
+                                        ))
+                                        error = null
+                                        isEditingProfile = false
+                                    } catch (e: Exception) {
+                                        error = "No se pudieron actualizar los datos del perfil."
+                                    }
+                                }
+                            }
+                        )
+                    } else {
+                        ProfileViewScreen(
+                            profile = profile!!,
+                            onStartEdit = { isEditingProfile = true }
+                        )
+                    }
+                }
             }
         }
+    }
+}
+
+@Composable
+private fun ProfileViewScreen(
+    profile: ProfileEntity,
+    onStartEdit: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        Column {
+            Text(
+                text = "Mi perfil",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold,
+                color = Color.White
+            )
+            Text(
+                text = "Datos y configuración guardados localmente",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+
+        // Card 1: Datos personales
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF161616)),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = "Datos personales",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                ProfileFieldDisplay("Nombre completo", profile.name)
+                ProfileFieldDisplay("Nombre para IrisX", profile.preferredName)
+                ProfileFieldDisplay("Estatura", "${profile.heightCm} cm")
+                ProfileFieldDisplay("Peso inicial", "${displayKg(profile.initialWeightGrams)} kg")
+            }
+        }
+
+        // Card 2: Tu plan y enfoque (movido aquí desde Inicio)
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF161616)),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = "Tu plan y enfoque",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                ProfileFieldDisplay("Objetivo principal", profile.goal)
+                ProfileFieldDisplay("Actividad cotidiana", profile.activityLevel)
+            }
+        }
+
+        Button(
+            onClick = onStartEdit,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(48.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = MaterialTheme.colorScheme.primary,
+                contentColor = Color.Black
+            ),
+            shape = RoundedCornerShape(10.dp)
+        ) {
+            Text("Editar perfil", fontWeight = FontWeight.Bold)
+        }
+        Spacer(Modifier.height(8.dp))
+    }
+}
+
+@Composable
+private fun ProfileFieldDisplay(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(text = label, style = MaterialTheme.typography.bodyMedium, color = Color.Gray)
+        Text(text = value, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = Color.White)
     }
 }
 
@@ -396,7 +535,7 @@ private fun ProfileForm(
             ),
             shape = RoundedCornerShape(10.dp)
         ) {
-            Text("Guardar perfil", fontWeight = FontWeight.Bold)
+            Text(if (current == null) "Guardar perfil" else "Guardar cambios", fontWeight = FontWeight.Bold)
         }
 
         if (current != null) {
@@ -404,7 +543,7 @@ private fun ProfileForm(
                 onClick = onCancel,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text("Volver", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("Volver sin cambios", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
         Spacer(Modifier.height(8.dp))
@@ -412,10 +551,16 @@ private fun ProfileForm(
 }
 
 @Composable
-private fun HomeScreen(profile: ProfileEntity, db: AppDatabase) {
+private fun HomeScreen(
+    profile: ProfileEntity,
+    db: AppDatabase,
+    onNavigate: (String) -> Unit
+) {
     val history by remember(db) { db.weighInDao().observeAll() }.collectAsState(initial = emptyList())
     Column(
-        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         Column {
@@ -426,7 +571,7 @@ private fun HomeScreen(profile: ProfileEntity, db: AppDatabase) {
                 color = Color.White
             )
             Text(
-                text = "Syntra v0.1.1 • Asistente IrisX",
+                text = "Syntra v0.1.2 • Asistente IrisX",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.primary
             )
@@ -469,21 +614,24 @@ private fun HomeScreen(profile: ProfileEntity, db: AppDatabase) {
             }
         }
 
-        Card(
+        // Quick Actions (Accesos rápidos)
+        Row(
             modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = Color(0xFF161616)),
-            shape = RoundedCornerShape(12.dp)
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    text = "Tu plan y enfoque",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.primary
-                )
-                Text("• Objetivo: ${profile.goal}", color = Color.White)
-                Text("• Nivel de actividad: ${profile.activityLevel}", color = Color.White)
-                Text("• Estatura: ${profile.heightCm} cm", color = Color.White)
+            OutlinedButton(
+                onClick = { onNavigate("Peso") },
+                modifier = Modifier.weight(1f).height(46.dp),
+                shape = RoundedCornerShape(8.dp)
+            ) {
+                Text("⚖ Registrar peso", color = Color.White, style = MaterialTheme.typography.bodyMedium)
+            }
+            OutlinedButton(
+                onClick = { onNavigate("Analizar") },
+                modifier = Modifier.weight(1f).height(46.dp),
+                shape = RoundedCornerShape(8.dp)
+            ) {
+                Text("✎ Analizar sesión", color = Color.White, style = MaterialTheme.typography.bodyMedium)
             }
         }
 
@@ -500,7 +648,7 @@ private fun HomeScreen(profile: ProfileEntity, db: AppDatabase) {
                     color = MaterialTheme.colorScheme.primary
                 )
                 Text(
-                    text = "Tu copiloto privado procesa texto de entrenamiento y mantiene tu historial local sin enviar datos a la nube.",
+                    text = "Tu copiloto privado procesa texto de entrenamiento y mantiene tu historial local sin conexión.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -636,7 +784,7 @@ private fun ParserScreen() {
                 color = Color.White
             )
             Text(
-                text = "Formato compacto oficial de series",
+                text = "Una tarjeta por ejercicio • Varias filas por carga",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.primary
             )
@@ -682,6 +830,7 @@ private fun ParserScreen() {
                 }
             }
 
+            // Exactly ONE card per exercise, with a table containing multiple rows
             compactExercises.forEach { exercise ->
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -702,8 +851,9 @@ private fun ParserScreen() {
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .background(Color(0xFF222222), RoundedCornerShape(6.dp))
-                                .padding(vertical = 6.dp, horizontal = 10.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween
+                                .padding(vertical = 7.dp, horizontal = 10.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
                                 text = "Series",
@@ -728,11 +878,13 @@ private fun ParserScreen() {
                             )
                         }
 
-                        // Table Rows
+                        // Table Rows (with subtle shading and dividers for mobile readability)
                         exercise.groups.forEachIndexed { index, group ->
+                            val rowBg = if (index % 2 == 1) Color(0xFF1C1C1C) else Color.Transparent
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
+                                    .background(rowBg, RoundedCornerShape(4.dp))
                                     .padding(vertical = 8.dp, horizontal = 10.dp),
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
@@ -759,7 +911,7 @@ private fun ParserScreen() {
                                 )
                             }
                             if (index < exercise.groups.size - 1) {
-                                HorizontalDivider(color = Color(0xFF242424), thickness = 0.5.dp)
+                                HorizontalDivider(color = Color(0xFF262626), thickness = 0.5.dp)
                             }
                         }
                     }

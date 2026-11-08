@@ -78,24 +78,77 @@ class WorkoutPresentationTest {
     }
 
     @Test
-    fun toCompactPreservesTotalCountAndStructure() {
-        val exercise = ParsedExercise(
-            name = "Sentadilla",
-            sets = listOf(
-                ParsedSet(80000, 8),
-                ParsedSet(80000, 8),
-                ParsedSet(80000, 7),
-                ParsedSet(90000, 5)
-            )
+    fun toCompactListConsolidatesMultipleLinesOfSameExerciseIntoOneCardWithMultipleRows() {
+        // Exercise entered across multiple lines (e.g. Sentadilla with different weights)
+        val parsedExercises = listOf(
+            ParsedExercise("Sentadilla", listOf(
+                ParsedSet(70000, 12),
+                ParsedSet(70000, 10),
+                ParsedSet(70000, 8)
+            )),
+            ParsedExercise("Sentadilla", listOf(
+                ParsedSet(65000, 8)
+            )),
+            ParsedExercise("Buenos días", listOf(
+                ParsedSet(40000, 12),
+                ParsedSet(40000, 10),
+                ParsedSet(40000, 10)
+            ))
         )
-        val compact = WorkoutPresentation.toCompact(exercise)
 
-        assertEquals("Sentadilla", compact.name)
-        assertEquals(2, compact.groups.size)
-        assertEquals(4, compact.totalSeriesCount)
-        assertEquals("80 kg", compact.groups[0].formattedWeight())
-        assertEquals("8, 8, 7", compact.groups[0].formattedReps())
-        assertEquals("90 kg", compact.groups[1].formattedWeight())
-        assertEquals("5", compact.groups[1].formattedReps())
+        val compactList = WorkoutPresentation.toCompactList(parsedExercises)
+
+        // Exactly 2 cards: one for Sentadilla, one for Buenos días
+        assertEquals(2, compactList.size)
+
+        // Sentadilla card: 1 card, 2 rows (3x70kg and 1x65kg)
+        val sentadilla = compactList[0]
+        assertEquals("Sentadilla", sentadilla.name)
+        assertEquals(2, sentadilla.groups.size)
+        assertEquals(4, sentadilla.totalSeriesCount)
+
+        assertEquals(3, sentadilla.groups[0].setCount)
+        assertEquals("70 kg", sentadilla.groups[0].formattedWeight())
+        assertEquals("12, 10, 8", sentadilla.groups[0].formattedReps())
+
+        assertEquals(1, sentadilla.groups[1].setCount)
+        assertEquals("65 kg", sentadilla.groups[1].formattedWeight())
+        assertEquals("8", sentadilla.groups[1].formattedReps())
+
+        // Buenos días card: 1 card, 1 row (3x40kg)
+        val buenosDias = compactList[1]
+        assertEquals("Buenos días", buenosDias.name)
+        assertEquals(1, buenosDias.groups.size)
+        assertEquals(3, buenosDias.totalSeriesCount)
+        assertEquals(3, buenosDias.groups[0].setCount)
+        assertEquals("40 kg", buenosDias.groups[0].formattedWeight())
+        assertEquals("12, 10, 10", buenosDias.groups[0].formattedReps())
+    }
+
+    @Test
+    fun toCompactListKeepsNonConsecutiveWeightsOfSameExerciseInSeparateRows() {
+        val parsedExercises = listOf(
+            ParsedExercise("Sentadilla", listOf(ParsedSet(70000, 10))),
+            ParsedExercise("Sentadilla", listOf(ParsedSet(65000, 8))),
+            ParsedExercise("Sentadilla", listOf(ParsedSet(70000, 6)))
+        )
+
+        val compactList = WorkoutPresentation.toCompactList(parsedExercises)
+
+        assertEquals(1, compactList.size)
+        val sentadilla = compactList[0]
+        assertEquals("Sentadilla", sentadilla.name)
+        // 3 separate rows inside the single card
+        assertEquals(3, sentadilla.groups.size)
+        assertEquals(3, sentadilla.totalSeriesCount)
+
+        assertEquals("70 kg", sentadilla.groups[0].formattedWeight())
+        assertEquals("10", sentadilla.groups[0].formattedReps())
+
+        assertEquals("65 kg", sentadilla.groups[1].formattedWeight())
+        assertEquals("8", sentadilla.groups[1].formattedReps())
+
+        assertEquals("70 kg", sentadilla.groups[2].formattedWeight())
+        assertEquals("6", sentadilla.groups[2].formattedReps())
     }
 }
