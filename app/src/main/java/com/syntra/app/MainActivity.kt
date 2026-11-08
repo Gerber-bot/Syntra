@@ -3,42 +3,60 @@ package com.syntra.app
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.room.withTransaction
 import com.syntra.app.data.*
 import com.syntra.app.domain.InputValidators
+import com.syntra.app.domain.WorkoutPresentation
 import com.syntra.app.domain.WorkoutTextParser
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.text.DateFormat
 import java.util.Date
-import java.util.Locale
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
         val database = AppDatabase.get(applicationContext)
         setContent {
             MaterialTheme(colorScheme = darkColorScheme(
                 background = Color.Black,
-                surface = Color(0xFF151515),
+                surface = Color(0xFF141414),
+                surfaceVariant = Color(0xFF1E1E1E),
                 primary = Color(0xFF75D9C1),
-                onBackground = Color.White
+                onPrimary = Color.Black,
+                onBackground = Color.White,
+                onSurface = Color.White,
+                onSurfaceVariant = Color(0xFFAAAAAA),
+                error = Color(0xFFFF6B6B)
             )) {
-                TrainerApp(database)
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color = Color.Black,
+                    contentColor = Color.White
+                ) {
+                    TrainerApp(database)
+                }
             }
         }
     }
@@ -59,57 +77,108 @@ private fun TrainerApp(db: AppDatabase) {
     LaunchedEffect(db) { profileFlow.first(); loaded = true }
 
     if (!loaded) {
-        Box(Modifier.fillMaxSize().background(Color.Black).padding(24.dp)) { CircularProgressIndicator() }
+        Box(
+            modifier = Modifier.fillMaxSize().background(Color.Black),
+            contentAlignment = Alignment.Center
+        ) {
+            CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+        }
         return
     }
+
     if (profile == null || page == "Perfil") {
-        ProfileForm(profile, error, onCancel = { page = "Inicio" }) { name, preferred, height, grams, activity, goal ->
-            scope.launch {
-                try {
-                    val now = System.currentTimeMillis()
-                    val previous = profile
-                    db.withTransaction {
-                        db.profileDao().save(ProfileEntity(
-                            name = name, preferredName = preferred, heightCm = height,
-                            initialWeightGrams = previous?.initialWeightGrams ?: grams,
-                            activityLevel = activity, goal = goal,
-                            createdAtMillis = previous?.createdAtMillis ?: now,
-                            updatedAtMillis = now
-                        ))
-                        if (previous == null) db.weighInDao().insert(WeighInEntity(measuredAtMillis = now, weightGrams = grams))
+        Scaffold(
+            containerColor = Color.Black,
+            contentWindowInsets = WindowInsets.safeDrawing
+        ) { innerPadding ->
+            ProfileForm(
+                current = profile,
+                error = error,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+                    .imePadding(),
+                onCancel = { page = "Inicio" }
+            ) { name, preferred, height, grams, activity, goal ->
+                scope.launch {
+                    try {
+                        val now = System.currentTimeMillis()
+                        val previous = profile
+                        db.withTransaction {
+                            db.profileDao().save(ProfileEntity(
+                                name = name, preferredName = preferred, heightCm = height,
+                                initialWeightGrams = previous?.initialWeightGrams ?: grams,
+                                activityLevel = activity, goal = goal,
+                                createdAtMillis = previous?.createdAtMillis ?: now,
+                                updatedAtMillis = now
+                            ))
+                            if (previous == null) {
+                                db.weighInDao().insert(WeighInEntity(measuredAtMillis = now, weightGrams = grams))
+                            }
+                        }
+                        error = null
+                        page = "Inicio"
+                    } catch (e: Exception) {
+                        error = "No se pudieron guardar los datos. Intentalo nuevamente."
                     }
-                    error = null
-                    page = "Inicio"
-                } catch (e: Exception) { error = "No se pudieron guardar los datos. Revisá el registro de errores." }
+                }
             }
         }
         return
     }
+
     Scaffold(
         containerColor = Color.Black,
+        contentWindowInsets = WindowInsets.safeDrawing,
         bottomBar = {
-            NavigationBar(containerColor = Color(0xFF151515)) {
+            NavigationBar(
+                containerColor = Color(0xFF141414),
+                contentColor = Color.White
+            ) {
                 listOf("Inicio", "Peso", "Analizar", "Perfil").forEach { destination ->
                     NavigationBarItem(
                         selected = page == destination,
                         onClick = { page = destination },
-                        icon = { Text(when(destination) { "Inicio" -> "⌂"; "Peso" -> "⚖"; "Analizar" -> "✎"; else -> "⚙" }) },
-                        label = { Text(destination) }
+                        icon = {
+                            Text(
+                                text = when(destination) { "Inicio" -> "⌂"; "Peso" -> "⚖"; "Analizar" -> "✎"; else -> "⚙" },
+                                fontWeight = FontWeight.Bold
+                            )
+                        },
+                        label = { Text(destination) },
+                        colors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = Color.Black,
+                            selectedTextColor = MaterialTheme.colorScheme.primary,
+                            indicatorColor = MaterialTheme.colorScheme.primary,
+                            unselectedIconColor = Color.Gray,
+                            unselectedTextColor = Color.Gray
+                        )
                     )
                 }
             }
         }
     ) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding).padding(20.dp)) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .imePadding()
+                .padding(horizontal = 16.dp, vertical = 8.dp)
+        ) {
             when(page) {
                 "Peso" -> WeightScreen(db, error) { input ->
                     val grams = weightGrams(input)
-                    if (grams == null) error = "Introducí un peso válido entre 20 y 400 kg."
-                    else scope.launch {
-                        try {
-                            db.weighInDao().insert(WeighInEntity(weightGrams = grams, measuredAtMillis = System.currentTimeMillis()))
-                            error = null
-                        } catch (e: Exception) { error = "No se pudo registrar el pesaje." }
+                    if (grams == null) {
+                        error = "Introducí un peso válido entre 20 y 400 kg."
+                    } else {
+                        scope.launch {
+                            try {
+                                db.weighInDao().insert(WeighInEntity(weightGrams = grams, measuredAtMillis = System.currentTimeMillis()))
+                                error = null
+                            } catch (e: Exception) {
+                                error = "No se pudo registrar el pesaje."
+                            }
+                        }
                     }
                 }
                 "Analizar" -> ParserScreen()
@@ -120,8 +189,46 @@ private fun TrainerApp(db: AppDatabase) {
 }
 
 @Composable
+private fun SelectableOptionRow(
+    text: String,
+    selected: Boolean,
+    onSelect: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .selectable(
+                selected = selected,
+                onClick = onSelect,
+                role = Role.RadioButton
+            )
+            .padding(vertical = 4.dp, horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        RadioButton(
+            selected = selected,
+            onClick = null,
+            colors = RadioButtonDefaults.colors(
+                selectedColor = MaterialTheme.colorScheme.primary,
+                unselectedColor = Color.Gray
+            )
+        )
+        Spacer(Modifier.width(10.dp))
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodyMedium,
+            color = Color.White
+        )
+    }
+}
+
+@Composable
 private fun ProfileForm(
-    current: ProfileEntity?, error: String?, onCancel: () -> Unit,
+    current: ProfileEntity?,
+    error: String?,
+    modifier: Modifier = Modifier,
+    onCancel: () -> Unit,
     onSave: (String, String, Int, Int, String, String) -> Unit
 ) {
     var name by remember(current) { mutableStateOf(current?.name ?: "") }
@@ -131,75 +238,368 @@ private fun ProfileForm(
     var activity by remember(current) { mutableStateOf(current?.activityLevel ?: "Sedentario") }
     var goal by remember(current) { mutableStateOf(current?.goal ?: "Seguimiento general") }
     var validation by remember { mutableStateOf<String?>(null) }
-    Column(Modifier.fillMaxSize().background(Color.Black).verticalScroll(rememberScrollState()).padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text(if(current == null) "Bienvenido a Syntra" else "Editar perfil", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-        Text("Los datos se guardan únicamente en este dispositivo.")
-        OutlinedTextField(name, { name = it }, label = { Text("Nombre") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-        OutlinedTextField(preferred, { preferred = it }, label = { Text("¿Cómo querés que te llame?") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-        OutlinedTextField(height, { height = it }, label = { Text("Estatura (cm)") }, modifier = Modifier.fillMaxWidth(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), singleLine = true)
-        if (current == null) {
-            OutlinedTextField(weight, { weight = it }, label = { Text("Peso inicial (kg)") }, modifier = Modifier.fillMaxWidth(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), singleLine = true)
-        } else {
-            Text("El peso inicial no cambia al editar el perfil. Podés añadir nuevos pesajes en Peso.")
+
+    Column(
+        modifier = modifier
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        Column {
+            Text(
+                text = if (current == null) "Bienvenido a Syntra" else "Editar perfil",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold,
+                color = Color.White
+            )
+            Text(
+                text = "Tus datos se guardan exclusivamente en este dispositivo.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
-        Text("Actividad cotidiana", fontWeight = FontWeight.SemiBold)
-        listOf("Sedentario", "Ligero", "Moderado", "Alto").forEach { item ->
-            Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                RadioButton(selected = activity == item, onClick = { activity = item }); Text(item)
+
+        // Card 1: Datos Personales
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF161616)),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    text = "Datos personales",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("Nombre completo") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+                OutlinedTextField(
+                    value = preferred,
+                    onValueChange = { preferred = it },
+                    label = { Text("¿Cómo querés que te llame IrisX?") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+                OutlinedTextField(
+                    value = height,
+                    onValueChange = { height = it },
+                    label = { Text("Estatura (cm)") },
+                    modifier = Modifier.fillMaxWidth(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    singleLine = true
+                )
+                if (current == null) {
+                    OutlinedTextField(
+                        value = weight,
+                        onValueChange = { weight = it },
+                        label = { Text("Peso inicial (kg)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        singleLine = true
+                    )
+                } else {
+                    Text(
+                        text = "El peso inicial queda registrado como primer pesaje. Podés registrar pesajes actualizados en la pestaña Peso.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
         }
-        Text("Objetivo principal", fontWeight = FontWeight.SemiBold)
-        listOf("Seguimiento general", "Perder grasa", "Ganar masa muscular", "Mejorar fuerza", "Mantener peso").forEach { item ->
-            Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                RadioButton(selected = goal == item, onClick = { goal = item }); Text(item)
+
+        // Card 2: Actividad
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF161616)),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Column(modifier = Modifier.padding(14.dp)) {
+                Text(
+                    text = "Actividad cotidiana",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Spacer(Modifier.height(6.dp))
+                listOf("Sedentario", "Ligero", "Moderado", "Alto").forEach { item ->
+                    SelectableOptionRow(
+                        text = item,
+                        selected = (activity == item),
+                        onSelect = { activity = item }
+                    )
+                }
             }
         }
-        if (validation != null || error != null) Text(validation ?: error.orEmpty(), color = MaterialTheme.colorScheme.error)
-        Button(onClick = {
-            val w = if (current == null) weightGrams(weight) else current.initialWeightGrams
-            val errorMsg = InputValidators.validateProfile(name, preferred, height, w)
-            if (errorMsg != null) {
-                validation = errorMsg
-            } else {
-                validation = null
-                onSave(name.trim(), preferred.trim(), height.trim().toInt(), w!!, activity, goal)
+
+        // Card 3: Objetivo
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF161616)),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Column(modifier = Modifier.padding(14.dp)) {
+                Text(
+                    text = "Objetivo principal",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Spacer(Modifier.height(6.dp))
+                listOf(
+                    "Seguimiento general",
+                    "Perder grasa",
+                    "Ganar masa muscular",
+                    "Mejorar fuerza",
+                    "Mantener peso"
+                ).forEach { item ->
+                    SelectableOptionRow(
+                        text = item,
+                        selected = (goal == item),
+                        onSelect = { goal = item }
+                    )
+                }
             }
-        }, modifier = Modifier.fillMaxWidth()) { Text("Guardar perfil") }
-        if (current != null) TextButton(onClick = onCancel) { Text("Volver") }
+        }
+
+        if (validation != null || error != null) {
+            Text(
+                text = validation ?: error.orEmpty(),
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodyMedium
+            )
+        }
+
+        Button(
+            onClick = {
+                val w = if (current == null) weightGrams(weight) else current.initialWeightGrams
+                val errorMsg = InputValidators.validateProfile(name, preferred, height, w)
+                if (errorMsg != null) {
+                    validation = errorMsg
+                } else {
+                    validation = null
+                    onSave(name.trim(), preferred.trim(), height.trim().toInt(), w!!, activity, goal)
+                }
+            },
+            modifier = Modifier.fillMaxWidth().height(48.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = MaterialTheme.colorScheme.primary,
+                contentColor = Color.Black
+            ),
+            shape = RoundedCornerShape(10.dp)
+        ) {
+            Text("Guardar perfil", fontWeight = FontWeight.Bold)
+        }
+
+        if (current != null) {
+            TextButton(
+                onClick = onCancel,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Volver", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        Spacer(Modifier.height(8.dp))
     }
 }
 
 @Composable
 private fun HomeScreen(profile: ProfileEntity, db: AppDatabase) {
     val history by remember(db) { db.weighInDao().observeAll() }.collectAsState(initial = emptyList())
-    Column(verticalArrangement = Arrangement.spacedBy(18.dp)) {
-        Text("Hola, ${profile.preferredName}", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-        Text("Tu entrenador inteligente y privado con IrisX. Versión 0.1.0")
-        HorizontalDivider()
-        Text("Objetivo: ${profile.goal}")
-        Text("Actividad cotidiana: ${profile.activityLevel}")
-        Text("Último peso: ${history.firstOrNull()?.let { displayKg(it.weightGrams) + " kg" } ?: "Sin datos"}")
-        Text("Pesajes registrados: ${history.size}")
-        Text("El asistente inteligente IrisX y el registro definitivo de entrenamientos se habilitarán en próximas entregas.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Column(
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        Column {
+            Text(
+                text = "Hola, ${profile.preferredName}",
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.Bold,
+                color = Color.White
+            )
+            Text(
+                text = "Syntra v0.1.1 • Asistente IrisX",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary
+            )
+        }
+
+        // Summary Cards
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Card(
+                modifier = Modifier.weight(1f),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF161616)),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Column(Modifier.padding(12.dp)) {
+                    Text("ÚLTIMO PESO", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                    Text(
+                        text = history.firstOrNull()?.let { displayKg(it.weightGrams) + " kg" } ?: "Sin datos",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+                }
+            }
+            Card(
+                modifier = Modifier.weight(1f),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF161616)),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Column(Modifier.padding(12.dp)) {
+                    Text("REGISTROS", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                    Text(
+                        text = "${history.size} pesajes",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+        }
+
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF161616)),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = "Tu plan y enfoque",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Text("• Objetivo: ${profile.goal}", color = Color.White)
+                Text("• Nivel de actividad: ${profile.activityLevel}", color = Color.White)
+                Text("• Estatura: ${profile.heightCm} cm", color = Color.White)
+            }
+        }
+
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF121A18)),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    text = "IrisX Core",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Text(
+                    text = "Tu copiloto privado procesa texto de entrenamiento y mantiene tu historial local sin enviar datos a la nube.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
     }
 }
 
 @Composable
 private fun WeightScreen(db: AppDatabase, error: String?, save: (String) -> Unit) {
     val history by remember(db) { db.weighInDao().observeAll() }.collectAsState(initial = emptyList())
-    var weight by remember { mutableStateOf("") }
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("Seguimiento del peso", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-        OutlinedTextField(weight, { weight = it }, label = { Text("Nuevo pesaje (kg)") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), modifier = Modifier.fillMaxWidth())
-        Button(onClick = { save(weight) }, modifier = Modifier.fillMaxWidth()) { Text("Registrar pesaje") }
-        if (error != null) Text(error, color = MaterialTheme.colorScheme.error)
-        Text("Historial (${history.size})", style = MaterialTheme.typography.titleMedium)
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    var weightInput by remember { mutableStateOf("") }
+
+    Column(
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Text(
+            text = "Seguimiento de peso",
+            style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.Bold,
+            color = Color.White
+        )
+
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF161616)),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                OutlinedTextField(
+                    value = weightInput,
+                    onValueChange = { weightInput = it },
+                    label = { Text("Nuevo pesaje (kg)") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Button(
+                    onClick = {
+                        save(weightInput)
+                        if (weightGrams(weightInput) != null) weightInput = ""
+                    },
+                    modifier = Modifier.fillMaxWidth().height(46.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = Color.Black
+                    ),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text("Registrar pesaje", fontWeight = FontWeight.Bold)
+                }
+                if (error != null) {
+                    Text(text = error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        }
+
+        Text(
+            text = "Historial (${history.size})",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = Color.White
+        )
+
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
             items(history, key = { it.id }) { item ->
-                Card(Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(12.dp)) {
-                        Text("${displayKg(item.weightGrams)} kg", fontWeight = FontWeight.Bold)
-                        Text(DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(item.measuredAtMillis)))
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF141414)),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(14.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text(
+                                text = "${displayKg(item.weightGrams)} kg",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            if (item.note.isNotBlank()) {
+                                Text(item.note, style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                            }
+                        }
+                        Text(
+                            text = DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(item.measuredAtMillis)),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color.Gray
+                        )
                     }
                 }
             }
@@ -209,7 +609,7 @@ private fun WeightScreen(db: AppDatabase, error: String?, save: (String) -> Unit
 
 @Composable
 private fun ParserScreen() {
-    var input by remember { mutableStateOf("Piernas\nSentadilla 80kg 8 8 7\nBuenos días 40kg 12 10 10") }
+    var input by remember { mutableStateOf("Piernas\nSentadilla 70kg 12 10 8\nSentadilla 65kg 8\nBuenos días 40kg 12 10 10") }
     var analyzed by remember { mutableStateOf(false) }
     val sampleAliases = remember {
         mapOf(
@@ -220,23 +620,184 @@ private fun ParserScreen() {
         )
     }
     val preview = remember(input, analyzed) { if (analyzed) WorkoutTextParser.parse(input, sampleAliases) else null }
-    Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("Analizador de entrenamientos", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-        Text("Solo vista previa: esta versión NO guarda entrenamientos.")
-        OutlinedTextField(value = input, onValueChange = { input = it; analyzed = false }, modifier = Modifier.fillMaxWidth().heightIn(min = 160.dp), label = { Text("Escribí tu sesión") })
-        Button(onClick = { analyzed = true }, modifier = Modifier.fillMaxWidth()) { Text("Interpretar texto") }
+    val compactExercises = remember(preview) {
+        preview?.let { WorkoutPresentation.toCompactList(it.exercises) } ?: emptyList()
+    }
+
+    Column(
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Column {
+            Text(
+                text = "Analizador de entrenamientos",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold,
+                color = Color.White
+            )
+            Text(
+                text = "Formato compacto oficial de series",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary
+            )
+        }
+
+        OutlinedTextField(
+            value = input,
+            onValueChange = { input = it; analyzed = false },
+            modifier = Modifier.fillMaxWidth().heightIn(min = 140.dp),
+            label = { Text("Escribí tu sesión") }
+        )
+
+        Button(
+            onClick = { analyzed = true },
+            modifier = Modifier.fillMaxWidth().height(46.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = MaterialTheme.colorScheme.primary,
+                contentColor = Color.Black
+            ),
+            shape = RoundedCornerShape(8.dp)
+        ) {
+            Text("Interpretar sesión", fontWeight = FontWeight.Bold)
+        }
+
         if (preview != null) {
-            Text("${preview.exercises.size} ejercicios • ${preview.seriesCount} series", fontWeight = FontWeight.Bold)
-            preview.sessionTitle?.let { Text("Sesión: $it") }
-            preview.exercises.forEach { exercise ->
-                Card(Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(12.dp)) {
-                        Text(exercise.name, fontWeight = FontWeight.Bold)
-                        Text(exercise.sets.joinToString(" • ") { "${displayKg(it.weightGrams)} kg × ${it.repetitions}" })
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "${compactExercises.size} ejercicios • ${preview.seriesCount} series totales",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
+                )
+                preview.sessionTitle?.let {
+                    Text(
+                        text = "Sesión: $it",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+
+            compactExercises.forEach { exercise ->
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF161616)),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Column(Modifier.padding(14.dp)) {
+                        Text(
+                            text = exercise.name,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(Modifier.height(8.dp))
+
+                        // Table Header
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(Color(0xFF222222), RoundedCornerShape(6.dp))
+                                .padding(vertical = 6.dp, horizontal = 10.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = "Series",
+                                fontWeight = FontWeight.SemiBold,
+                                color = Color.LightGray,
+                                style = MaterialTheme.typography.labelMedium,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Text(
+                                text = "Peso",
+                                fontWeight = FontWeight.SemiBold,
+                                color = Color.LightGray,
+                                style = MaterialTheme.typography.labelMedium,
+                                modifier = Modifier.weight(1.2f)
+                            )
+                            Text(
+                                text = "Repeticiones",
+                                fontWeight = FontWeight.SemiBold,
+                                color = Color.LightGray,
+                                style = MaterialTheme.typography.labelMedium,
+                                modifier = Modifier.weight(2f)
+                            )
+                        }
+
+                        // Table Rows
+                        exercise.groups.forEachIndexed { index, group ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 8.dp, horizontal = 10.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "${group.setCount}",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = Color.White,
+                                    fontWeight = FontWeight.SemiBold,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Text(
+                                    text = group.formattedWeight(),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    fontWeight = FontWeight.SemiBold,
+                                    modifier = Modifier.weight(1.2f)
+                                )
+                                Text(
+                                    text = group.formattedReps(),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = Color.White,
+                                    modifier = Modifier.weight(2f)
+                                )
+                            }
+                            if (index < exercise.groups.size - 1) {
+                                HorizontalDivider(color = Color(0xFF242424), thickness = 0.5.dp)
+                            }
+                        }
                     }
                 }
             }
-            preview.warnings.forEach { Text("⚠ $it", color = MaterialTheme.colorScheme.error) }
+
+            if (preview.assistantCommands.isNotEmpty()) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF101C18)),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Column(Modifier.padding(12.dp)) {
+                        Text(
+                            text = "Directivas para IrisX:",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        preview.assistantCommands.forEach { directive ->
+                            Text(
+                                text = "• Línea ${directive.line}: \"${directive.command}\"",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color.White
+                            )
+                        }
+                    }
+                }
+            }
+
+            preview.warnings.forEach { warning ->
+                Text(
+                    text = "⚠ $warning",
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
         }
+        Spacer(Modifier.height(16.dp))
     }
 }

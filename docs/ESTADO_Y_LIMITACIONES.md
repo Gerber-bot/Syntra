@@ -1,40 +1,38 @@
-# Syntra — Estado de la entrega 0.1.0 (Sprint 01)
+# Syntra — Estado de la entrega 0.1.1
 
-## Implementado en código
+## Implementado en código (v0.1.1)
 
-- Identidad definitiva: **Syntra**, versión **0.1.0**, namespace y applicationId `com.syntra.app`.
-- Asistente inteligente definitivo: **IrisX** (**IrisX Core** e **IrisX Memory**).
-- UI de bienvenida/perfil y edición en Jetpack Compose con Material 3 oscuro.
-- Persistencia de perfil y pesajes con Room/SQLite (`syntra.db`).
-- Persistencia de peso inicial en la misma transacción que crea el primer perfil.
-- Tablas iniciales de ejercicios, alias, sesiones y series (sin flujo de guardado en este sprint).
-- Parser determinista (`WorkoutTextParser`):
-  - Detección de títulos de sesión y ejercicios con múltiples series y cargas.
-  - Reconocimiento de directivas explícitas para el asistente IrisX (`IrisX: ...`, `@irisx ...`).
-  - Desambiguación semántica entre comandos de IrisX y ejercicios con nombres homónimos («buenos días»).
-- Módulo de validación de dominio desacoplado de la UI (`InputValidators`) para estaturas y pesajes.
-- Gradle Wrapper oficial completo generado con Gradle 9.6.0 (`gradlew`, `gradlew.bat`, `gradle-wrapper.jar`).
+- **Corrección integral de onboarding y perfil**:
+  - Resuelto problema de RadioButtons sin etiquetas visibles: implementado componente `SelectableOptionRow` con etiquetas en blanco de alto contraste (`Color.White`), área táctil de ancho completo accesible y `Role.RadioButton`.
+  - Tratamiento correcto de `WindowInsets.safeDrawing` y `enableEdgeToEdge()` en `MainActivity`: el contenido ya no colisiona con la barra de estado, cutouts de cámara ni navegación del sistema en Android 15.
+  - Soporte de teclado virtual (`imePadding()`): los campos numéricos de estatura y peso desplazan el formulario evitando que el teclado tape los botones de acción.
+  - Jerarquía visual compacta: agrupación en tarjetas por sección (Datos personales, Actividad, Objetivo) con espaciados moderados y legibles.
+- **Formato compacto oficial de entrenamientos**:
+  - Implementado `WorkoutPresentation` (`toCompact` y `groupConsecutiveSets`) que agrupa series consecutivas con la misma carga (`Series | Peso | Repeticiones`).
+  - Conservación estricta del orden cronológico y separación de cargas idénticas no consecutivas.
+  - Formateo de pesos con coma decimal en español evitando ceros redundantes (`70 kg`, `7,5 kg`).
+  - Presentación en tarjetas con tabla estructurada de cabeceras y divisores claros.
+- **Persistencia y datos**:
+  - `applicationId = "com.syntra.app"`, base de datos `syntra.db` intacta en versión 1.
+  - Incremento de versión: `versionCode = 2`, `versionName = "0.1.1"`.
+  - Compatible 100% con la instalación anterior sin pérdida de datos ni migraciones destructivas.
 
 ## Verificado realmente
 
-- Gradle Wrapper 9.6.0 operativo: invocación y descarga de distribución verificadas.
-- Compilación y ejecución exitosa de **16 pruebas unitarias automatizadas** con JUnit 4.13.2 (0 fallos):
-  - Intérprete de entrenamientos: series con carga única, múltiples ejercicios en sesión ("Piernas\nSentadilla 80kg 8 8 7\nBuenos días 40kg 12 10 10"), cambios de peso en la misma línea ("Sentadilla 85kg 8. 90kg 7"), decimales con coma ("Laterales 7,5kg 12 11"), y resolución de alias con insensibilidad a mayúsculas/tildes.
-  - Desambiguación de IrisX vs. ejercicios: `Buenos días 40kg 12 10 10` se reconoce como ejercicio deportivo puro; `IrisX: ...` se extrae como directiva del asistente; `Buenos días` sin datos genera advertencia orientadora.
-  - Comportamiento conservador: generación de advertencias ante pesos fuera de rango (<= 0 o > 1000 kg), omisión de nombre de ejercicio o falta de series; nunca se inventan datos.
-  - Validaciones de entrada: parseo estricto de pesajes (rango 20–400 kg), formateo a 2 decimales y validación de perfiles (estatura 100–250 cm).
-
-## No verificado en este host / limitaciones de entorno
-
-- **APK Android no ensamblado localmente**: el entorno de terminal carece de Android SDK (no se detectó variable `ANDROID_HOME`, `sdkmanager` ni plataformas API 37) y no hay dispositivo/emulador conectado (`adb` ausente).
-- Las pruebas de ciclo de vida en Android Studio (reinicio de app, persistencia en SQLite real del emulador/dispositivo) deben correrse abriendo el proyecto en Android Studio con el SDK instalado.
-- No se exportan ni importan backups todavía.
-- No existen recordatorios, notificaciones, servicios en segundo plano ni modelos neuronales.
+- **36 pruebas unitarias automatizadas ejecutadas mediante Gradle** (`.\gradlew.bat test`): 0 fallos.
+  - Cobertura de agrupación de series consecutivas, cargas repetidas no consecutivas, formateo de pesos decimales, series únicas y casos borde.
+  - Cobertura de parser y desambiguación con IrisX.
+  - Cobertura de validaciones de dominio de estatura y peso.
+- **Compilación exitosa del APK debug v0.1.1** (`.\gradlew.bat :app:assembleDebug`).
+- **Inspección del binario** (`apkanalyzer`):
+  - Paquete: `com.syntra.app`
+  - VersionCode: `2`
+  - VersionName: `0.1.1`
+  - Permisos: Exclusivamente `DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION`. Sin `INTERNET` ni acceso a archivos externos.
 
 ## Matriz de compatibilidad de build
 
 - **Gradle**: 9.6.0 (wrapper configurado).
-- **AGP**: 9.5.0 (cuenta con soporte Built-in Kotlin nativo).
-- **Compose Compiler**: 2.4.10 (`org.jetbrains.kotlin.plugin.compose`).
-- **KSP**: Al usar Kotlin 2.4.10, la versión de `com.google.devtools.ksp` debe mantenerse alineada a la misma línea base de Kotlin.
-- **Java**: JDK 17 mínimo (entorno probado sobre OpenJDK 25).
+- **AGP**: 9.5.0 (Kotlin Built-in nativo).
+- **Compose Compiler**: 2.4.10.
+- **Android SDK**: API 37 (`android-37.0`), Build-Tools 35.0.0 / 36.0.0 instalados de forma aislada en `.android-sdk`.
