@@ -1,0 +1,8 @@
+OK: Identidad actualizada: Syntra 0.1.0, asistente IrisX (IrisX Core / IrisX Memory).
+OK: Gradle Wrapper oficial 9.6.0 generado y verificado (gradlew, gradlew.bat, wrapper JAR).
+OK: 16 pruebas unitarias ejecutadas con JUnit 4.13.2 y compilador Kotlin (0 fallos).
+- Parser de entrenamiento verificado para casos de una línea, múltiples ejercicios, cambios de carga, decimales con coma y alias.
+- Desambiguación robusta implementada: distingue directivas de IrisX de ejercicios como "buenos días".
+- Manejo conservador de advertencias comprobado (sin inventar registros ante textos ambiguos o cargas inválidas).
+- Validaciones de entrada de perfil y pesajes verificadas (InputValidators).
+Limitación de entorno: Android SDK no instalado en el host local (sin ANDROID_HOME ni adb). El ensamblado de APK debug y las pruebas en dispositivo físico/emulador quedan listas para ser ejecutadas desde Android Studio.
