@@ -12,18 +12,31 @@ data class CompactSetGroup(
     val repetitions: List<Int>,
     val rir: Int? = null,
     val rpe: Double? = null,
-    val restSeconds: Int? = null
+    val restSeconds: Int? = null,
+    val isAssisted: Boolean = false,
+    val isDumbbell: Boolean = false,
+    val note: String = ""
 ) {
     val setCount: Int get() = repetitions.size
 
-    fun formattedWeight(): String = WorkoutPresentation.formatWeightKg(weightGrams)
+    fun formattedWeight(): String {
+        val base = WorkoutPresentation.formatWeightKg(weightGrams)
+        return when {
+            isAssisted -> "-$base (asistido)"
+            isDumbbell -> "$base (mancuerna)"
+            note.isNotBlank() -> "$base ($note)"
+            else -> base
+        }
+    }
 
     fun formattedReps(): String = repetitions.joinToString(", ")
 }
 
 data class CompactExercise(
     val name: String,
-    val groups: List<CompactSetGroup>
+    val groups: List<CompactSetGroup>,
+    val plannedTarget: String? = null,
+    val isNewExercise: Boolean = false
 ) {
     val totalSeriesCount: Int get() = groups.sumOf { it.setCount }
 }
@@ -53,19 +66,44 @@ object WorkoutPresentation {
 
         val groups = mutableListOf<CompactSetGroup>()
         var currentWeight = sets[0].weightGrams
+        var currentAssisted = sets[0].isAssisted
+        var currentDumbbell = sets[0].isDumbbell
+        var currentNote = sets[0].note
         var currentReps = mutableListOf(sets[0].repetitions)
 
         for (i in 1 until sets.size) {
             val set = sets[i]
-            if (set.weightGrams == currentWeight) {
+            if (set.weightGrams == currentWeight &&
+                set.isAssisted == currentAssisted &&
+                set.isDumbbell == currentDumbbell &&
+                set.note == currentNote) {
                 currentReps.add(set.repetitions)
             } else {
-                groups.add(CompactSetGroup(currentWeight, currentReps.toList()))
+                groups.add(
+                    CompactSetGroup(
+                        weightGrams = currentWeight,
+                        repetitions = currentReps.toList(),
+                        isAssisted = currentAssisted,
+                        isDumbbell = currentDumbbell,
+                        note = currentNote
+                    )
+                )
                 currentWeight = set.weightGrams
+                currentAssisted = set.isAssisted
+                currentDumbbell = set.isDumbbell
+                currentNote = set.note
                 currentReps = mutableListOf(set.repetitions)
             }
         }
-        groups.add(CompactSetGroup(currentWeight, currentReps.toList()))
+        groups.add(
+            CompactSetGroup(
+                weightGrams = currentWeight,
+                repetitions = currentReps.toList(),
+                isAssisted = currentAssisted,
+                isDumbbell = currentDumbbell,
+                note = currentNote
+            )
+        )
         return groups
     }
 
@@ -75,7 +113,9 @@ object WorkoutPresentation {
     fun toCompact(exercise: ParsedExercise): CompactExercise {
         return CompactExercise(
             name = exercise.name,
-            groups = groupConsecutiveSets(exercise.sets)
+            groups = groupConsecutiveSets(exercise.sets),
+            plannedTarget = exercise.plannedTarget,
+            isNewExercise = exercise.isNewExercise
         )
     }
 
@@ -87,17 +127,28 @@ object WorkoutPresentation {
     fun toCompactList(exercises: List<ParsedExercise>): List<CompactExercise> {
         if (exercises.isEmpty()) return emptyList()
 
-        val exerciseMap = linkedMapOf<String, Pair<String, MutableList<ParsedSet>>>()
+        val exerciseMap = linkedMapOf<String, Triple<String, MutableList<ParsedSet>, MutableList<String>>>()
+        val newExerciseMap = mutableMapOf<String, Boolean>()
+
         for (exercise in exercises) {
             val key = WorkoutTextParser.normalize(exercise.name)
-            val entry = exerciseMap.getOrPut(key) { Pair(exercise.name, mutableListOf()) }
+            val entry = exerciseMap.getOrPut(key) { Triple(exercise.name, mutableListOf(), mutableListOf()) }
             entry.second.addAll(exercise.sets)
+            if (exercise.plannedTarget != null) {
+                entry.third.add(exercise.plannedTarget)
+            }
+            if (exercise.isNewExercise) {
+                newExerciseMap[key] = true
+            }
         }
 
-        return exerciseMap.values.map { (displayName, allSets) ->
+        return exerciseMap.map { (key, triple) ->
+            val (displayName, allSets, plans) = triple
             CompactExercise(
                 name = displayName,
-                groups = groupConsecutiveSets(allSets)
+                groups = groupConsecutiveSets(allSets),
+                plannedTarget = plans.firstOrNull(),
+                isNewExercise = newExerciseMap[key] == true
             )
         }
     }

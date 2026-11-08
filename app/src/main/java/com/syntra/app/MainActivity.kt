@@ -31,9 +31,7 @@ import com.syntra.app.data.*
 import com.syntra.app.data.backup.BackupManager
 import com.syntra.app.data.backup.BackupValidationResult
 import com.syntra.app.data.backup.SyntraBackupPayload
-import com.syntra.app.domain.InputValidators
-import com.syntra.app.domain.WorkoutPresentation
-import com.syntra.app.domain.WorkoutTextParser
+import com.syntra.app.domain.*
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.text.DateFormat
@@ -142,7 +140,7 @@ private fun TrainerApp(db: AppDatabase) {
                 containerColor = Color(0xFF141414),
                 contentColor = Color.White
             ) {
-                listOf("Inicio", "Peso", "Analizar", "Perfil").forEach { destination ->
+                listOf("Inicio", "Historial", "Analizar", "Peso", "Perfil").forEach { destination ->
                     NavigationBarItem(
                         selected = page == destination,
                         onClick = {
@@ -151,7 +149,13 @@ private fun TrainerApp(db: AppDatabase) {
                         },
                         icon = {
                             Text(
-                                text = when(destination) { "Inicio" -> "⌂"; "Peso" -> "⚖"; "Analizar" -> "✎"; else -> "⚙" },
+                                text = when(destination) {
+                                    "Inicio" -> "⌂"
+                                    "Historial" -> "📋"
+                                    "Analizar" -> "✎"
+                                    "Peso" -> "⚖"
+                                    else -> "⚙"
+                                },
                                 fontWeight = FontWeight.Bold
                             )
                         },
@@ -181,6 +185,14 @@ private fun TrainerApp(db: AppDatabase) {
                     db = db,
                     onNavigate = { targetPage -> page = targetPage }
                 )
+                "Historial" -> HistoryScreen(
+                    db = db,
+                    onNavigateToAnalyze = { page = "Analizar" }
+                )
+                "Analizar" -> ParserScreen(
+                    db = db,
+                    onNavigateToHistory = { page = "Historial" }
+                )
                 "Peso" -> WeightScreen(db, error) { input ->
                     val grams = weightGrams(input)
                     if (grams == null) {
@@ -196,7 +208,6 @@ private fun TrainerApp(db: AppDatabase) {
                         }
                     }
                 }
-                "Analizar" -> ParserScreen()
                 "Perfil" -> {
                     if (isEditingProfile) {
                         ProfileForm(
@@ -488,6 +499,69 @@ private fun ProfileViewScreen(
             }
         }
 
+        // Card 4: IrisX Memory (FASE 7)
+        val memories by remember(db) { db.irisxMemoryDao().observeAll() }.collectAsState(initial = emptyList())
+        val aliases = remember(memories) { memories.filter { it.memoryType == "ALIAS" } }
+
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF141818)),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    text = "IrisX Memory",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Text(
+                    text = "Estructuras de conocimiento desacopladas del historial deportivo. IrisX recuerda tus equivalencias y correcciones confirmadas.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (aliases.isEmpty()) {
+                    Text(
+                        text = "Aún no tenés equivalencias personalizadas guardadas (ej. RDL → Peso muerto rumano). Podés crearlas o corregirlas cuando surjan ambigüedades.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.Gray
+                    )
+                } else {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        aliases.forEach { mem ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(Color(0xFF1E2422), RoundedCornerShape(6.dp))
+                                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "${mem.sourceKey.uppercase()} → ${mem.targetValue}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color.White
+                                )
+                                IconButton(
+                                    onClick = {
+                                        scope.launch {
+                                            db.irisxMemoryDao().deleteById(mem.id)
+                                        }
+                                    },
+                                    modifier = Modifier.size(24.dp)
+                                ) {
+                                    Text("✕", color = Color.Gray, style = MaterialTheme.typography.labelSmall)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         Spacer(Modifier.height(8.dp))
     }
 }
@@ -734,6 +808,8 @@ private fun HomeScreen(
     onNavigate: (String) -> Unit
 ) {
     val history by remember(db) { db.weighInDao().observeAll() }.collectAsState(initial = emptyList())
+    val sessions by remember(db) { db.workoutSessionDao().observeAll() }.collectAsState(initial = emptyList())
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -748,7 +824,7 @@ private fun HomeScreen(
                 color = Color.White
             )
             Text(
-                text = "Syntra v0.1.2 • Asistente IrisX",
+                text = "Syntra v0.2.0 • Asistente IrisX",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.primary
             )
@@ -780,9 +856,9 @@ private fun HomeScreen(
                 shape = RoundedCornerShape(12.dp)
             ) {
                 Column(Modifier.padding(12.dp)) {
-                    Text("REGISTROS", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                    Text("ENTRENAMIENTOS", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
                     Text(
-                        text = "${history.size} pesajes",
+                        text = "${sessions.size} sesiones",
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.primary
@@ -794,21 +870,69 @@ private fun HomeScreen(
         // Quick Actions (Accesos rápidos)
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             OutlinedButton(
-                onClick = { onNavigate("Peso") },
+                onClick = { onNavigate("Historial") },
                 modifier = Modifier.weight(1f).height(46.dp),
                 shape = RoundedCornerShape(8.dp)
             ) {
-                Text("⚖ Registrar peso", color = Color.White, style = MaterialTheme.typography.bodyMedium)
+                Text("📋 Historial", color = Color.White, style = MaterialTheme.typography.bodySmall)
             }
             OutlinedButton(
                 onClick = { onNavigate("Analizar") },
                 modifier = Modifier.weight(1f).height(46.dp),
                 shape = RoundedCornerShape(8.dp)
             ) {
-                Text("✎ Analizar sesión", color = Color.White, style = MaterialTheme.typography.bodyMedium)
+                Text("✎ Analizar", color = Color.White, style = MaterialTheme.typography.bodySmall)
+            }
+            OutlinedButton(
+                onClick = { onNavigate("Peso") },
+                modifier = Modifier.weight(1f).height(46.dp),
+                shape = RoundedCornerShape(8.dp)
+            ) {
+                Text("⚖ Peso", color = Color.White, style = MaterialTheme.typography.bodySmall)
+            }
+        }
+
+        if (sessions.isNotEmpty()) {
+            val latest = sessions.first()
+            val dateStr = DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(latest.startedAtMillis))
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF141414)),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(14.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text(
+                            text = "ÚLTIMA SESIÓN",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color.Gray
+                        )
+                        Text(
+                            text = latest.title,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+                        Text(
+                            text = dateStr,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    Button(
+                        onClick = { onNavigate("Historial") },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF222222))
+                    ) {
+                        Text("Ver detalle", color = Color.White, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
             }
         }
 
@@ -933,9 +1057,24 @@ private fun WeightScreen(db: AppDatabase, error: String?, save: (String) -> Unit
 }
 
 @Composable
-private fun ParserScreen() {
+private fun ParserScreen(
+    db: AppDatabase,
+    onNavigateToHistory: () -> Unit
+) {
     var input by remember { mutableStateOf("Piernas\nSentadilla 70kg 12 10 8\nSentadilla 65kg 8\nBuenos días 40kg 12 10 10") }
     var analyzed by remember { mutableStateOf(false) }
+    var showSaveConfirmation by remember { mutableStateOf(false) }
+    var saveSuccess by remember { mutableStateOf(false) }
+    var saveError by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+
+    val dbExercises by remember(db) { db.exerciseDao().observeAll() }.collectAsState(initial = emptyList())
+    val knownNames = remember(dbExercises) { dbExercises.map { it.normalizedName }.toSet() }
+    val dbMemories by remember(db) { db.irisxMemoryDao().observeAll() }.collectAsState(initial = emptyList())
+    val memoryAliases = remember(dbMemories) {
+        dbMemories.filter { it.memoryType == "ALIAS" }.associate { it.sourceKey to it.targetValue }
+    }
+
     val sampleAliases = remember {
         mapOf(
             "rdl" to "Peso muerto rumano",
@@ -944,9 +1083,138 @@ private fun ParserScreen() {
             "laterales" to "Elevaciones laterales"
         )
     }
-    val preview = remember(input, analyzed) { if (analyzed) WorkoutTextParser.parse(input, sampleAliases) else null }
+    val mergedAliases = remember(memoryAliases) { sampleAliases + memoryAliases }
+
+    val preview = remember(input, analyzed, knownNames, mergedAliases) {
+        if (analyzed) WorkoutTextParser.parse(input, aliases = mergedAliases, knownExercises = knownNames) else null
+    }
     val compactExercises = remember(preview) {
         preview?.let { WorkoutPresentation.toCompactList(it.exercises) } ?: emptyList()
+    }
+
+    // Modal de confirmación para guardado atómico (FASE 5)
+    if (showSaveConfirmation && preview != null) {
+        val newExercises = compactExercises.filter { it.isNewExercise }
+        AlertDialog(
+            onDismissRequest = { showSaveConfirmation = false },
+            containerColor = Color(0xFF1E1E1E),
+            title = {
+                Text(
+                    text = "Confirmar y guardar entrenamiento",
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "Sesión: ${preview.sessionTitle ?: "Entrenamiento"}",
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        text = "• ${compactExercises.size} ejercicios • ${preview.seriesCount} series en total",
+                        color = Color.White,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    if (newExercises.isNotEmpty()) {
+                        Text(
+                            text = "✨ Se incorporarán a tu biblioteca los siguientes ejercicios nuevos: ${newExercises.joinToString { it.name }}.",
+                            color = Color(0xFF81C784),
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                    if (preview.warnings.isNotEmpty()) {
+                        Text(
+                            text = "⚠ Se detectaron advertencias en el texto. Verificalas antes de guardar.",
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        scope.launch {
+                            try {
+                                val now = System.currentTimeMillis()
+                                val title = preview.sessionTitle ?: "Entrenamiento"
+                                db.withTransaction {
+                                    val sId = db.workoutSessionDao().insert(
+                                        WorkoutSessionEntity(
+                                            title = title,
+                                            startedAtMillis = now,
+                                            finishedAtMillis = now,
+                                            notes = ""
+                                        )
+                                    )
+                                    var execOrder = 1
+                                    preview.exercises.forEach { ex ->
+                                        val norm = WorkoutTextParser.normalize(ex.name)
+                                        var exEntity = db.exerciseDao().findByNormalizedName(norm)
+                                        if (exEntity == null) {
+                                            val newId = db.exerciseDao().insert(
+                                                ExerciseEntity(
+                                                    displayName = ex.name,
+                                                    normalizedName = norm,
+                                                    muscleGroup = "General",
+                                                    secondaryMuscleGroups = "",
+                                                    equipment = null,
+                                                    status = if (ex.isNewExercise) "PENDING_CONFIRMATION" else "CONFIRMED",
+                                                    createdAtMillis = now
+                                                )
+                                            )
+                                            exEntity = db.exerciseDao().findById(newId) ?: ExerciseEntity(
+                                                id = newId,
+                                                displayName = ex.name,
+                                                normalizedName = norm,
+                                                muscleGroup = "General",
+                                                createdAtMillis = now
+                                            )
+                                        }
+                                        ex.sets.forEachIndexed { idx, s ->
+                                            db.workoutSetDao().insert(
+                                                WorkoutSetEntity(
+                                                    sessionId = sId,
+                                                    exerciseId = exEntity.id,
+                                                    orderInExercise = idx + 1,
+                                                    executionOrder = execOrder++,
+                                                    loadGrams = s.weightGrams,
+                                                    repetitions = s.repetitions,
+                                                    rir = null,
+                                                    isAssisted = s.isAssisted,
+                                                    isDumbbell = s.isDumbbell,
+                                                    note = s.note,
+                                                    plannedTarget = ex.plannedTarget
+                                                )
+                                            )
+                                        }
+                                    }
+                                }
+                                saveSuccess = true
+                                saveError = null
+                                showSaveConfirmation = false
+                            } catch (e: Exception) {
+                                saveError = "Error al guardar sesión: ${e.message}"
+                                showSaveConfirmation = false
+                            }
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = Color.Black
+                    )
+                ) {
+                    Text("Confirmar y guardar", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                OutlinedButton(onClick = { showSaveConfirmation = false }) {
+                    Text("Cancelar", color = Color.White)
+                }
+            }
+        )
     }
 
     Column(
@@ -961,7 +1229,7 @@ private fun ParserScreen() {
                 color = Color.White
             )
             Text(
-                text = "Una tarjeta por ejercicio • Varias filas por carga",
+                text = "Interpretación avanzada • Tarjeta única • Guardado persistente",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.primary
             )
@@ -969,13 +1237,13 @@ private fun ParserScreen() {
 
         OutlinedTextField(
             value = input,
-            onValueChange = { input = it; analyzed = false },
+            onValueChange = { input = it; analyzed = false; saveSuccess = false },
             modifier = Modifier.fillMaxWidth().heightIn(min = 140.dp),
             label = { Text("Escribí tu sesión") }
         )
 
         Button(
-            onClick = { analyzed = true },
+            onClick = { analyzed = true; saveSuccess = false },
             modifier = Modifier.fillMaxWidth().height(46.dp),
             colors = ButtonDefaults.buttonColors(
                 containerColor = MaterialTheme.colorScheme.primary,
@@ -984,6 +1252,35 @@ private fun ParserScreen() {
             shape = RoundedCornerShape(8.dp)
         ) {
             Text("Interpretar sesión", fontWeight = FontWeight.Bold)
+        }
+
+        if (saveSuccess) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF14241B)),
+                shape = RoundedCornerShape(10.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(14.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("¡Entrenamiento guardado!", fontWeight = FontWeight.Bold, color = Color(0xFF81C784))
+                        Text("Quedó registrado de forma atómica en SQLite.", style = MaterialTheme.typography.bodySmall, color = Color.White)
+                    }
+                    Button(
+                        onClick = onNavigateToHistory,
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary, contentColor = Color.Black)
+                    ) {
+                        Text("Ver historial", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+        }
+
+        if (saveError != null) {
+            Text(text = saveError!!, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
         }
 
         if (preview != null) {
@@ -1015,12 +1312,33 @@ private fun ParserScreen() {
                     shape = RoundedCornerShape(12.dp)
                 ) {
                     Column(Modifier.padding(14.dp)) {
-                        Text(
-                            text = exercise.name,
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.primary
-                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = exercise.name,
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            if (exercise.isNewExercise) {
+                                Text(
+                                    text = "✨ Nuevo",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = Color(0xFF81C784)
+                                )
+                            }
+                        }
+
+                        if (exercise.plannedTarget != null) {
+                            Text(
+                                text = "🎯 Plan: ${exercise.plannedTarget}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color.LightGray
+                            )
+                        }
                         Spacer(Modifier.height(8.dp))
 
                         // Table Header
@@ -1055,7 +1373,7 @@ private fun ParserScreen() {
                             )
                         }
 
-                        // Table Rows (with subtle shading and dividers for mobile readability)
+                        // Table Rows
                         exercise.groups.forEachIndexed { index, group ->
                             val rowBg = if (index % 2 == 1) Color(0xFF1C1C1C) else Color.Transparent
                             Row(
@@ -1095,6 +1413,20 @@ private fun ParserScreen() {
                 }
             }
 
+            if (compactExercises.isNotEmpty()) {
+                Button(
+                    onClick = { showSaveConfirmation = true },
+                    modifier = Modifier.fillMaxWidth().height(48.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFF4CAF50),
+                        contentColor = Color.White
+                    ),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text("💾 Guardar entrenamiento en historial", fontWeight = FontWeight.Bold)
+                }
+            }
+
             if (preview.assistantCommands.isNotEmpty()) {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -1128,5 +1460,257 @@ private fun ParserScreen() {
             }
         }
         Spacer(Modifier.height(16.dp))
+    }
+}
+
+@Composable
+private fun HistoryScreen(
+    db: AppDatabase,
+    onNavigateToAnalyze: () -> Unit
+) {
+    val sessions by remember(db) { db.workoutSessionDao().observeAll() }.collectAsState(initial = emptyList())
+    val exercises by remember(db) { db.exerciseDao().observeAll() }.collectAsState(initial = emptyList())
+    val exerciseNameMap = remember(exercises) { exercises.associate { it.id to it.displayName } }
+    val scope = rememberCoroutineScope()
+    var sessionToDelete by remember { mutableStateOf<WorkoutSessionEntity?>(null) }
+
+    if (sessionToDelete != null) {
+        val s = sessionToDelete!!
+        val dateStr = DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(s.startedAtMillis))
+        AlertDialog(
+            onDismissRequest = { sessionToDelete = null },
+            containerColor = Color(0xFF1E1E1E),
+            title = {
+                Text("Eliminar sesión", fontWeight = FontWeight.Bold, color = Color.White)
+            },
+            text = {
+                Text(
+                    "¿Seguro que deseás eliminar el entrenamiento '${s.title}' del $dateStr? Esta acción borrará todas sus series de forma permanente.",
+                    color = Color.White
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        scope.launch {
+                            db.withTransaction {
+                                db.workoutSetDao().deleteForSession(s.id)
+                                db.workoutSessionDao().deleteById(s.id)
+                            }
+                            sessionToDelete = null
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text("Eliminar", fontWeight = FontWeight.Bold, color = Color.White)
+                }
+            },
+            dismissButton = {
+                OutlinedButton(onClick = { sessionToDelete = null }) {
+                    Text("Cancelar", color = Color.White)
+                }
+            }
+        )
+    }
+
+    Column(
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column {
+                Text(
+                    text = "Historial deportivo",
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
+                )
+                Text(
+                    text = "${sessions.size} sesiones registradas",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+            OutlinedButton(
+                onClick = onNavigateToAnalyze,
+                shape = RoundedCornerShape(8.dp)
+            ) {
+                Text("✎ Nueva sesión", style = MaterialTheme.typography.bodySmall, color = Color.White)
+            }
+        }
+
+        if (sessions.isEmpty()) {
+            Card(
+                modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF161616)),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(20.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text(
+                        text = "Aún no tenés entrenamientos guardados",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+                    Text(
+                        text = "Escribí o pegá tus ejercicios en el Analizador para guardar tu primera sesión con orden de ejecución y cargas.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.Gray
+                    )
+                    Button(
+                        onClick = onNavigateToAnalyze,
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                    ) {
+                        Text("Ir a Analizar sesión", color = Color.Black, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                items(sessions, key = { it.id }) { session ->
+                    SessionHistoryCard(
+                        session = session,
+                        db = db,
+                        exerciseNameMap = exerciseNameMap,
+                        onDelete = { sessionToDelete = session }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SessionHistoryCard(
+    session: WorkoutSessionEntity,
+    db: AppDatabase,
+    exerciseNameMap: Map<Long, String>,
+    onDelete: () -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val sets by remember(session.id) { db.workoutSetDao().observeForSession(session.id) }.collectAsState(initial = emptyList())
+    val dateStr = remember(session.startedAtMillis) {
+        DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(session.startedAtMillis))
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF141414)),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        text = session.title,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+                    Text(
+                        text = dateStr,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(onClick = { expanded = !expanded }) {
+                        Text(if (expanded) "Ocultar ▲" else "Ver detalle ▼", style = MaterialTheme.typography.labelSmall)
+                    }
+                    IconButton(onClick = onDelete) {
+                        Text("🗑", color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            }
+
+            Text(
+                text = "${sets.size} series registradas",
+                style = MaterialTheme.typography.bodySmall,
+                color = Color.Gray
+            )
+
+            if (expanded) {
+                Spacer(Modifier.height(4.dp))
+                val exerciseGroups: List<CompactExercise> = remember(sets, exerciseNameMap) {
+                    val grouped = sets.groupBy { it.exerciseId }
+                    grouped.map { entry ->
+                        val exId = entry.key
+                        val exSets = entry.value
+                        val exName = exerciseNameMap[exId] ?: "Ejercicio #$exId"
+                        val parsedSets = exSets.map { s ->
+                            ParsedSet(
+                                weightGrams = s.loadGrams,
+                                repetitions = s.repetitions,
+                                isAssisted = s.isAssisted,
+                                isDumbbell = s.isDumbbell,
+                                note = s.note
+                            )
+                        }
+                        val planned = exSets.firstOrNull { it.plannedTarget != null }?.plannedTarget
+                        CompactExercise(
+                            name = exName,
+                            groups = WorkoutPresentation.groupConsecutiveSets(parsedSets),
+                            plannedTarget = planned
+                        )
+                    }
+                }
+
+                exerciseGroups.forEach { compEx ->
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(Color(0xFF1A1A1A), RoundedCornerShape(8.dp))
+                            .padding(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = compEx.name,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            if (compEx.plannedTarget != null) {
+                                Text(
+                                    text = "Plan: ${compEx.plannedTarget}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = Color.LightGray
+                                )
+                            }
+                        }
+
+                        compEx.groups.forEach { grp ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text("${grp.setCount} series", color = Color.White, style = MaterialTheme.typography.bodySmall)
+                                Text(grp.formattedWeight(), color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodySmall)
+                                Text("${grp.formattedReps()} reps", color = Color.LightGray, style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
