@@ -3,10 +3,18 @@ package com.syntra.app.domain.irisx
 import com.syntra.app.data.AppDatabase
 import com.syntra.app.data.ExerciseAliasEntity
 import com.syntra.app.data.ExerciseEntity
+import com.syntra.app.data.IrisxConversationEntity
 import com.syntra.app.data.IrisxMemoryEntity
+import com.syntra.app.data.IrisxMessageEntity
+import com.syntra.app.data.ProfileEntity
+import com.syntra.app.data.RoutineEntity
+import com.syntra.app.data.RoutineExerciseEntity
 import com.syntra.app.data.WorkoutSessionEntity
 import com.syntra.app.data.WorkoutSetEntity
 import com.syntra.app.domain.ExerciseCatalog
+import com.syntra.app.domain.RoutineManager
+import com.syntra.app.domain.RoutineWithExercises
+import com.syntra.app.domain.SportsMetricsCalculator
 import java.text.DateFormat
 import java.text.Normalizer
 import java.util.Date
@@ -23,6 +31,31 @@ interface IrisXRepository {
     suspend fun saveLearnedAlias(alias: String, canonical: String)
     suspend fun deleteLearnedAlias(alias: String)
     suspend fun saveMemory(memoryType: String, sourceKey: String, targetValue: String)
+
+    // Sprint 04 extensions with safe default implementations for backward compatibility
+    suspend fun getAllSessions(): List<WorkoutSessionEntity> =
+        listOfNotNull(getLatestSession())
+    suspend fun getAllSets(): List<WorkoutSetEntity> =
+        getLatestSession()?.let { getSetsForSession(it.id) } ?: emptyList()
+    suspend fun getAllExercises(): List<ExerciseEntity> =
+        getExerciseNameMap().map { (id, name) ->
+            ExerciseEntity(
+                id = id,
+                displayName = name,
+                normalizedName = IrisXAnalytics.normalize(name),
+                muscleGroup = IrisXClassifier.detectMuscleGroup(name, getLearnedAliases(), getMuscleOverrides())
+            )
+        }
+    suspend fun getProfile(): ProfileEntity? = null
+    suspend fun getConfirmedPreferences(): Map<String, String> = emptyMap()
+    suspend fun getRoutinesWithExercises(): List<RoutineWithExercises> = emptyList()
+    suspend fun getOrCreateActiveConversation(): IrisxConversationEntity =
+        IrisxConversationEntity(id = 1L, title = "Conversación activa")
+    suspend fun updateConversationState(conversation: IrisxConversationEntity) {}
+    suspend fun appendMessage(message: IrisxMessageEntity): Long = 0L
+    suspend fun getMessages(conversationId: Long): List<IrisxMessageEntity> = emptyList()
+    suspend fun deleteConversation(conversationId: Long) {}
+    suspend fun clearAllConversations() {}
 }
 
 class RoomIrisXRepository(private val db: AppDatabase) : IrisXRepository {
@@ -122,11 +155,79 @@ class RoomIrisXRepository(private val db: AppDatabase) : IrisXRepository {
             )
         )
     }
+
+    override suspend fun getAllSessions(): List<WorkoutSessionEntity> {
+        return db.workoutSessionDao().getAll()
+    }
+
+    override suspend fun getAllSets(): List<WorkoutSetEntity> {
+        return db.workoutSetDao().getAll()
+    }
+
+    override suspend fun getAllExercises(): List<ExerciseEntity> {
+        return db.exerciseDao().getAll()
+    }
+
+    override suspend fun getProfile(): ProfileEntity? {
+        return db.profileDao().get()
+    }
+
+    override suspend fun getConfirmedPreferences(): Map<String, String> {
+        return db.irisxMemoryDao().findByType("PREFERENCE")
+            .associate { it.sourceKey to it.targetValue }
+    }
+
+    override suspend fun getRoutinesWithExercises(): List<RoutineWithExercises> {
+        val routines = db.routineDao().getAllRoutines()
+        val allItems = db.routineDao().getAllRoutineExercises().groupBy { it.routineId }
+        return routines.map { r ->
+            RoutineManager.fromEntities(r, allItems[r.id].orEmpty())
+        }
+    }
+
+    override suspend fun getOrCreateActiveConversation(): IrisxConversationEntity {
+        val existing = db.irisxConversationDao().getAllConversations().firstOrNull()
+        if (existing != null) return existing
+        val now = System.currentTimeMillis()
+        val created = IrisxConversationEntity(
+            title = "Conversación principal",
+            activePeriodScope = PeriodScope.THIS_MONTH.key,
+            createdAtMillis = now,
+            updatedAtMillis = now
+        )
+        val id = db.irisxConversationDao().insertConversation(created)
+        return created.copy(id = id)
+    }
+
+    override suspend fun updateConversationState(conversation: IrisxConversationEntity) {
+        db.irisxConversationDao().updateConversation(conversation)
+    }
+
+    override suspend fun appendMessage(message: IrisxMessageEntity): Long {
+        return db.irisxConversationDao().insertMessage(message)
+    }
+
+    override suspend fun getMessages(conversationId: Long): List<IrisxMessageEntity> {
+        return db.irisxConversationDao().getMessagesForConversation(conversationId)
+    }
+
+    override suspend fun deleteConversation(conversationId: Long) {
+        db.irisxConversationDao().deleteMessagesForConversation(conversationId)
+        db.irisxConversationDao().deleteConversationById(conversationId)
+    }
+
+    override suspend fun clearAllConversations() {
+        db.irisxConversationDao().deleteAllMessages()
+        db.irisxConversationDao().deleteAllConversations()
+    }
 }
 
 class IrisXCore(
     private val repository: IrisXRepository
 ) {
+    private var contextState = ConversationContextState()
+
+    fun getCurrentContextState(): ConversationContextState = contextState
 
     private fun normalize(text: String): String {
         return Normalizer.normalize(text.trim().lowercase(Locale.ROOT), Normalizer.Form.NFD)
@@ -186,7 +287,40 @@ class IrisXCore(
             return IrisXIntent.UpdateExerciseMuscle(exName.trim(), group.trim())
         }
 
-        // 6. Query exercise info: "ejercicio sentadilla" or "info sentadilla" or "buscar sentadilla"
+        // 6. Confirm permanent preference: "confirmar preferencia X = Y"
+        val confirmPrefRegex = Regex("^confirmar\\s+preferencia\\s+(.+?)\\s*(?:=|es|->)\\s*(.+)$", RegexOption.IGNORE_CASE)
+        val confirmPrefMatch = confirmPrefRegex.find(trimmed)
+        if (confirmPrefMatch != null) {
+            val (key, value) = confirmPrefMatch.destructured
+            return IrisXIntent.SavePreference(key.trim(), value.trim(), confirmed = true)
+        }
+
+        // 7. Propose preference (requires confirmation): "preferencia X = Y"
+        val prefRegex = Regex("^(?:guardar\\s+)?preferencia\\s+(.+?)\\s*(?:=|es|->)\\s*(.+)$", RegexOption.IGNORE_CASE)
+        val prefMatch = prefRegex.find(trimmed)
+        if (prefMatch != null) {
+            val (key, value) = prefMatch.destructured
+            return IrisXIntent.SavePreference(key.trim(), value.trim(), confirmed = false)
+        }
+
+        // 8. Query preferences
+        if (norm == "preferencias" || norm == "mis preferencias" || norm.contains("ver preferencias")) {
+            return IrisXIntent.QueryPreferences
+        }
+
+        // 9. Clear conversation history
+        if (norm == "borrar conversacion" || norm == "limpiar chat" || norm == "eliminar conversacion" ||
+            norm == "borrar historial de chat"
+        ) {
+            return IrisXIntent.ClearConversationHistory
+        }
+
+        // 10. Query routines
+        if (norm == "rutinas" || norm == "mis rutinas" || norm.contains("ver rutinas")) {
+            return IrisXIntent.QueryRoutines
+        }
+
+        // 11. Query exercise info: "ejercicio sentadilla" or "info sentadilla" or "buscar sentadilla"
         val exerciseQueryRegex = Regex("^(?:ejercicio|info|buscar)\\s+(.+)$", RegexOption.IGNORE_CASE)
         val exerciseMatch = exerciseQueryRegex.find(trimmed)
         if (exerciseMatch != null) {
@@ -194,7 +328,7 @@ class IrisXCore(
             return IrisXIntent.QueryExercise(exName)
         }
 
-        // 7. Classify session text: "clasificar [ejercicios separados por comas o saltos]"
+        // 12. Classify session text: "clasificar [ejercicios separados por comas o saltos]"
         val classifyRegex = Regex("^clasificar(?:\\s+sesion)?\\s*:\\s*(.+)$", RegexOption.IGNORE_CASE)
         val classifyMatch = classifyRegex.find(trimmed)
         if (classifyMatch != null) {
@@ -203,13 +337,116 @@ class IrisXCore(
             return IrisXIntent.ClassifySession(sessionTitle = "Sesión IrisX", exerciseNames = lines)
         }
 
+        // 13. Coach recommendations: "recomendaciones", "coach", "que me recomendas...", "consejo..."
+        if (norm.contains("recomendacion") || norm.contains("recomendas") || norm.contains("recomiendas") ||
+            norm == "coach" || norm.startsWith("coach ") || norm.startsWith("consejo")
+        ) {
+            val muscleRef = IrisXContextResolver.detectMuscleReference(norm)
+            val afterPreposition = Regex("(?:en|para|sobre)\\s+(.+)$").find(norm)?.groupValues?.get(1)?.trim()
+            return IrisXIntent.QueryRecommendations(targetSubject = muscleRef ?: afterPreposition)
+        }
+
+        // 14. Progression / Analytics queries: e.g. "¿Cómo progresé en espalda?", "progreso sentadilla", "récord press de banca", "estancamiento"
+        val isProgressionKeyword = norm.contains("progrese") || norm.contains("progreso") ||
+            norm.contains("progresion") || norm.contains("evolucion") ||
+            norm.contains("record") || norm.contains("pr ") || norm.startsWith("pr ") ||
+            norm.contains("estancado") || norm.contains("estancamiento") ||
+            norm.contains("estadistica") || norm.contains("volumen") || norm.contains("frecuencia")
+
+        val detectedPeriod = IrisXContextResolver.detectPeriodScope(norm)
+        val detectedMuscle = IrisXContextResolver.detectMuscleReference(norm)
+
+        if (isProgressionKeyword) {
+            // Extract target subject after "en ", "de ", "progreso ", "record "
+            val subjectRegex = Regex("(?:progrese\\s+en|progreso\\s+(?:en|de)|progresion\\s+(?:en|de)|evolucion\\s+(?:en|de)|record\\s+(?:en|de)|estancamiento\\s+en)\\s+(.+)$")
+            val extractedSubject = subjectRegex.find(norm)?.groupValues?.get(1)
+                ?.replace(Regex("\\b(?:el mes pasado|este mes|la semana pasada|esta semana)\\b"), "")
+                ?.trim()
+            val target = detectedMuscle ?: extractedSubject?.takeIf { it.isNotBlank() }
+            return IrisXIntent.QueryProgression(targetSubject = target, periodScope = detectedPeriod)
+        }
+
+        // 15. Contextual Follow-up queries: e.g. "¿Y el mes pasado?", "¿Y la semana pasada?", "¿Y en pecho?", "¿Y en sentadilla?"
+        val isFollowUpPattern = norm.startsWith("y ") || norm.startsWith("¿y ") ||
+            (detectedPeriod != null && norm.split(" ").size <= 5)
+        if (isFollowUpPattern) {
+            val followSubject = detectedMuscle ?: norm.removePrefix("y ").removePrefix("en ").removePrefix("de ")
+                .takeIf { detectedPeriod == null && it.isNotBlank() }
+            return IrisXIntent.FollowUpQuery(
+                periodScope = detectedPeriod,
+                targetSubject = followSubject,
+                rawText = trimmed
+            )
+        }
+
         return IrisXIntent.GeneralQuery(trimmed)
+    }
+
+    /**
+     * Full conversational entry point: parses input, executes intent with current context,
+     * and persists user/assistant messages and updated context in SQLite.
+     */
+    suspend fun ask(
+        input: String,
+        referenceTimeMillis: Long = System.currentTimeMillis()
+    ): IrisXResponse {
+        val activeConv = repository.getOrCreateActiveConversation()
+        if (contextState.conversationId == 0L) {
+            contextState = activeConv.toState()
+        }
+
+        val intent = parseInput(input)
+        repository.appendMessage(
+            IrisxMessageEntity(
+                conversationId = activeConv.id,
+                senderRole = "USER",
+                content = input.trim(),
+                intentType = intent::class.simpleName,
+                referencedExercise = contextState.activeExerciseName,
+                referencedMuscleGroup = contextState.activeMuscleGroup,
+                createdAtMillis = referenceTimeMillis
+            )
+        )
+
+        val response = execute(intent, referenceTimeMillis)
+        val replyText = when (response) {
+            is IrisXResponse.Success -> response.message
+            is IrisXResponse.RequiresConfirmation -> "${response.question}\nConfirmar con: ${response.confirmCommand}"
+            is IrisXResponse.Unrecognized -> response.message
+        }
+
+        repository.appendMessage(
+            IrisxMessageEntity(
+                conversationId = activeConv.id,
+                senderRole = "IRISX",
+                content = replyText,
+                intentType = intent::class.simpleName,
+                referencedExercise = contextState.activeExerciseName,
+                referencedMuscleGroup = contextState.activeMuscleGroup,
+                createdAtMillis = referenceTimeMillis + 1
+            )
+        )
+
+        repository.updateConversationState(
+            activeConv.copy(
+                activeMuscleGroup = contextState.activeMuscleGroup,
+                activeExerciseName = contextState.activeExerciseName,
+                activeSessionId = contextState.activeSessionId,
+                activePeriodScope = contextState.activePeriodScope.key,
+                updatedAtMillis = referenceTimeMillis + 1
+            )
+        )
+
+        return response
     }
 
     /**
      * Executes an IrisXIntent deterministically using repository and domain rules.
      */
-    suspend fun execute(intent: IrisXIntent): IrisXResponse {
+    suspend fun execute(
+        intent: IrisXIntent,
+        referenceTimeMillis: Long = System.currentTimeMillis()
+    ): IrisXResponse {
         return when (intent) {
             is IrisXIntent.QueryLastWorkout -> handleQueryLastWorkout()
             is IrisXIntent.LearnAlias -> handleLearnAlias(intent.alias, intent.canonical, intent.force)
@@ -217,7 +454,14 @@ class IrisXCore(
             is IrisXIntent.UpdateExerciseMuscle -> handleUpdateExerciseMuscle(intent.exerciseName, intent.muscleGroup)
             is IrisXIntent.QueryExercise -> handleQueryExercise(intent.exerciseName)
             is IrisXIntent.ClassifySession -> handleClassifySession(intent.sessionTitle, intent.exerciseNames)
-            is IrisXIntent.GeneralQuery -> handleGeneralQuery(intent.text)
+            is IrisXIntent.QueryProgression -> handleQueryProgression(intent.targetSubject, intent.periodScope, referenceTimeMillis)
+            is IrisXIntent.FollowUpQuery -> handleFollowUpQuery(intent, referenceTimeMillis)
+            is IrisXIntent.QueryRecommendations -> handleQueryRecommendations(intent.targetSubject, referenceTimeMillis)
+            is IrisXIntent.SavePreference -> handleSavePreference(intent.key, intent.value, intent.confirmed)
+            is IrisXIntent.QueryPreferences -> handleQueryPreferences()
+            is IrisXIntent.QueryRoutines -> handleQueryRoutines()
+            is IrisXIntent.ClearConversationHistory -> handleClearConversations()
+            is IrisXIntent.GeneralQuery -> handleGeneralQuery(intent.text, referenceTimeMillis)
         }
     }
 
@@ -238,17 +482,23 @@ class IrisXCore(
         val learnedAliases = getLearnedAliases()
         val muscleOverrides = repository.getMuscleOverrides()
         val classification = IrisXClassifier.classifyWorkout(latest.title, exerciseNames, learnedAliases, muscleOverrides)
-        val metrics = com.syntra.app.domain.SportsMetricsCalculator.calculateSessionVolume(
+        val metrics = SportsMetricsCalculator.calculateSessionVolume(
             sets = sets,
             exerciseNamesById = exercises
+        )
+
+        contextState = contextState.copy(
+            activeSessionId = latest.id,
+            activeMuscleGroup = classification.primaryCategory.displayName.takeIf { it != "Otras / Sin clasificar" },
+            lastQueryDomain = "LAST_WORKOUT"
         )
 
         val summaryText = buildString {
             append("Última sesión: ${latest.title} ($dateStr)\n")
             append("Categoría: ${classification.primaryCategory.displayName} (${classification.sessionType})\n")
             append("Series totales: ${sets.size} | Carga externa: ${String.format(Locale.ROOT, "%.1f", metrics.totalExternalKg)} kg\n")
-            if (metrics.dumbbellSetsCount > 0 || metrics.assistedSetsCount > 0) {
-                append("(${metrics.regularSetsCount} series barra/máq., ${metrics.dumbbellSetsCount} mancuernas [c/u], ${metrics.assistedSetsCount} asistidas)\n")
+            if (metrics.dumbbellSetsCount > 0 || metrics.assistedSetsCount > 0 || metrics.unilateralSetsCount > 0 || metrics.weightedBodyweightSetsCount > 0) {
+                append("(${metrics.regularSetsCount} barra/máq., ${metrics.dumbbellSetsCount} mancuernas [c/u], ${metrics.unilateralSetsCount} unilat., ${metrics.assistedSetsCount} asistidas)\n")
             }
             append("Ejercicios:\n")
             exerciseNames.forEach { ex ->
@@ -260,6 +510,286 @@ class IrisXCore(
             message = summaryText.trim(),
             actionTaken = "QUERY_LAST_WORKOUT",
             payload = latest
+        )
+    }
+
+    private suspend fun handleQueryProgression(
+        targetSubject: String?,
+        periodScope: PeriodScope?,
+        referenceTimeMillis: Long
+    ): IrisXResponse {
+        val sessions = repository.getAllSessions()
+        val allSets = repository.getAllSets()
+        val exercises = repository.getAllExercises()
+        val aliases = repository.getLearnedAliases()
+        val overrides = repository.getMuscleOverrides()
+
+        if (sessions.isEmpty() || allSets.isEmpty()) {
+            return IrisXResponse.Success(
+                message = "Datos insuficientes: todavía no tenés sesiones registradas para analizar progresión.",
+                actionTaken = "QUERY_PROGRESSION_EMPTY"
+            )
+        }
+
+        val resolvedPeriod = periodScope ?: PeriodScope.THIS_MONTH
+        val effectiveSubject = targetSubject
+            ?: contextState.activeExerciseName
+            ?: contextState.activeMuscleGroup
+
+        // If no specific exercise or muscle was requested, return global frequency and period summary
+        if (effectiveSubject.isNullOrBlank()) {
+            val freq = IrisXAnalytics.calculateTrainingFrequency(sessions, 28, referenceTimeMillis)
+            val dist = IrisXAnalytics.calculateMuscleDistribution(sessions, allSets, exercises, aliases, overrides)
+            contextState = contextState.copy(
+                activePeriodScope = resolvedPeriod,
+                lastQueryDomain = "PROGRESSION"
+            )
+            val msg = buildString {
+                append("📈 Resumen general de rendimiento\n")
+                append("• ${freq.summaryText}\n")
+                if (dist.setsByMuscle.isNotEmpty()) {
+                    val topMuscles = dist.setsByMuscle.entries.sortedByDescending { it.value }
+                        .joinToString(", ") { "${it.key}: ${it.value} series (${dist.percentagesBySets[it.key]}%)" }
+                    append("• Distribución por grupo muscular: $topMuscles")
+                }
+            }
+            return IrisXResponse.Success(message = msg, actionTaken = "QUERY_GLOBAL_PROGRESSION", payload = freq)
+        }
+
+        val normSubj = normalize(effectiveSubject)
+        val detectedMuscle = IrisXContextResolver.detectMuscleReference(normSubj)
+        val detectedExercise = IrisXContextResolver.detectExerciseReference(
+            normInput = normSubj,
+            knownExerciseNames = exercises.map { it.displayName },
+            learnedAliases = aliases
+        )
+
+        // Case 1: Specific Exercise matched
+        if (detectedExercise != null || (detectedMuscle == null && exercises.any { normalize(it.displayName).contains(normSubj) })) {
+            val exName = detectedExercise ?: effectiveSubject
+            val window = IrisXContextResolver.resolvePeriodWindow(resolvedPeriod, referenceTimeMillis)
+            val filteredSessions = if (periodScope != null) {
+                sessions.filter { it.startedAtMillis in window.currentStartMillis..window.currentEndMillis }
+            } else sessions
+
+            val report = IrisXAnalytics.analyzeExerciseProgression(
+                exerciseName = exName,
+                sessions = filteredSessions,
+                allSets = allSets,
+                exercises = exercises,
+                learnedAliases = aliases
+            )
+
+            contextState = contextState.copy(
+                activeExerciseName = report.exerciseName,
+                activeMuscleGroup = null,
+                activePeriodScope = resolvedPeriod,
+                lastQueryDomain = "PROGRESSION"
+            )
+
+            return IrisXResponse.Success(
+                message = report.summaryText,
+                actionTaken = "QUERY_EXERCISE_PROGRESSION",
+                payload = report
+            )
+        }
+
+        // Case 2: Muscle group matched (e.g. "¿Cómo progresé en espalda?")
+        val muscleTarget = detectedMuscle ?: effectiveSubject.replaceFirstChar { it.titlecase(Locale.ROOT) }
+        val window = IrisXContextResolver.resolvePeriodWindow(resolvedPeriod, referenceTimeMillis)
+        val comparison = IrisXAnalytics.comparePeriods(
+            periodALabel = window.previousLabel,
+            periodAStartMillis = window.previousStartMillis,
+            periodAEndMillis = window.previousEndMillis,
+            periodBLabel = window.currentLabel,
+            periodBStartMillis = window.currentStartMillis,
+            periodBEndMillis = window.currentEndMillis,
+            sessions = sessions,
+            allSets = allSets,
+            exercises = exercises,
+            muscleFilter = muscleTarget,
+            learnedAliases = aliases,
+            muscleOverrides = overrides
+        )
+
+        // Find exercises belonging to this muscle group that have history
+        val muscleExercises = exercises.filter { ex ->
+            val m = if (ex.muscleGroup.isNotBlank() && ex.muscleGroup != "General") ex.muscleGroup
+            else IrisXClassifier.detectMuscleGroup(ex.displayName, aliases, overrides)
+            normalize(m).contains(normalize(muscleTarget)) ||
+                normalize(IrisXClassifier.mapMuscleToCategory(m).displayName).contains(normalize(muscleTarget))
+        }
+
+        val exerciseSummaries = muscleExercises.mapNotNull { ex ->
+            val r = IrisXAnalytics.analyzeExerciseProgression(ex.displayName, sessions, allSets, exercises, aliases)
+            if (r.history.isNotEmpty()) {
+                val last = r.history.last()
+                val kg = SportsMetricsCalculator.formatKg(last.topLoadGrams / 1000.0)
+                "• ${r.exerciseName}: ${r.status.displayName} (último tope: $kg × ${last.topLoadReps} reps)"
+            } else null
+        }
+
+        contextState = contextState.copy(
+            activeMuscleGroup = muscleTarget,
+            activeExerciseName = null,
+            activePeriodScope = resolvedPeriod,
+            lastQueryDomain = "PROGRESSION"
+        )
+
+        val responseMsg = buildString {
+            append("📊 Análisis de $muscleTarget (${window.currentLabel})\n")
+            append(comparison.summaryText)
+            if (exerciseSummaries.isNotEmpty()) {
+                append("\nEjercicios registrados de $muscleTarget:\n")
+                append(exerciseSummaries.joinToString("\n"))
+            } else {
+                append("\nNo se encontraron ejercicios con series para $muscleTarget en este período.")
+            }
+        }
+
+        return IrisXResponse.Success(
+            message = responseMsg,
+            actionTaken = "QUERY_MUSCLE_PROGRESSION",
+            payload = comparison
+        )
+    }
+
+    private suspend fun handleFollowUpQuery(
+        intent: IrisXIntent.FollowUpQuery,
+        referenceTimeMillis: Long
+    ): IrisXResponse {
+        val currentMuscle = contextState.activeMuscleGroup
+        val currentExercise = contextState.activeExerciseName
+
+        if (currentMuscle == null && currentExercise == null && intent.targetSubject == null) {
+            return IrisXResponse.Unrecognized(
+                message = "No tengo un ejercicio o grupo muscular activo en nuestra conversación para comparar '${intent.rawText}'.",
+                suggestions = listOf(
+                    "Preguntame primero: '¿Cómo progresé en espalda?' o 'progreso Sentadilla'.",
+                    "Luego podés preguntar: '¿Y el mes pasado?'"
+                )
+            )
+        }
+
+        val targetSubject = intent.targetSubject ?: currentExercise ?: currentMuscle
+        val targetPeriod = intent.periodScope ?: contextState.activePeriodScope
+
+        return handleQueryProgression(
+            targetSubject = targetSubject,
+            periodScope = targetPeriod,
+            referenceTimeMillis = referenceTimeMillis
+        )
+    }
+
+    private suspend fun handleQueryRecommendations(
+        targetSubject: String?,
+        referenceTimeMillis: Long
+    ): IrisXResponse {
+        val profile = repository.getProfile()
+        val sessions = repository.getAllSessions()
+        val allSets = repository.getAllSets()
+        val exercises = repository.getAllExercises()
+        val aliases = repository.getLearnedAliases()
+        val overrides = repository.getMuscleOverrides()
+        val prefs = repository.getConfirmedPreferences()
+
+        val effectiveTarget = targetSubject ?: contextState.activeExerciseName ?: contextState.activeMuscleGroup
+        val recommendations = IrisXCoach.generateRecommendations(
+            profile = profile,
+            sessions = sessions,
+            allSets = allSets,
+            exercises = exercises,
+            learnedAliases = aliases,
+            muscleOverrides = overrides,
+            confirmedPreferences = prefs,
+            targetExerciseOrMuscle = effectiveTarget,
+            referenceTimeMillis = referenceTimeMillis
+        )
+
+        contextState = contextState.copy(lastQueryDomain = "RECOMMENDATION")
+
+        val text = buildString {
+            append("🧭 IrisX Coach — Recomendaciones verificables\n\n")
+            recommendations.forEachIndexed { idx, rec ->
+                if (idx > 0) append("\n\n---\n\n")
+                append(rec.formatForDisplay())
+            }
+        }
+
+        return IrisXResponse.Success(
+            message = text,
+            actionTaken = "QUERY_RECOMMENDATIONS",
+            payload = recommendations
+        )
+    }
+
+    private suspend fun handleSavePreference(
+        key: String,
+        value: String,
+        confirmed: Boolean
+    ): IrisXResponse {
+        val normKey = normalize(key)
+        val cleanVal = value.trim()
+        if (normKey.isBlank() || cleanVal.isBlank()) {
+            return IrisXResponse.Unrecognized("La clave y el valor de la preferencia no pueden estar vacíos.")
+        }
+
+        if (!confirmed) {
+            return IrisXResponse.RequiresConfirmation(
+                question = "Por seguridad, no guardo afirmaciones como preferencias permanentes sin confirmación explícita. ¿Confirmás guardar la preferencia '$normKey' = '$cleanVal'?",
+                confirmCommand = "confirmar preferencia $normKey = $cleanVal"
+            )
+        }
+
+        repository.saveMemory("PREFERENCE", normKey, cleanVal)
+        return IrisXResponse.Success(
+            message = "Preferencia confirmada y guardada: '$normKey' = '$cleanVal'.",
+            actionTaken = "SAVE_PREFERENCE"
+        )
+    }
+
+    private suspend fun handleQueryPreferences(): IrisXResponse {
+        val prefs = repository.getConfirmedPreferences()
+        if (prefs.isEmpty()) {
+            return IrisXResponse.Success(
+                message = "No tenés preferencias permanentes confirmadas. Podés guardar una con 'preferencia objetivo = fuerza'.",
+                actionTaken = "QUERY_PREFERENCES"
+            )
+        }
+        val text = buildString {
+            append("⚙ Preferencias confirmadas en IrisX Memory:\n")
+            prefs.forEach { (k, v) ->
+                append("• $k: $v\n")
+            }
+        }.trim()
+        return IrisXResponse.Success(message = text, actionTaken = "QUERY_PREFERENCES", payload = prefs)
+    }
+
+    private suspend fun handleQueryRoutines(): IrisXResponse {
+        val routines = repository.getRoutinesWithExercises()
+        if (routines.isEmpty()) {
+            return IrisXResponse.Success(
+                message = "Todavía no tenés rutinas creadas. Podés crear una en la sección Rutinas.",
+                actionTaken = "QUERY_ROUTINES"
+            )
+        }
+        val text = buildString {
+            append("📋 Rutinas disponibles (${routines.size}):\n")
+            routines.forEach { rw ->
+                append("• ${rw.routine.name} (${rw.exercises.size} ejercicios): ")
+                append(rw.exercises.joinToString(", ") { "${it.exerciseName} (${it.targetSets}×${it.formattedRepRange()})" })
+                append("\n")
+            }
+        }.trim()
+        return IrisXResponse.Success(message = text, actionTaken = "QUERY_ROUTINES", payload = routines)
+    }
+
+    private suspend fun handleClearConversations(): IrisXResponse {
+        repository.clearAllConversations()
+        contextState = ConversationContextState()
+        return IrisXResponse.Success(
+            message = "Se eliminó el historial de conversaciones y se reinició el contexto activo. Tus entrenamientos y preferencias confirmadas permanecen intactos.",
+            actionTaken = "CLEAR_CONVERSATIONS"
         )
     }
 
@@ -278,7 +808,6 @@ class IrisXCore(
             return IrisXResponse.Success("Ya tenía registrado que '$alias' es '$canonical'.")
         }
 
-        // Conflict check: existing alias points to a different canonical and wasn't confirmed with force
         if (previousCanonical != null && !previousCanonical.equals(canonical, ignoreCase = true) && !force) {
             return IrisXResponse.RequiresConfirmation(
                 question = "El alias '$alias' ya estaba asignado a '$previousCanonical'. ¿Deseás sobrescribirlo con '$canonical'?",
@@ -346,6 +875,12 @@ class IrisXCore(
         val secondary = dbExercise?.secondaryMuscleGroups ?: catalogMatch?.secondaryMuscleGroups ?: "Ninguno"
         val equipment = dbExercise?.equipment ?: catalogMatch?.equipment ?: "No especificado"
 
+        contextState = contextState.copy(
+            activeExerciseName = displayName,
+            activeMuscleGroup = muscleGroup,
+            lastQueryDomain = "EXERCISE_INFO"
+        )
+
         val response = buildString {
             append("📌 $displayName\n")
             append("• Grupo principal: $muscleGroup\n")
@@ -377,23 +912,50 @@ class IrisXCore(
         )
     }
 
-    private fun handleGeneralQuery(text: String): IrisXResponse {
+    private suspend fun handleGeneralQuery(text: String, referenceTimeMillis: Long): IrisXResponse {
         val norm = normalize(text)
+        if (norm.isBlank()) {
+            return IrisXResponse.Unrecognized(
+                message = "Escribí una consulta o comando para IrisX.",
+                suggestions = listOf("Probá 'último entreno', '¿cómo progresé en espalda?' o 'recomendaciones'.")
+            )
+        }
+
+        // Check if the query directly mentions a known exercise or muscle group and asks a question
+        val exercises = repository.getAllExercises()
+        val aliases = repository.getLearnedAliases()
+        val detectedMuscle = IrisXContextResolver.detectMuscleReference(norm)
+        val detectedEx = IrisXContextResolver.detectExerciseReference(norm, exercises.map { it.displayName }, aliases)
+        val detectedPeriod = IrisXContextResolver.detectPeriodScope(norm)
+
+        if ((detectedMuscle != null || detectedEx != null) &&
+            (norm.contains("como") || norm.contains("cuanto") || detectedPeriod != null)
+        ) {
+            return handleQueryProgression(
+                targetSubject = detectedEx ?: detectedMuscle,
+                periodScope = detectedPeriod,
+                referenceTimeMillis = referenceTimeMillis
+            )
+        }
+
         return when {
             norm.contains("hola") || norm.contains("buen dia") || norm.contains("buenas") -> {
                 IrisXResponse.Success(
                     "Hola. Soy IrisX, tu asistente local de entrenamiento en Syntra. ¿En qué te ayudo hoy?\n" +
-                    "Podés consultar 'último entreno', 'info [ejercicio]', o enseñarme alias con 'alias [x] = [y]'."
+                    "Podés consultar '¿cómo progresé en espalda?', 'recomendaciones', 'último entreno' o 'info [ejercicio]'."
                 )
             }
             norm.contains("ayuda") || norm.contains("comandos") -> {
                 IrisXResponse.Success(
-                    "Comandos que reconozco offline:\n" +
+                    "Comandos y consultas deterministas offline:\n" +
+                    "• '¿cómo progresé en [músculo/ejercicio]?' — Análisis histórico y PRs.\n" +
+                    "• '¿y el mes pasado?' — Pregunta de seguimiento con contexto activo.\n" +
+                    "• 'recomendaciones' — Propuestas justificadas de IrisX Coach.\n" +
                     "• 'último entreno' — Resumen de tu última sesión registrada.\n" +
                     "• 'info [ejercicio]' — Músculo y equipo de un ejercicio.\n" +
                     "• 'alias [nombre] = [ejercicio]' — Me enseña un nuevo alias.\n" +
-                    "• 'musculo [ejercicio] = [grupo]' — Modifica el grupo muscular.\n" +
-                    "• 'clasificar: [ejercicio 1, ejercicio 2]' — Clasifica un entrenamiento."
+                    "• 'preferencia [clave] = [valor]' — Propone guardar preferencia.\n" +
+                    "• 'borrar conversación' — Limpia el historial de chat."
                 )
             }
             else -> {
@@ -401,7 +963,7 @@ class IrisXCore(
                     message = "No entendí la consulta '$text'.",
                     suggestions = listOf(
                         "Escribí 'ayuda' para ver comandos disponibles.",
-                        "Probá 'último entreno' o 'info [ejercicio]'."
+                        "Probá '¿cómo progresé en espalda?', 'recomendaciones' o 'último entreno'."
                     )
                 )
             }
