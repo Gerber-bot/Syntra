@@ -19,6 +19,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.syntra.app.data.AppDatabase
 import com.syntra.app.domain.irisx.IrisXCore
+import com.syntra.app.domain.irisx.IrisXIntent
 import com.syntra.app.domain.irisx.IrisXResponse
 import com.syntra.app.domain.irisx.RoomIrisXRepository
 import kotlinx.coroutines.launch
@@ -36,18 +37,43 @@ fun IrisXConsoleDialog(
     onDismiss: () -> Unit
 ) {
     val scope = rememberCoroutineScope()
-    val irisXCore = remember(db) { IrisXCore(RoomIrisXRepository(db)) }
+    val repo = remember(db) { RoomIrisXRepository(db) }
+    val irisXCore = remember(repo) { IrisXCore(repo) }
     var inputText by remember { mutableStateOf("") }
-    val messages = remember {
-        mutableStateListOf(
-            ChatMessage(
-                text = "Hola. Soy IrisX, tu núcleo inteligente offline en Syntra.\n" +
-                        "Podés pedirme el resumen de tu última sesión, consultar ejercicios o enseñarme alias personalizados.",
-                isUser = false
-            )
-        )
-    }
+    var activeTopicLabel by remember { mutableStateOf<String?>(null) }
+    val messages = remember { mutableStateListOf<ChatMessage>() }
     val listState = rememberLazyListState()
+
+    fun refreshContextBadge() {
+        val st = irisXCore.getCurrentContextState()
+        activeTopicLabel = st.activeExerciseName ?: st.activeMuscleGroup
+    }
+
+    LaunchedEffect(repo) {
+        val conv = repo.getOrCreateActiveConversation()
+        val stored = repo.getMessages(conv.id)
+        messages.clear()
+        if (stored.isEmpty()) {
+            messages.add(
+                ChatMessage(
+                    text = "Hola. Soy IrisX, tu núcleo inteligente offline en Syntra.\n" +
+                        "Podés consultar progresión ('¿cómo progresé en espalda?'), hacer preguntas de seguimiento ('¿y el mes pasado?'), pedir recomendaciones o gestionar alias.",
+                    isUser = false
+                )
+            )
+        } else {
+            stored.forEach { m ->
+                messages.add(
+                    ChatMessage(
+                        text = m.content,
+                        isUser = m.senderRole == "USER",
+                        timestampMillis = m.createdAtMillis
+                    )
+                )
+            }
+        }
+        activeTopicLabel = conv.activeExerciseName ?: conv.activeMuscleGroup
+    }
 
     fun sendMessage(text: String) {
         val trimmed = text.trim()
@@ -56,8 +82,7 @@ fun IrisXConsoleDialog(
         inputText = ""
 
         scope.launch {
-            val intent = irisXCore.parseInput(trimmed)
-            val response = irisXCore.execute(intent)
+            val response = irisXCore.ask(trimmed)
             val replyText = when (response) {
                 is IrisXResponse.Success -> response.message
                 is IrisXResponse.RequiresConfirmation -> "${response.question}\nPara confirmar escribí: ${response.confirmCommand}"
@@ -69,8 +94,11 @@ fun IrisXConsoleDialog(
                     }
                 }
             }
+            refreshContextBadge()
             messages.add(ChatMessage(text = replyText, isUser = false))
-            listState.animateScrollToItem(messages.size - 1)
+            if (messages.isNotEmpty()) {
+                listState.scrollToItem(messages.size - 1)
+            }
         }
     }
 
@@ -81,7 +109,7 @@ fun IrisXConsoleDialog(
         Surface(
             modifier = Modifier
                 .fillMaxWidth(0.95f)
-                .fillMaxHeight(0.85f),
+                .fillMaxHeight(0.88f),
             shape = RoundedCornerShape(16.dp),
             color = Color(0xFF141618),
             tonalElevation = 8.dp
@@ -118,14 +146,37 @@ fun IrisXConsoleDialog(
                                 color = Color.White
                             )
                             Text(
-                                text = "Núcleo offline • Determinista • Privado",
+                                text = if (activeTopicLabel != null) {
+                                    "Contexto activo: $activeTopicLabel"
+                                } else {
+                                    "Núcleo offline • Memoria contextual SQLite"
+                                },
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.primary
                             )
                         }
                     }
-                    IconButton(onClick = onDismiss) {
-                        Text("✕", color = Color.Gray, fontWeight = FontWeight.Bold)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        TextButton(
+                            onClick = {
+                                scope.launch {
+                                    irisXCore.execute(IrisXIntent.ClearConversationHistory)
+                                    messages.clear()
+                                    messages.add(
+                                        ChatMessage(
+                                            text = "Conversación eliminada y contexto reiniciado.",
+                                            isUser = false
+                                        )
+                                    )
+                                    activeTopicLabel = null
+                                }
+                            }
+                        ) {
+                            Text("Limpiar", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                        }
+                        IconButton(onClick = onDismiss) {
+                            Text("✕", color = Color.Gray, fontWeight = FontWeight.Bold)
+                        }
                     }
                 }
 
@@ -139,11 +190,12 @@ fun IrisXConsoleDialog(
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     val suggestions = listOf(
+                        "¿Cómo progresé en espalda?",
+                        "¿Y el mes pasado?",
+                        "Recomendaciones",
                         "Último entreno",
-                        "Info Sentadilla",
-                        "Info Press banca",
-                        "Ayuda comandos",
-                        "Clasificar: Remo, Dominadas, Curl"
+                        "Mis rutinas",
+                        "Ayuda comandos"
                     )
                     suggestions.forEach { chipText ->
                         SuggestionChip(
@@ -179,7 +231,7 @@ fun IrisXConsoleDialog(
                                     bottomEnd = if (msg.isUser) 2.dp else 12.dp
                                 ),
                                 color = if (msg.isUser) MaterialTheme.colorScheme.primary else Color(0xFF202428),
-                                modifier = Modifier.widthIn(max = 300.dp)
+                                modifier = Modifier.widthIn(max = 310.dp)
                             ) {
                                 Text(
                                     text = msg.text,
@@ -202,7 +254,7 @@ fun IrisXConsoleDialog(
                         value = inputText,
                         onValueChange = { inputText = it },
                         modifier = Modifier.weight(1f),
-                        placeholder = { Text("Escribí a IrisX...", style = MaterialTheme.typography.bodySmall) },
+                        placeholder = { Text("Preguntá a IrisX...", style = MaterialTheme.typography.bodySmall) },
                         maxLines = 3,
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedBorderColor = MaterialTheme.colorScheme.primary,

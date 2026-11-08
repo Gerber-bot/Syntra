@@ -33,9 +33,11 @@ import com.syntra.app.data.backup.BackupValidationResult
 import com.syntra.app.data.backup.SyntraBackupPayload
 import com.syntra.app.domain.*
 import com.syntra.app.domain.irisx.IrisXClassifier
+import com.syntra.app.ui.analytics.AnalyticsAndCoachScreen
 import com.syntra.app.ui.exercises.ExerciseLibraryDialog
 import com.syntra.app.ui.irisx.IrisXConsoleDialog
 import com.syntra.app.ui.parser.EditExercisePreviewDialog
+import com.syntra.app.ui.routines.RoutinesScreen
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.text.DateFormat
@@ -84,6 +86,7 @@ private fun TrainerApp(db: AppDatabase) {
     var page by remember { mutableStateOf("Inicio") }
     var isEditingProfile by remember { mutableStateOf(false) }
     var showIrisXConsole by remember { mutableStateOf(false) }
+    var analyzerDraftText by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(db) {
         val existing = db.exerciseDao().getAll()
@@ -227,6 +230,24 @@ private fun TrainerApp(db: AppDatabase) {
                 )
                 "Analizar" -> ParserScreen(
                     db = db,
+                    initialDraft = analyzerDraftText,
+                    onDraftConsumed = { analyzerDraftText = null },
+                    onNavigateToHistory = { page = "Historial" },
+                    onOpenRoutines = { page = "Rutinas" }
+                )
+                "Estadísticas" -> AnalyticsAndCoachScreen(
+                    db = db,
+                    profile = profile!!,
+                    onBack = { page = "Inicio" },
+                    onOpenRoutines = { page = "Rutinas" }
+                )
+                "Rutinas" -> RoutinesScreen(
+                    db = db,
+                    onBack = { page = "Inicio" },
+                    onApplyToAnalyzer = { template ->
+                        analyzerDraftText = template
+                        page = "Analizar"
+                    },
                     onNavigateToHistory = { page = "Historial" }
                 )
                 "Peso" -> WeightScreen(db, error) { input ->
@@ -916,7 +937,7 @@ private fun HomeScreen(
                 color = Color.White
             )
             Text(
-                text = "Syntra v0.2.1 • Asistente IrisX",
+                text = "Syntra v0.4.0 • Asistente IrisX",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.primary
             )
@@ -984,6 +1005,35 @@ private fun HomeScreen(
                 shape = RoundedCornerShape(8.dp)
             ) {
                 Text("⚖ Peso", color = Color.White, style = MaterialTheme.typography.bodySmall)
+            }
+        }
+
+        // Sprint 04: Analytics & Coach and Routines access row
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Button(
+                onClick = { onNavigate("Estadísticas") },
+                modifier = Modifier.weight(1f).height(46.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFF1A2824),
+                    contentColor = MaterialTheme.colorScheme.primary
+                ),
+                shape = RoundedCornerShape(8.dp)
+            ) {
+                Text("📊 Estadísticas & Coach", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall)
+            }
+            Button(
+                onClick = { onNavigate("Rutinas") },
+                modifier = Modifier.weight(1f).height(46.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFF1E2226),
+                    contentColor = Color.White
+                ),
+                shape = RoundedCornerShape(8.dp)
+            ) {
+                Text("🗂 Rutinas", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall)
             }
         }
 
@@ -1151,10 +1201,21 @@ private fun WeightScreen(db: AppDatabase, error: String?, save: (String) -> Unit
 @Composable
 private fun ParserScreen(
     db: AppDatabase,
-    onNavigateToHistory: () -> Unit
+    initialDraft: String? = null,
+    onDraftConsumed: () -> Unit = {},
+    onNavigateToHistory: () -> Unit,
+    onOpenRoutines: () -> Unit = {}
 ) {
     var input by remember { mutableStateOf("Piernas\nSentadilla 70kg 12 10 8\nSentadilla 65kg 8\nBuenos días 40kg 12 10 10") }
     var analyzed by remember { mutableStateOf(false) }
+
+    LaunchedEffect(initialDraft) {
+        if (!initialDraft.isNullOrBlank()) {
+            input = initialDraft
+            analyzed = true
+            onDraftConsumed()
+        }
+    }
     var showSaveConfirmation by remember { mutableStateOf(false) }
     var saveSuccess by remember { mutableStateOf(false) }
     var saveError by remember { mutableStateOf<String?>(null) }
@@ -1355,18 +1416,31 @@ private fun ParserScreen(
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Column {
-            Text(
-                text = "Analizador de entrenamientos",
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold,
-                color = Color.White
-            )
-            Text(
-                text = "Interpretación avanzada • Tarjeta única • Guardado persistente",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.primary
-            )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text = "Analizador de entrenamientos",
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
+                )
+                Text(
+                    text = "Interpretación avanzada • Tarjeta única • Guardado persistente",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+            OutlinedButton(
+                onClick = onOpenRoutines,
+                shape = RoundedCornerShape(8.dp),
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+            ) {
+                Text("🗂 Rutinas", style = MaterialTheme.typography.labelSmall, color = Color.White)
+            }
         }
 
         OutlinedTextField(
