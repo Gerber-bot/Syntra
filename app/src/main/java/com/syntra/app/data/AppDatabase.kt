@@ -101,6 +101,63 @@ data class IrisxMemoryEntity(
     val updatedAtMillis: Long = System.currentTimeMillis()
 )
 
+@Entity(tableName = "irisx_conversations")
+data class IrisxConversationEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val title: String,
+    val activeMuscleGroup: String? = null,
+    val activeExerciseName: String? = null,
+    val activeSessionId: Long? = null,
+    val activePeriodScope: String? = null,
+    val createdAtMillis: Long = System.currentTimeMillis(),
+    val updatedAtMillis: Long = System.currentTimeMillis()
+)
+
+@Entity(
+    tableName = "irisx_messages",
+    indices = [Index("conversationId")]
+)
+data class IrisxMessageEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val conversationId: Long,
+    val senderRole: String, // "USER" or "IRISX"
+    val content: String,
+    val intentType: String? = null,
+    val referencedExercise: String? = null,
+    val referencedMuscleGroup: String? = null,
+    val referencedSessionId: Long? = null,
+    val createdAtMillis: Long = System.currentTimeMillis()
+)
+
+@Entity(tableName = "workout_routines")
+data class RoutineEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val name: String,
+    val description: String = "",
+    val targetCategory: String = "General",
+    val createdAtMillis: Long = System.currentTimeMillis(),
+    val updatedAtMillis: Long = System.currentTimeMillis()
+)
+
+@Entity(
+    tableName = "routine_exercises",
+    indices = [Index("routineId"), Index("exerciseId")]
+)
+data class RoutineExerciseEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val routineId: Long,
+    val exerciseId: Long? = null,
+    val exerciseName: String,
+    val orderIndex: Int,
+    val targetSets: Int,
+    val minReps: Int,
+    val maxReps: Int,
+    val suggestedLoadGrams: Int? = null,
+    val isDumbbell: Boolean = false,
+    val isAssisted: Boolean = false,
+    val notes: String = ""
+)
+
 @Dao
 interface ProfileDao {
     @Query("SELECT * FROM profiles WHERE id = 1 LIMIT 1")
@@ -275,6 +332,105 @@ interface IrisxMemoryDao {
     suspend fun deleteAll()
 }
 
+@Dao
+interface IrisxConversationDao {
+    @Query("SELECT * FROM irisx_conversations ORDER BY updatedAtMillis DESC, id DESC")
+    fun observeAllConversations(): Flow<List<IrisxConversationEntity>>
+
+    @Query("SELECT * FROM irisx_conversations ORDER BY updatedAtMillis DESC, id DESC")
+    suspend fun getAllConversations(): List<IrisxConversationEntity>
+
+    @Query("SELECT * FROM irisx_conversations WHERE id = :id LIMIT 1")
+    suspend fun getConversationById(id: Long): IrisxConversationEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertConversation(conversation: IrisxConversationEntity): Long
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAllConversations(conversations: List<IrisxConversationEntity>)
+
+    @Update
+    suspend fun updateConversation(conversation: IrisxConversationEntity)
+
+    @Query("DELETE FROM irisx_conversations WHERE id = :id")
+    suspend fun deleteConversationById(id: Long)
+
+    @Query("DELETE FROM irisx_conversations")
+    suspend fun deleteAllConversations()
+
+    @Query("SELECT * FROM irisx_messages WHERE conversationId = :conversationId ORDER BY createdAtMillis ASC, id ASC")
+    fun observeMessagesForConversation(conversationId: Long): Flow<List<IrisxMessageEntity>>
+
+    @Query("SELECT * FROM irisx_messages WHERE conversationId = :conversationId ORDER BY createdAtMillis ASC, id ASC")
+    suspend fun getMessagesForConversation(conversationId: Long): List<IrisxMessageEntity>
+
+    @Query("SELECT * FROM irisx_messages ORDER BY createdAtMillis ASC, id ASC")
+    suspend fun getAllMessages(): List<IrisxMessageEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertMessage(message: IrisxMessageEntity): Long
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAllMessages(messages: List<IrisxMessageEntity>)
+
+    @Query("DELETE FROM irisx_messages WHERE conversationId = :conversationId")
+    suspend fun deleteMessagesForConversation(conversationId: Long)
+
+    @Query("DELETE FROM irisx_messages")
+    suspend fun deleteAllMessages()
+}
+
+@Dao
+interface RoutineDao {
+    @Query("SELECT * FROM workout_routines ORDER BY updatedAtMillis DESC, id DESC")
+    fun observeAllRoutines(): Flow<List<RoutineEntity>>
+
+    @Query("SELECT * FROM workout_routines ORDER BY updatedAtMillis DESC, id DESC")
+    suspend fun getAllRoutines(): List<RoutineEntity>
+
+    @Query("SELECT * FROM workout_routines WHERE id = :id LIMIT 1")
+    suspend fun getRoutineById(id: Long): RoutineEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertRoutine(routine: RoutineEntity): Long
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAllRoutines(routines: List<RoutineEntity>)
+
+    @Update
+    suspend fun updateRoutine(routine: RoutineEntity)
+
+    @Query("DELETE FROM workout_routines WHERE id = :id")
+    suspend fun deleteRoutineById(id: Long)
+
+    @Query("DELETE FROM workout_routines")
+    suspend fun deleteAllRoutines()
+
+    @Query("SELECT * FROM routine_exercises WHERE routineId = :routineId ORDER BY orderIndex ASC, id ASC")
+    fun observeExercisesForRoutine(routineId: Long): Flow<List<RoutineExerciseEntity>>
+
+    @Query("SELECT * FROM routine_exercises WHERE routineId = :routineId ORDER BY orderIndex ASC, id ASC")
+    suspend fun getExercisesForRoutine(routineId: Long): List<RoutineExerciseEntity>
+
+    @Query("SELECT * FROM routine_exercises ORDER BY routineId ASC, orderIndex ASC, id ASC")
+    fun observeAllRoutineExercises(): Flow<List<RoutineExerciseEntity>>
+
+    @Query("SELECT * FROM routine_exercises ORDER BY routineId ASC, orderIndex ASC, id ASC")
+    suspend fun getAllRoutineExercises(): List<RoutineExerciseEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertRoutineExercise(item: RoutineExerciseEntity): Long
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAllRoutineExercises(items: List<RoutineExerciseEntity>)
+
+    @Query("DELETE FROM routine_exercises WHERE routineId = :routineId")
+    suspend fun deleteExercisesForRoutine(routineId: Long)
+
+    @Query("DELETE FROM routine_exercises")
+    suspend fun deleteAllRoutineExercises()
+}
+
 @Database(
     entities = [
         ProfileEntity::class,
@@ -283,9 +439,13 @@ interface IrisxMemoryDao {
         ExerciseAliasEntity::class,
         WorkoutSessionEntity::class,
         WorkoutSetEntity::class,
-        IrisxMemoryEntity::class
+        IrisxMemoryEntity::class,
+        IrisxConversationEntity::class,
+        IrisxMessageEntity::class,
+        RoutineEntity::class,
+        RoutineExerciseEntity::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -296,6 +456,8 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun workoutSessionDao(): WorkoutSessionDao
     abstract fun workoutSetDao(): WorkoutSetDao
     abstract fun irisxMemoryDao(): IrisxMemoryDao
+    abstract fun irisxConversationDao(): IrisxConversationDao
+    abstract fun routineDao(): RoutineDao
 
     companion object {
         @Volatile private var instance: AppDatabase? = null
@@ -330,10 +492,72 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS irisx_conversations (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        title TEXT NOT NULL,
+                        activeMuscleGroup TEXT,
+                        activeExerciseName TEXT,
+                        activeSessionId INTEGER,
+                        activePeriodScope TEXT,
+                        createdAtMillis INTEGER NOT NULL,
+                        updatedAtMillis INTEGER NOT NULL
+                    )
+                """.trimIndent())
+
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS irisx_messages (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        conversationId INTEGER NOT NULL,
+                        senderRole TEXT NOT NULL,
+                        content TEXT NOT NULL,
+                        intentType TEXT,
+                        referencedExercise TEXT,
+                        referencedMuscleGroup TEXT,
+                        referencedSessionId INTEGER,
+                        createdAtMillis INTEGER NOT NULL
+                    )
+                """.trimIndent())
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_irisx_messages_conversationId ON irisx_messages (conversationId)")
+
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS workout_routines (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        name TEXT NOT NULL,
+                        description TEXT NOT NULL DEFAULT '',
+                        targetCategory TEXT NOT NULL DEFAULT 'General',
+                        createdAtMillis INTEGER NOT NULL,
+                        updatedAtMillis INTEGER NOT NULL
+                    )
+                """.trimIndent())
+
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS routine_exercises (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        routineId INTEGER NOT NULL,
+                        exerciseId INTEGER,
+                        exerciseName TEXT NOT NULL,
+                        orderIndex INTEGER NOT NULL,
+                        targetSets INTEGER NOT NULL,
+                        minReps INTEGER NOT NULL,
+                        maxReps INTEGER NOT NULL,
+                        suggestedLoadGrams INTEGER,
+                        isDumbbell INTEGER NOT NULL DEFAULT 0,
+                        isAssisted INTEGER NOT NULL DEFAULT 0,
+                        notes TEXT NOT NULL DEFAULT ''
+                    )
+                """.trimIndent())
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_routine_exercises_routineId ON routine_exercises (routineId)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_routine_exercises_exerciseId ON routine_exercises (exerciseId)")
+            }
+        }
+
         fun get(context: Context): AppDatabase = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(
                 context.applicationContext, AppDatabase::class.java, "syntra.db"
-            ).addMigrations(MIGRATION_1_2)
+            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3)
             .build().also { instance = it }
         }
     }

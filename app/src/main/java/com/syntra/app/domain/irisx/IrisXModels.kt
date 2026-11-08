@@ -30,6 +30,20 @@ sealed class IrisXIntent {
     data class LearnAlias(val alias: String, val canonical: String, val force: Boolean = false) : IrisXIntent()
     data class DeleteAlias(val alias: String) : IrisXIntent()
     data class UpdateExerciseMuscle(val exerciseName: String, val muscleGroup: String) : IrisXIntent()
+    data class QueryProgression(
+        val targetSubject: String? = null,
+        val periodScope: PeriodScope? = null
+    ) : IrisXIntent()
+    data class FollowUpQuery(
+        val periodScope: PeriodScope? = null,
+        val targetSubject: String? = null,
+        val rawText: String
+    ) : IrisXIntent()
+    data class QueryRecommendations(val targetSubject: String? = null) : IrisXIntent()
+    data class SavePreference(val key: String, val value: String, val confirmed: Boolean = false) : IrisXIntent()
+    object QueryPreferences : IrisXIntent()
+    object QueryRoutines : IrisXIntent()
+    object ClearConversationHistory : IrisXIntent()
     data class GeneralQuery(val text: String) : IrisXIntent()
 }
 
