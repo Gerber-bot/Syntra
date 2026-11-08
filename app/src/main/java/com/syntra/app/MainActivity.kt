@@ -2,8 +2,10 @@ package com.syntra.app
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -19,12 +21,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.room.withTransaction
 import com.syntra.app.data.*
+import com.syntra.app.data.backup.BackupManager
+import com.syntra.app.data.backup.BackupValidationResult
+import com.syntra.app.data.backup.SyntraBackupPayload
 import com.syntra.app.domain.InputValidators
 import com.syntra.app.domain.WorkoutPresentation
 import com.syntra.app.domain.WorkoutTextParser
@@ -220,6 +226,7 @@ private fun TrainerApp(db: AppDatabase) {
                     } else {
                         ProfileViewScreen(
                             profile = profile!!,
+                            db = db,
                             onStartEdit = { isEditingProfile = true }
                         )
                     }
@@ -232,8 +239,117 @@ private fun TrainerApp(db: AppDatabase) {
 @Composable
 private fun ProfileViewScreen(
     profile: ProfileEntity,
+    db: AppDatabase,
     onStartEdit: () -> Unit
 ) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val backupManager = remember(db) { BackupManager(db) }
+    var statusMessage by remember { mutableStateOf<String?>(null) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+    var pendingRestorePayload by remember { mutableStateOf<SyntraBackupPayload?>(null) }
+
+    val exportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/json")
+    ) { uri ->
+        if (uri != null) {
+            scope.launch {
+                val result = backupManager.exportToFile(context, uri)
+                result.onSuccess { payload ->
+                    val count = payload.weighIns.size
+                    statusMessage = "Copia guardada con éxito ($count pesajes incluidos)."
+                    errorMessage = null
+                }.onFailure { err ->
+                    errorMessage = "Error al exportar copia: ${err.message}"
+                    statusMessage = null
+                }
+            }
+        }
+    }
+
+    val importLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            when (val validation = backupManager.readAndValidateFromUri(context, uri)) {
+                is BackupValidationResult.Success -> {
+                    pendingRestorePayload = validation.payload
+                    errorMessage = null
+                }
+                is BackupValidationResult.Error -> {
+                    errorMessage = "Archivo no válido: ${validation.message}"
+                    statusMessage = null
+                }
+            }
+        }
+    }
+
+    if (pendingRestorePayload != null) {
+        val payload = pendingRestorePayload!!
+        val dateStr = DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(payload.exportedAtMillis))
+        val profileName = payload.profile?.name ?: "Sin perfil"
+        val weighInsCount = payload.weighIns.size
+        AlertDialog(
+            onDismissRequest = { pendingRestorePayload = null },
+            containerColor = Color(0xFF1E1E1E),
+            title = {
+                Text(
+                    text = "Restaurar copia de seguridad",
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "Se restaurará el respaldo del $dateStr.",
+                        color = Color.White
+                    )
+                    Text(
+                        text = "• Perfil: $profileName\n• Registros de peso: $weighInsCount",
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        text = "ADVERTENCIA: Esta acción reemplazará los datos actuales de la aplicación. Se ejecutará de forma atómica y segura.",
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        scope.launch {
+                            val restoreResult = backupManager.restorePayload(payload)
+                            restoreResult.onSuccess {
+                                statusMessage = "Datos restaurados exitosamente."
+                                errorMessage = null
+                                pendingRestorePayload = null
+                            }.onFailure { err ->
+                                errorMessage = "Error al restaurar: ${err.message}"
+                                statusMessage = null
+                                pendingRestorePayload = null
+                            }
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error,
+                        contentColor = Color.White
+                    )
+                ) {
+                    Text("Restaurar ahora", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                OutlinedButton(
+                    onClick = { pendingRestorePayload = null }
+                ) {
+                    Text("Cancelar", color = Color.White)
+                }
+            }
+        )
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -311,6 +427,67 @@ private fun ProfileViewScreen(
         ) {
             Text("Editar perfil", fontWeight = FontWeight.Bold)
         }
+
+        // Card 3: Seguridad y copias de seguridad (FASE 1)
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF161616)),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    text = "Seguridad y copias de seguridad",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Text(
+                    text = "Exportá o restaurá tus registros en formato JSON mediante Storage Access Framework, sin permisos invasivos ni conexión a internet.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = {
+                            val defaultFileName = "syntra_backup_${System.currentTimeMillis()}.json"
+                            exportLauncher.launch(defaultFileName)
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("Exportar JSON", style = MaterialTheme.typography.bodySmall)
+                    }
+                    OutlinedButton(
+                        onClick = {
+                            importLauncher.launch(arrayOf("application/json", "text/plain", "*/*"))
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("Restaurar", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+                if (statusMessage != null) {
+                    Text(
+                        text = statusMessage!!,
+                        color = Color(0xFF4CAF50),
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+                if (errorMessage != null) {
+                    Text(
+                        text = errorMessage!!,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
+        }
+
         Spacer(Modifier.height(8.dp))
     }
 }

@@ -81,6 +81,9 @@ interface ProfileDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun save(profile: ProfileEntity)
+
+    @Query("DELETE FROM profiles")
+    suspend fun deleteAll()
 }
 
 @Dao
@@ -93,6 +96,12 @@ interface WeighInDao {
 
     @Insert
     suspend fun insert(item: WeighInEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAll(items: List<WeighInEntity>)
+
+    @Query("DELETE FROM weigh_ins")
+    suspend fun deleteAll()
 }
 
 @Database(
