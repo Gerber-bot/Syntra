@@ -824,7 +824,7 @@ private fun HomeScreen(
                 color = Color.White
             )
             Text(
-                text = "Syntra v0.2.0 • Asistente IrisX",
+                text = "Syntra v0.2.1 • Asistente IrisX",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.primary
             )
@@ -1473,6 +1473,14 @@ private fun HistoryScreen(
     val exerciseNameMap = remember(exercises) { exercises.associate { it.id to it.displayName } }
     val scope = rememberCoroutineScope()
     var sessionToDelete by remember { mutableStateOf<WorkoutSessionEntity?>(null) }
+    var selectedCategory by remember { mutableStateOf<WorkoutCategoryKey?>(null) }
+
+    val sessionCategoryMap = remember(sessions) {
+        sessions.associate { s -> s.id to WorkoutCategoryClassifier.classify(s.title) }
+    }
+    val categorySummaries = remember(sessions, sessionCategoryMap) {
+        WorkoutCategoryClassifier.buildSummaries(sessions, sessionCategoryMap)
+    }
 
     if (sessionToDelete != null) {
         val s = sessionToDelete!!
@@ -1517,74 +1525,213 @@ private fun HistoryScreen(
         modifier = Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column {
-                Text(
-                    text = "Historial deportivo",
-                    style = MaterialTheme.typography.headlineSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.White
-                )
-                Text(
-                    text = "${sessions.size} sesiones registradas",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.primary
-                )
-            }
-            OutlinedButton(
-                onClick = onNavigateToAnalyze,
-                shape = RoundedCornerShape(8.dp)
+        if (selectedCategory == null) {
+            // Nivel 1: Categorías
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("✎ Nueva sesión", style = MaterialTheme.typography.bodySmall, color = Color.White)
-            }
-        }
-
-        if (sessions.isEmpty()) {
-            Card(
-                modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF161616)),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Column(
-                    modifier = Modifier.padding(20.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
+                Column {
                     Text(
-                        text = "Aún no tenés entrenamientos guardados",
-                        style = MaterialTheme.typography.titleMedium,
+                        text = "Historial deportivo",
+                        style = MaterialTheme.typography.headlineSmall,
                         fontWeight = FontWeight.Bold,
                         color = Color.White
                     )
                     Text(
-                        text = "Escribí o pegá tus ejercicios en el Analizador para guardar tu primera sesión con orden de ejecución y cargas.",
+                        text = "Categorías • ${sessions.size} sesiones en total",
                         style = MaterialTheme.typography.bodySmall,
-                        color = Color.Gray
+                        color = MaterialTheme.colorScheme.primary
                     )
-                    Button(
-                        onClick = onNavigateToAnalyze,
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                }
+                OutlinedButton(
+                    onClick = onNavigateToAnalyze,
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text("✎ Nueva sesión", style = MaterialTheme.typography.bodySmall, color = Color.White)
+                }
+            }
+
+            if (sessions.isEmpty()) {
+                Card(
+                    modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF161616)),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(20.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        Text("Ir a Analizar sesión", color = Color.Black, fontWeight = FontWeight.Bold)
+                        Text(
+                            text = "Aún no tenés entrenamientos guardados",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+                        Text(
+                            text = "Escribí o pegá tus ejercicios en el Analizador para guardar tu primera sesión con orden de ejecución y cargas.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color.Gray
+                        )
+                        Button(
+                            onClick = onNavigateToAnalyze,
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                        ) {
+                            Text("Ir a Analizar sesión", color = Color.Black, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    items(categorySummaries, key = { it.key }) { summary ->
+                        Card(
+                            onClick = { selectedCategory = summary.key },
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(containerColor = Color(0xFF161616)),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(14.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(40.dp)
+                                            .background(Color(0xFF222222), RoundedCornerShape(8.dp)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(text = summary.icon, style = MaterialTheme.typography.titleMedium)
+                                    }
+                                    Column {
+                                        Text(
+                                            text = summary.displayName,
+                                            style = MaterialTheme.typography.titleMedium,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color.White
+                                        )
+                                        Text(
+                                            text = if (summary.sessionCount > 0) "${summary.sessionCount} sesiones" else "Sin registros",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = if (summary.sessionCount > 0) MaterialTheme.colorScheme.primary else Color.Gray
+                                        )
+                                    }
+                                }
+                                Column(horizontalAlignment = Alignment.End) {
+                                    if (summary.latestSessionMillis != null) {
+                                        Text(
+                                            text = DateFormat.getDateInstance(DateFormat.SHORT).format(Date(summary.latestSessionMillis)),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = Color.Gray
+                                        )
+                                    }
+                                    Text("→", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
                     }
                 }
             }
         } else {
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+            // Nivel 2: Sesiones por fecha de la categoría seleccionada
+            val currentCat = selectedCategory!!
+            val categorySessions = remember(sessions, currentCat, sessionCategoryMap) {
+                if (currentCat == WorkoutCategoryKey.TODAS) {
+                    sessions
+                } else {
+                    sessions.filter { sessionCategoryMap[it.id] == currentCat }
+                }.sortedByDescending { it.startedAtMillis }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                items(sessions, key = { it.id }) { session ->
-                    SessionHistoryCard(
-                        session = session,
-                        db = db,
-                        exerciseNameMap = exerciseNameMap,
-                        onDelete = { sessionToDelete = session }
-                    )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = { selectedCategory = null },
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text("← Categorías", style = MaterialTheme.typography.bodySmall, color = Color.White)
+                    }
+                    Column {
+                        Text(
+                            text = "${currentCat.icon} ${currentCat.displayName}",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+                        Text(
+                            text = "${categorySessions.size} sesiones",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+                OutlinedButton(
+                    onClick = onNavigateToAnalyze,
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text("+ Nueva", style = MaterialTheme.typography.bodySmall, color = Color.White)
+                }
+            }
+
+            if (categorySessions.isEmpty()) {
+                Card(
+                    modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF161616)),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(20.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Text(
+                            text = "No hay sesiones de ${currentCat.displayName}",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+                        Text(
+                            text = "Registrá tu primer entrenamiento para esta categoría desde el Analizador.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color.Gray
+                        )
+                        Button(
+                            onClick = onNavigateToAnalyze,
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                        ) {
+                            Text("Registrar entrenamiento", color = Color.Black, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    items(categorySessions, key = { it.id }) { session ->
+                        SessionHistoryCard(
+                            session = session,
+                            db = db,
+                            exerciseNameMap = exerciseNameMap,
+                            onDelete = { sessionToDelete = session }
+                        )
+                    }
                 }
             }
         }
