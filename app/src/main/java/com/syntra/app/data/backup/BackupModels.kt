@@ -70,9 +70,56 @@ data class IrisxMemoryBackupDto(
     val updatedAtMillis: Long
 )
 
+data class IrisxConversationBackupDto(
+    val id: Long = 0,
+    val title: String,
+    val activeMuscleGroup: String? = null,
+    val activeExerciseName: String? = null,
+    val activeSessionId: Long? = null,
+    val activePeriodScope: String? = null,
+    val createdAtMillis: Long,
+    val updatedAtMillis: Long
+)
+
+data class IrisxMessageBackupDto(
+    val id: Long = 0,
+    val conversationId: Long,
+    val senderRole: String,
+    val content: String,
+    val intentType: String? = null,
+    val referencedExercise: String? = null,
+    val referencedMuscleGroup: String? = null,
+    val referencedSessionId: Long? = null,
+    val createdAtMillis: Long
+)
+
+data class RoutineBackupDto(
+    val id: Long = 0,
+    val name: String,
+    val description: String = "",
+    val targetCategory: String = "General",
+    val createdAtMillis: Long,
+    val updatedAtMillis: Long
+)
+
+data class RoutineExerciseBackupDto(
+    val id: Long = 0,
+    val routineId: Long,
+    val exerciseId: Long? = null,
+    val exerciseName: String,
+    val orderIndex: Int,
+    val targetSets: Int,
+    val minReps: Int,
+    val maxReps: Int,
+    val suggestedLoadGrams: Int? = null,
+    val isDumbbell: Boolean = false,
+    val isAssisted: Boolean = false,
+    val notes: String = ""
+)
+
 data class SyntraBackupPayload(
-    val formatVersion: Int = 1,
-    val appVersion: String = "0.2.0",
+    val formatVersion: Int = 2,
+    val appVersion: String = "0.4.0",
     val exportedAtMillis: Long,
     val profile: ProfileBackupDto?,
     val weighIns: List<WeighInBackupDto> = emptyList(),
@@ -80,7 +127,11 @@ data class SyntraBackupPayload(
     val exerciseAliases: List<ExerciseAliasBackupDto> = emptyList(),
     val workoutSessions: List<WorkoutSessionBackupDto> = emptyList(),
     val workoutSets: List<WorkoutSetBackupDto> = emptyList(),
-    val irisxMemories: List<IrisxMemoryBackupDto> = emptyList()
+    val irisxMemories: List<IrisxMemoryBackupDto> = emptyList(),
+    val irisxConversations: List<IrisxConversationBackupDto> = emptyList(),
+    val irisxMessages: List<IrisxMessageBackupDto> = emptyList(),
+    val routines: List<RoutineBackupDto> = emptyList(),
+    val routineExercises: List<RoutineExerciseBackupDto> = emptyList()
 )
 
 sealed class BackupValidationResult {

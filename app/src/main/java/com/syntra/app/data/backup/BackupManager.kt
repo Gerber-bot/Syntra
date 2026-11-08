@@ -97,9 +97,64 @@ class BackupManager(private val db: AppDatabase) {
             )
         }
 
+        val conversations = db.irisxConversationDao().getAllConversations().map { c ->
+            IrisxConversationBackupDto(
+                id = c.id,
+                title = c.title,
+                activeMuscleGroup = c.activeMuscleGroup,
+                activeExerciseName = c.activeExerciseName,
+                activeSessionId = c.activeSessionId,
+                activePeriodScope = c.activePeriodScope,
+                createdAtMillis = c.createdAtMillis,
+                updatedAtMillis = c.updatedAtMillis
+            )
+        }
+
+        val messages = db.irisxConversationDao().getAllMessages().map { msg ->
+            IrisxMessageBackupDto(
+                id = msg.id,
+                conversationId = msg.conversationId,
+                senderRole = msg.senderRole,
+                content = msg.content,
+                intentType = msg.intentType,
+                referencedExercise = msg.referencedExercise,
+                referencedMuscleGroup = msg.referencedMuscleGroup,
+                referencedSessionId = msg.referencedSessionId,
+                createdAtMillis = msg.createdAtMillis
+            )
+        }
+
+        val routines = db.routineDao().getAllRoutines().map { r ->
+            RoutineBackupDto(
+                id = r.id,
+                name = r.name,
+                description = r.description,
+                targetCategory = r.targetCategory,
+                createdAtMillis = r.createdAtMillis,
+                updatedAtMillis = r.updatedAtMillis
+            )
+        }
+
+        val routineExercises = db.routineDao().getAllRoutineExercises().map { re ->
+            RoutineExerciseBackupDto(
+                id = re.id,
+                routineId = re.routineId,
+                exerciseId = re.exerciseId,
+                exerciseName = re.exerciseName,
+                orderIndex = re.orderIndex,
+                targetSets = re.targetSets,
+                minReps = re.minReps,
+                maxReps = re.maxReps,
+                suggestedLoadGrams = re.suggestedLoadGrams,
+                isDumbbell = re.isDumbbell,
+                isAssisted = re.isAssisted,
+                notes = re.notes
+            )
+        }
+
         return SyntraBackupPayload(
             formatVersion = BackupSerializer.CURRENT_FORMAT_VERSION,
-            appVersion = "0.3.0",
+            appVersion = "0.4.0",
             exportedAtMillis = System.currentTimeMillis(),
             profile = profileDto,
             weighIns = weighIns,
@@ -107,7 +162,11 @@ class BackupManager(private val db: AppDatabase) {
             exerciseAliases = aliases,
             workoutSessions = sessions,
             workoutSets = sets,
-            irisxMemories = memories
+            irisxMemories = memories,
+            irisxConversations = conversations,
+            irisxMessages = messages,
+            routines = routines,
+            routineExercises = routineExercises
         )
     }
 
@@ -251,6 +310,79 @@ class BackupManager(private val db: AppDatabase) {
                             confidence = m.confidence,
                             createdAtMillis = m.createdAtMillis,
                             updatedAtMillis = m.updatedAtMillis
+                        )
+                    }
+                )
+            }
+
+            db.irisxConversationDao().deleteAllMessages()
+            db.irisxConversationDao().deleteAllConversations()
+            if (payload.irisxConversations.isNotEmpty()) {
+                db.irisxConversationDao().insertAllConversations(
+                    payload.irisxConversations.map { c ->
+                        IrisxConversationEntity(
+                            id = c.id,
+                            title = c.title,
+                            activeMuscleGroup = c.activeMuscleGroup,
+                            activeExerciseName = c.activeExerciseName,
+                            activeSessionId = c.activeSessionId,
+                            activePeriodScope = c.activePeriodScope,
+                            createdAtMillis = c.createdAtMillis,
+                            updatedAtMillis = c.updatedAtMillis
+                        )
+                    }
+                )
+            }
+            if (payload.irisxMessages.isNotEmpty()) {
+                db.irisxConversationDao().insertAllMessages(
+                    payload.irisxMessages.map { msg ->
+                        IrisxMessageEntity(
+                            id = msg.id,
+                            conversationId = msg.conversationId,
+                            senderRole = msg.senderRole,
+                            content = msg.content,
+                            intentType = msg.intentType,
+                            referencedExercise = msg.referencedExercise,
+                            referencedMuscleGroup = msg.referencedMuscleGroup,
+                            referencedSessionId = msg.referencedSessionId,
+                            createdAtMillis = msg.createdAtMillis
+                        )
+                    }
+                )
+            }
+
+            db.routineDao().deleteAllRoutineExercises()
+            db.routineDao().deleteAllRoutines()
+            if (payload.routines.isNotEmpty()) {
+                db.routineDao().insertAllRoutines(
+                    payload.routines.map { r ->
+                        RoutineEntity(
+                            id = r.id,
+                            name = r.name,
+                            description = r.description,
+                            targetCategory = r.targetCategory,
+                            createdAtMillis = r.createdAtMillis,
+                            updatedAtMillis = r.updatedAtMillis
+                        )
+                    }
+                )
+            }
+            if (payload.routineExercises.isNotEmpty()) {
+                db.routineDao().insertAllRoutineExercises(
+                    payload.routineExercises.map { re ->
+                        RoutineExerciseEntity(
+                            id = re.id,
+                            routineId = re.routineId,
+                            exerciseId = re.exerciseId,
+                            exerciseName = re.exerciseName,
+                            orderIndex = re.orderIndex,
+                            targetSets = re.targetSets,
+                            minReps = re.minReps,
+                            maxReps = re.maxReps,
+                            suggestedLoadGrams = re.suggestedLoadGrams,
+                            isDumbbell = re.isDumbbell,
+                            isAssisted = re.isAssisted,
+                            notes = re.notes
                         )
                     }
                 )

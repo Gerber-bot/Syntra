@@ -6,7 +6,8 @@ import org.json.JSONObject
 
 object BackupSerializer {
 
-    const val CURRENT_FORMAT_VERSION = 1
+    const val MIN_SUPPORTED_FORMAT_VERSION = 1
+    const val CURRENT_FORMAT_VERSION = 2
 
     fun serialize(payload: SyntraBackupPayload): String {
         val root = JSONObject()
@@ -114,6 +115,69 @@ object BackupSerializer {
         }
         root.put("irisxMemories", memoriesArr)
 
+        val conversationsArr = JSONArray()
+        payload.irisxConversations.forEach { c ->
+            conversationsArr.put(JSONObject().apply {
+                put("id", c.id)
+                put("title", c.title)
+                put("activeMuscleGroup", c.activeMuscleGroup ?: JSONObject.NULL)
+                put("activeExerciseName", c.activeExerciseName ?: JSONObject.NULL)
+                put("activeSessionId", c.activeSessionId ?: JSONObject.NULL)
+                put("activePeriodScope", c.activePeriodScope ?: JSONObject.NULL)
+                put("createdAtMillis", c.createdAtMillis)
+                put("updatedAtMillis", c.updatedAtMillis)
+            })
+        }
+        root.put("irisxConversations", conversationsArr)
+
+        val messagesArr = JSONArray()
+        payload.irisxMessages.forEach { msg ->
+            messagesArr.put(JSONObject().apply {
+                put("id", msg.id)
+                put("conversationId", msg.conversationId)
+                put("senderRole", msg.senderRole)
+                put("content", msg.content)
+                put("intentType", msg.intentType ?: JSONObject.NULL)
+                put("referencedExercise", msg.referencedExercise ?: JSONObject.NULL)
+                put("referencedMuscleGroup", msg.referencedMuscleGroup ?: JSONObject.NULL)
+                put("referencedSessionId", msg.referencedSessionId ?: JSONObject.NULL)
+                put("createdAtMillis", msg.createdAtMillis)
+            })
+        }
+        root.put("irisxMessages", messagesArr)
+
+        val routinesArr = JSONArray()
+        payload.routines.forEach { r ->
+            routinesArr.put(JSONObject().apply {
+                put("id", r.id)
+                put("name", r.name)
+                put("description", r.description)
+                put("targetCategory", r.targetCategory)
+                put("createdAtMillis", r.createdAtMillis)
+                put("updatedAtMillis", r.updatedAtMillis)
+            })
+        }
+        root.put("routines", routinesArr)
+
+        val routineExArr = JSONArray()
+        payload.routineExercises.forEach { re ->
+            routineExArr.put(JSONObject().apply {
+                put("id", re.id)
+                put("routineId", re.routineId)
+                put("exerciseId", re.exerciseId ?: JSONObject.NULL)
+                put("exerciseName", re.exerciseName)
+                put("orderIndex", re.orderIndex)
+                put("targetSets", re.targetSets)
+                put("minReps", re.minReps)
+                put("maxReps", re.maxReps)
+                put("suggestedLoadGrams", re.suggestedLoadGrams ?: JSONObject.NULL)
+                put("isDumbbell", re.isDumbbell)
+                put("isAssisted", re.isAssisted)
+                put("notes", re.notes)
+            })
+        }
+        root.put("routineExercises", routineExArr)
+
         return root.toString(2)
     }
 
@@ -133,8 +197,10 @@ object BackupSerializer {
         }
 
         val formatVersion = root.optInt("formatVersion", -1)
-        if (formatVersion != CURRENT_FORMAT_VERSION) {
-            return BackupValidationResult.Error("Versión de esquema '$formatVersion' no soportada (actual soportada: $CURRENT_FORMAT_VERSION).")
+        if (formatVersion !in MIN_SUPPORTED_FORMAT_VERSION..CURRENT_FORMAT_VERSION) {
+            return BackupValidationResult.Error(
+                "Versión de esquema '$formatVersion' no soportada (soportadas: $MIN_SUPPORTED_FORMAT_VERSION..$CURRENT_FORMAT_VERSION)."
+            )
         }
 
         val appVersion = root.optString("appVersion", "desconocida")
@@ -326,6 +392,113 @@ object BackupSerializer {
             }
         }
 
+        // IrisX Conversations validation (optional for backward compatibility with v1 backups)
+        val conversationsList = mutableListOf<IrisxConversationBackupDto>()
+        if (root.has("irisxConversations") && !root.isNull("irisxConversations")) {
+            val arr = root.optJSONArray("irisxConversations")
+                ?: return BackupValidationResult.Error("El campo 'irisxConversations' debe ser una lista.")
+            for (i in 0 until arr.length()) {
+                val item = arr.optJSONObject(i)
+                    ?: return BackupValidationResult.Error("Conversación en posición $i inválida.")
+                conversationsList.add(
+                    IrisxConversationBackupDto(
+                        id = item.optLong("id", 0L),
+                        title = item.optString("title", "Conversación"),
+                        activeMuscleGroup = if (item.isNull("activeMuscleGroup")) null else item.optString("activeMuscleGroup"),
+                        activeExerciseName = if (item.isNull("activeExerciseName")) null else item.optString("activeExerciseName"),
+                        activeSessionId = if (item.isNull("activeSessionId")) null else item.optLong("activeSessionId"),
+                        activePeriodScope = if (item.isNull("activePeriodScope")) null else item.optString("activePeriodScope"),
+                        createdAtMillis = item.optLong("createdAtMillis", exportedAtMillis),
+                        updatedAtMillis = item.optLong("updatedAtMillis", exportedAtMillis)
+                    )
+                )
+            }
+        }
+
+        // IrisX Messages validation (optional for backward compatibility with v1 backups)
+        val messagesList = mutableListOf<IrisxMessageBackupDto>()
+        if (root.has("irisxMessages") && !root.isNull("irisxMessages")) {
+            val arr = root.optJSONArray("irisxMessages")
+                ?: return BackupValidationResult.Error("El campo 'irisxMessages' debe ser una lista.")
+            for (i in 0 until arr.length()) {
+                val item = arr.optJSONObject(i)
+                    ?: return BackupValidationResult.Error("Mensaje en posición $i inválido.")
+                val content = item.optString("content", "").trim()
+                if (content.isEmpty()) {
+                    return BackupValidationResult.Error("Mensaje en posición $i tiene contenido vacío.")
+                }
+                messagesList.add(
+                    IrisxMessageBackupDto(
+                        id = item.optLong("id", 0L),
+                        conversationId = item.optLong("conversationId", 0L),
+                        senderRole = item.optString("senderRole", "USER"),
+                        content = content,
+                        intentType = if (item.isNull("intentType")) null else item.optString("intentType"),
+                        referencedExercise = if (item.isNull("referencedExercise")) null else item.optString("referencedExercise"),
+                        referencedMuscleGroup = if (item.isNull("referencedMuscleGroup")) null else item.optString("referencedMuscleGroup"),
+                        referencedSessionId = if (item.isNull("referencedSessionId")) null else item.optLong("referencedSessionId"),
+                        createdAtMillis = item.optLong("createdAtMillis", exportedAtMillis)
+                    )
+                )
+            }
+        }
+
+        // Routines validation (optional for backward compatibility with v1 backups)
+        val routinesList = mutableListOf<RoutineBackupDto>()
+        if (root.has("routines") && !root.isNull("routines")) {
+            val arr = root.optJSONArray("routines")
+                ?: return BackupValidationResult.Error("El campo 'routines' debe ser una lista.")
+            for (i in 0 until arr.length()) {
+                val item = arr.optJSONObject(i)
+                    ?: return BackupValidationResult.Error("Rutina en posición $i inválida.")
+                val name = item.optString("name", "").trim()
+                if (name.isEmpty()) {
+                    return BackupValidationResult.Error("Rutina en posición $i tiene nombre vacío.")
+                }
+                routinesList.add(
+                    RoutineBackupDto(
+                        id = item.optLong("id", 0L),
+                        name = name,
+                        description = item.optString("description", ""),
+                        targetCategory = item.optString("targetCategory", "General"),
+                        createdAtMillis = item.optLong("createdAtMillis", exportedAtMillis),
+                        updatedAtMillis = item.optLong("updatedAtMillis", exportedAtMillis)
+                    )
+                )
+            }
+        }
+
+        // Routine Exercises validation (optional for backward compatibility with v1 backups)
+        val routineExercisesList = mutableListOf<RoutineExerciseBackupDto>()
+        if (root.has("routineExercises") && !root.isNull("routineExercises")) {
+            val arr = root.optJSONArray("routineExercises")
+                ?: return BackupValidationResult.Error("El campo 'routineExercises' debe ser una lista.")
+            for (i in 0 until arr.length()) {
+                val item = arr.optJSONObject(i)
+                    ?: return BackupValidationResult.Error("Ejercicio de rutina en posición $i inválido.")
+                val exName = item.optString("exerciseName", "").trim()
+                if (exName.isEmpty()) {
+                    return BackupValidationResult.Error("Ejercicio de rutina en posición $i no tiene nombre.")
+                }
+                routineExercisesList.add(
+                    RoutineExerciseBackupDto(
+                        id = item.optLong("id", 0L),
+                        routineId = item.optLong("routineId", 0L),
+                        exerciseId = if (item.isNull("exerciseId")) null else item.optLong("exerciseId"),
+                        exerciseName = exName,
+                        orderIndex = item.optInt("orderIndex", i + 1),
+                        targetSets = item.optInt("targetSets", 3),
+                        minReps = item.optInt("minReps", 8),
+                        maxReps = item.optInt("maxReps", 10),
+                        suggestedLoadGrams = if (item.isNull("suggestedLoadGrams")) null else item.optInt("suggestedLoadGrams"),
+                        isDumbbell = item.optBoolean("isDumbbell", false),
+                        isAssisted = item.optBoolean("isAssisted", false),
+                        notes = item.optString("notes", "")
+                    )
+                )
+            }
+        }
+
         return BackupValidationResult.Success(
             SyntraBackupPayload(
                 formatVersion = formatVersion,
@@ -337,7 +510,11 @@ object BackupSerializer {
                 exerciseAliases = aliasesList,
                 workoutSessions = sessionsList,
                 workoutSets = setsList,
-                irisxMemories = memoriesList
+                irisxMemories = memoriesList,
+                irisxConversations = conversationsList,
+                irisxMessages = messagesList,
+                routines = routinesList,
+                routineExercises = routineExercisesList
             )
         )
     }
