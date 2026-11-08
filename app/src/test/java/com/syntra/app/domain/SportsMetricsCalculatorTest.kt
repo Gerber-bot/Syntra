@@ -81,4 +81,36 @@ class SportsMetricsCalculatorTest {
         assertTrue(metrics.isEstimated)
         assertTrue(metrics.summaryFormatted.contains("900 kg"))
     }
+
+    @Test
+    fun `distinguishes unilateral and weighted bodyweight loads accurately`() {
+        val sets = listOf(
+            // Unilateral Bulgarian split squat: 20 kg per side * 10 reps = 200 kg unilateral
+            WorkoutSetEntity(
+                sessionId = 1, exerciseId = 10, orderInExercise = 1,
+                loadGrams = 20000, repetitions = 10, note = "[UNILATERAL]"
+            ),
+            // Weighted pull-ups (+15 kg ballast * 8 reps = 120 kg weighted bodyweight)
+            WorkoutSetEntity(
+                sessionId = 1, exerciseId = 11, orderInExercise = 1,
+                loadGrams = 15000, repetitions = 8, note = "[LASTRE]"
+            )
+        )
+
+        val exNames = mapOf(10L to "Sentadilla búlgara", 11L to "Dominadas con lastre")
+        val metrics = SportsMetricsCalculator.calculateSessionVolume(sets, exerciseNamesById = exNames)
+
+        assertEquals(200.0, metrics.unilateralKg, 0.001)
+        assertEquals(120.0, metrics.weightedBodyweightKg, 0.001)
+        assertEquals(320.0, metrics.totalExternalKg, 0.001)
+        assertEquals(1, metrics.unilateralSetsCount)
+        assertEquals(1, metrics.weightedBodyweightSetsCount)
+        assertFalse(
+            "Incompatible modalities must not be treated as equivalent",
+            SportsMetricsCalculator.areModalitiesCompatible(
+                LoadModality.BILATERAL_EXTERNAL,
+                LoadModality.DUMBBELL_PER_ARM
+            )
+        )
+    }
 }

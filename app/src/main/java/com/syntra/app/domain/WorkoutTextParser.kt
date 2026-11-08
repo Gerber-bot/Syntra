@@ -74,8 +74,13 @@ object WorkoutTextParser {
                 return@forEachIndexed
             }
 
-            // 2. Detect session titles
-            if (normalize(line.removeSuffix(":")) in knownTitles && sessionTitle == null) {
+            // 2. Detect session titles (exact match or starts with a known session title token when line has no kg)
+            val cleanHeaderCandidate = normalize(line.removeSuffix(":"))
+            val isTitleCandidate = cleanHeaderCandidate in knownTitles ||
+                (sessionTitle == null && kgRegex.find(line) == null && knownTitles.any {
+                    cleanHeaderCandidate.startsWith("$it ") || cleanHeaderCandidate.startsWith("rutina ")
+                })
+            if (isTitleCandidate && sessionTitle == null) {
                 sessionTitle = line.removeSuffix(":")
                 return@forEachIndexed
             }

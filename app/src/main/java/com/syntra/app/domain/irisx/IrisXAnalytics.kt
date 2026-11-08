@@ -214,7 +214,7 @@ object IrisXAnalytics {
                 val bestSet = if (modality == LoadModality.ASSISTED_BODYWEIGHT) {
                     modSets.minWithOrNull(compareBy<WorkoutSetEntity> { it.loadGrams }.thenByDescending { it.repetitions })!!
                 } else {
-                    modSets.maxWithOrNull(compareBy<WorkoutSetEntity> { it.loadGrams }.thenByDescending { it.repetitions })!!
+                    modSets.maxWithOrNull(compareBy<WorkoutSetEntity> { it.loadGrams }.thenBy { it.repetitions })!!
                 }
 
                 val maxReps = modSets.maxOf { it.repetitions }
@@ -277,7 +277,7 @@ object IrisXAnalytics {
             val bestPoint = if (modality == LoadModality.ASSISTED_BODYWEIGHT) {
                 modPoints.minWithOrNull(compareBy<ExerciseSessionPoint> { it.topLoadGrams }.thenByDescending { it.topLoadReps })!!
             } else {
-                modPoints.maxWithOrNull(compareBy<ExerciseSessionPoint> { it.topLoadGrams }.thenByDescending { it.topLoadReps })!!
+                modPoints.maxWithOrNull(compareBy<ExerciseSessionPoint> { it.topLoadGrams }.thenBy { it.topLoadReps })!!
             }
 
             val maxRepsSet = modSets.maxWithOrNull(compareBy<WorkoutSetEntity> { it.repetitions }.thenBy { it.loadGrams })!!

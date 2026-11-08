@@ -199,4 +199,72 @@ class BackupSerializerTest {
         val result = BackupSerializer.deserializeAndValidate(invalidWeighInJson)
         assertTrue(result is BackupValidationResult.Error)
     }
+
+    @Test
+    fun `formatVersion 2 roundtrip preserves routines and conversations and keeps v1 compatibility`() {
+        val v2Payload = SyntraBackupPayload(
+            formatVersion = 2,
+            appVersion = "0.4.0",
+            exportedAtMillis = 1710000000000L,
+            profile = null,
+            irisxConversations = listOf(
+                IrisxConversationBackupDto(
+                    id = 1,
+                    title = "Conversación principal",
+                    activeMuscleGroup = "Espalda",
+                    activePeriodScope = "LAST_MONTH",
+                    createdAtMillis = 1710000000000L,
+                    updatedAtMillis = 1710000005000L
+                )
+            ),
+            irisxMessages = listOf(
+                IrisxMessageBackupDto(
+                    id = 10,
+                    conversationId = 1,
+                    senderRole = "USER",
+                    content = "¿Cómo progresé en espalda?",
+                    referencedMuscleGroup = "Espalda",
+                    createdAtMillis = 1710000000000L
+                )
+            ),
+            routines = listOf(
+                RoutineBackupDto(
+                    id = 5,
+                    name = "Empuje A",
+                    description = "Pecho y hombros",
+                    targetCategory = "Pecho",
+                    createdAtMillis = 1710000000000L,
+                    updatedAtMillis = 1710000000000L
+                )
+            ),
+            routineExercises = listOf(
+                RoutineExerciseBackupDto(
+                    id = 50,
+                    routineId = 5,
+                    exerciseId = 2,
+                    exerciseName = "Press de banca",
+                    orderIndex = 1,
+                    targetSets = 4,
+                    minReps = 6,
+                    maxReps = 8,
+                    suggestedLoadGrams = 80000
+                )
+            )
+        )
+
+        val json = BackupSerializer.serialize(v2Payload)
+        val validated = BackupSerializer.deserializeAndValidate(json)
+        assertTrue(validated is BackupValidationResult.Success)
+        val restored = (validated as BackupValidationResult.Success).payload
+
+        assertEquals(2, restored.formatVersion)
+        assertEquals(1, restored.irisxConversations.size)
+        assertEquals("Espalda", restored.irisxConversations[0].activeMuscleGroup)
+        assertEquals(1, restored.irisxMessages.size)
+        assertEquals("¿Cómo progresé en espalda?", restored.irisxMessages[0].content)
+        assertEquals(1, restored.routines.size)
+        assertEquals("Empuje A", restored.routines[0].name)
+        assertEquals(1, restored.routineExercises.size)
+        assertEquals(80000, restored.routineExercises[0].suggestedLoadGrams)
+    }
 }

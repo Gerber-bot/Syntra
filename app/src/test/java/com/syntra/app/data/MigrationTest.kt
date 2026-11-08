@@ -246,4 +246,95 @@ class MigrationTest {
         stmt.close()
         connection.close()
     }
+
+    @Test
+    fun `migration from version 2 to 3 adds conversations and routines without touching existing records`() {
+        val connection = DriverManager.getConnection("jdbc:sqlite::memory:")
+        val stmt = connection.createStatement()
+
+        // Create v2 tables and populate
+        stmt.execute("""
+            CREATE TABLE workout_sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                title TEXT NOT NULL,
+                startedAtMillis INTEGER NOT NULL,
+                finishedAtMillis INTEGER,
+                notes TEXT NOT NULL DEFAULT ''
+            )
+        """.trimIndent())
+        stmt.execute("""
+            INSERT INTO workout_sessions (id, title, startedAtMillis, finishedAtMillis, notes)
+            VALUES (5, 'Espalda v2', 1700000000000, 1700003600000, 'Intacta')
+        """.trimIndent())
+
+        // Execute Migration 2 -> 3 SQL
+        stmt.execute("""
+            CREATE TABLE IF NOT EXISTS irisx_conversations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                title TEXT NOT NULL,
+                activeMuscleGroup TEXT,
+                activeExerciseName TEXT,
+                activeSessionId INTEGER,
+                activePeriodScope TEXT,
+                createdAtMillis INTEGER NOT NULL,
+                updatedAtMillis INTEGER NOT NULL
+            )
+        """.trimIndent())
+        stmt.execute("""
+            CREATE TABLE IF NOT EXISTS irisx_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                conversationId INTEGER NOT NULL,
+                senderRole TEXT NOT NULL,
+                content TEXT NOT NULL,
+                intentType TEXT,
+                referencedExercise TEXT,
+                referencedMuscleGroup TEXT,
+                referencedSessionId INTEGER,
+                createdAtMillis INTEGER NOT NULL
+            )
+        """.trimIndent())
+        stmt.execute("""
+            CREATE TABLE IF NOT EXISTS workout_routines (
+                id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                name TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                targetCategory TEXT NOT NULL DEFAULT 'General',
+                createdAtMillis INTEGER NOT NULL,
+                updatedAtMillis INTEGER NOT NULL
+            )
+        """.trimIndent())
+        stmt.execute("""
+            CREATE TABLE IF NOT EXISTS routine_exercises (
+                id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                routineId INTEGER NOT NULL,
+                exerciseId INTEGER,
+                exerciseName TEXT NOT NULL,
+                orderIndex INTEGER NOT NULL,
+                targetSets INTEGER NOT NULL,
+                minReps INTEGER NOT NULL,
+                maxReps INTEGER NOT NULL,
+                suggestedLoadGrams INTEGER,
+                isDumbbell INTEGER NOT NULL DEFAULT 0,
+                isAssisted INTEGER NOT NULL DEFAULT 0,
+                notes TEXT NOT NULL DEFAULT ''
+            )
+        """.trimIndent())
+
+        // Verify v2 workout session is untouched
+        val rs = stmt.executeQuery("SELECT title, notes FROM workout_sessions WHERE id = 5")
+        assertTrue(rs.next())
+        assertEquals("Espalda v2", rs.getString("title"))
+        assertEquals("Intacta", rs.getString("notes"))
+        rs.close()
+
+        // Verify v3 routine & conversation tables accept inserts
+        stmt.execute("INSERT INTO workout_routines (id, name, createdAtMillis, updatedAtMillis) VALUES (1, 'Tirón A', 1700000000000, 1700000000000)")
+        val rRs = stmt.executeQuery("SELECT name FROM workout_routines WHERE id = 1")
+        assertTrue(rRs.next())
+        assertEquals("Tirón A", rRs.getString("name"))
+        rRs.close()
+
+        stmt.close()
+        connection.close()
+    }
 }
