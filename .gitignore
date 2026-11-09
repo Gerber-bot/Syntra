@@ -16,3 +16,7 @@ local.properties
 .tmp_gradle/
 .engram/
 .android-sdk/
+.cxx/
+**/build/
+external/
+*.gguf

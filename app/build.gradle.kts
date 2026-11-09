@@ -7,6 +7,8 @@ android {
     namespace = "com.syntra.app"
     compileSdk = 37
 
+    ndkVersion = "27.2.12479018"
+
     defaultConfig {
         applicationId = "com.syntra.app"
         minSdk = 26
@@ -14,6 +16,23 @@ android {
         versionCode = 9
         versionName = "0.6.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        ndk {
+            abiFilters.add("arm64-v8a")
+        }
+
+        externalNativeBuild {
+            cmake {
+                arguments("-DANDROID_STL=c++_shared")
+            }
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
     }
 
     buildTypes {

@@ -13,6 +13,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -22,6 +23,8 @@ import com.syntra.app.domain.irisx.IrisXCore
 import com.syntra.app.domain.irisx.IrisXIntent
 import com.syntra.app.domain.irisx.IrisXResponse
 import com.syntra.app.domain.irisx.RoomIrisXRepository
+import com.syntra.app.domain.neural.*
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 data class ChatMessage(
@@ -37,13 +40,22 @@ fun IrisXConsoleDialog(
     activeWorkoutTitle: String? = null,
     onDismiss: () -> Unit
 ) {
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val repo = remember(db) { RoomIrisXRepository(db) }
     val irisXCore = remember(repo) { IrisXCore(repo) }
+
+    val fallbackEngine = remember(db) { DeterministicInferenceEngine(db) }
+    val neuralEngine = remember(fallbackEngine) { LlamaCppInferenceEngine(fallbackEngine) }
+
     var inputText by remember { mutableStateOf("") }
     var activeTopicLabel by remember { mutableStateOf<String?>(null) }
     val messages = remember { mutableStateListOf<ChatMessage>() }
     val listState = rememberLazyListState()
+
+    var showModelManagerDialog by remember { mutableStateOf(false) }
+    var isGenerating by remember { mutableStateOf(false) }
+    var currentGenerationJob by remember { mutableStateOf<Job?>(null) }
 
     fun refreshContextBadge() {
         val st = irisXCore.getCurrentContextState()
@@ -57,8 +69,8 @@ fun IrisXConsoleDialog(
         if (stored.isEmpty()) {
             messages.add(
                 ChatMessage(
-                    text = "Hola. Soy IrisX, tu núcleo inteligente offline en Syntra.\n" +
-                        "Podés consultar progresión ('¿cómo progresé en espalda?'), hacer preguntas de seguimiento ('¿y el mes pasado?'), pedir recomendaciones o gestionar alias.",
+                    text = "Hola. Soy IrisX, tu copiloto deportiva y núcleo inteligente offline.\n" +
+                        "Podés consultar progresión ('¿cómo progresé en espalda?'), recomendaciones o cargar un modelo GGUF (ej. Qwen3-0.6B) para respuestas neuronales locales.",
                     isUser = false
                 )
             )
@@ -78,29 +90,101 @@ fun IrisXConsoleDialog(
 
     fun sendMessage(text: String) {
         val trimmed = text.trim()
-        if (trimmed.isBlank()) return
+        if (trimmed.isBlank() || isGenerating) return
         messages.add(ChatMessage(text = trimmed, isUser = true))
         inputText = ""
 
-        scope.launch {
-            val response = irisXCore.ask(trimmed)
-            val replyText = when (response) {
-                is IrisXResponse.Success -> response.message
-                is IrisXResponse.RequiresConfirmation -> "${response.question}\nPara confirmar escribí: ${response.confirmCommand}"
-                is IrisXResponse.Unrecognized -> {
-                    if (response.suggestions.isNotEmpty()) {
-                        "${response.message}\n\n${response.suggestions.joinToString("\n")}"
+        if (neuralEngine.isModelLoaded()) {
+            // Neural Engine Path
+            val guardian = IrisXGuardian.evaluateResources(context, neuralEngine.currentModelFile?.length() ?: 0L)
+            if (!guardian.canProceed) {
+                messages.add(
+                    ChatMessage(
+                        text = "⚠️ IrisX Guardian: Inferencia pausada por protección del dispositivo (${guardian.reason}). Recurriendo al motor determinista...",
+                        isUser = false
+                    )
+                )
+                scope.launch {
+                    val resp = irisXCore.ask(trimmed)
+                    val reply = when (resp) {
+                        is IrisXResponse.Success -> resp.message
+                        is IrisXResponse.RequiresConfirmation -> "${resp.question}\nPara confirmar escribí: ${resp.confirmCommand}"
+                        is IrisXResponse.Unrecognized -> resp.message
+                    }
+                    messages.add(ChatMessage(text = "[Motor determinista]\n$reply", isUser = false))
+                }
+                return
+            }
+
+            // Neural progressive streaming
+            isGenerating = true
+            val botMessageIndex = messages.size
+            messages.add(ChatMessage(text = "Pensando...", isUser = false))
+
+            currentGenerationJob = scope.launch {
+                val prompt = IrisXContextBuilder.buildPrompt(trimmed, db)
+                val responseBuilder = StringBuilder()
+
+                neuralEngine.generate(prompt, InferenceParams(maxTokens = 256)).collect { chunk ->
+                    if (chunk.errorMessage != null) {
+                        responseBuilder.append("\n[Error: ${chunk.errorMessage}]")
                     } else {
-                        response.message
+                        if (responseBuilder.isEmpty() && chunk.text.isNotBlank()) {
+                            // First token received
+                        }
+                        responseBuilder.append(chunk.text)
+                    }
+
+                    val currentText = if (responseBuilder.isBlank()) "Pensando..." else responseBuilder.toString()
+                    if (botMessageIndex < messages.size) {
+                        messages[botMessageIndex] = ChatMessage(text = currentText, isUser = false)
+                    }
+                    if (messages.isNotEmpty()) {
+                        listState.scrollToItem(messages.size - 1)
                     }
                 }
+
+                // Add metrics footer
+                val m = neuralEngine.metrics
+                if (m.tokensPerSecond > 0.0) {
+                    val finalMsg = "${responseBuilder.toString().trim()}\n\n───\n⚡ ${String.format("%.1f", m.tokensPerSecond)} t/s • ${m.lastInferenceDurationMillis} ms • ${neuralEngine.currentModelFile?.name}"
+                    if (botMessageIndex < messages.size) {
+                        messages[botMessageIndex] = ChatMessage(text = finalMsg, isUser = false)
+                    }
+                }
+
+                isGenerating = false
+                currentGenerationJob = null
             }
-            refreshContextBadge()
-            messages.add(ChatMessage(text = replyText, isUser = false))
-            if (messages.isNotEmpty()) {
-                listState.scrollToItem(messages.size - 1)
+        } else {
+            // Deterministic Engine Path
+            scope.launch {
+                val response = irisXCore.ask(trimmed)
+                val replyText = when (response) {
+                    is IrisXResponse.Success -> response.message
+                    is IrisXResponse.RequiresConfirmation -> "${response.question}\nPara confirmar escribí: ${response.confirmCommand}"
+                    is IrisXResponse.Unrecognized -> {
+                        if (response.suggestions.isNotEmpty()) {
+                            "${response.message}\n\n${response.suggestions.joinToString("\n")}"
+                        } else {
+                            response.message
+                        }
+                    }
+                }
+                refreshContextBadge()
+                messages.add(ChatMessage(text = "[Motor determinista]\n$replyText", isUser = false))
+                if (messages.isNotEmpty()) {
+                    listState.scrollToItem(messages.size - 1)
+                }
             }
         }
+    }
+
+    if (showModelManagerDialog) {
+        ManageNeuralModelDialog(
+            engine = neuralEngine,
+            onDismiss = { showModelManagerDialog = false }
+        )
     }
 
     Dialog(
@@ -141,44 +225,24 @@ fun IrisXConsoleDialog(
                         }
                         Column {
                             Text(
-                                text = "IrisX Console",
+                                text = "IrisX Neural Console",
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold,
                                 color = Color.White
                             )
                             Text(
-                                text = when {
-                                    activeWorkoutTitle != null && activeTopicLabel != null ->
-                                        "En curso: $activeWorkoutTitle • Contexto: $activeTopicLabel"
-                                    activeWorkoutTitle != null ->
-                                        "Entrenamiento activo: $activeWorkoutTitle (notas preservadas)"
-                                    activeTopicLabel != null ->
-                                        "Contexto activo: $activeTopicLabel"
-                                    else ->
-                                        "Núcleo offline • Memoria contextual SQLite"
-                                },
+                                text = if (neuralEngine.isModelLoaded())
+                                    "● Motor neuronal activo: ${neuralEngine.currentModelFile?.name}"
+                                else
+                                    "○ Motor determinista: modelo neuronal no disponible",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.primary
+                                color = if (neuralEngine.isModelLoaded()) MaterialTheme.colorScheme.primary else Color.Gray
                             )
                         }
                     }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        TextButton(
-                            onClick = {
-                                scope.launch {
-                                    irisXCore.execute(IrisXIntent.ClearConversationHistory)
-                                    messages.clear()
-                                    messages.add(
-                                        ChatMessage(
-                                            text = "Conversación eliminada y contexto reiniciado.",
-                                            isUser = false
-                                        )
-                                    )
-                                    activeTopicLabel = null
-                                }
-                            }
-                        ) {
-                            Text("Limpiar", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        TextButton(onClick = { showModelManagerDialog = true }) {
+                            Text("🧠 Modelo", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
                         }
                         IconButton(onClick = onDismiss) {
                             Text("✕", color = Color.Gray, fontWeight = FontWeight.Bold)
@@ -261,7 +325,7 @@ fun IrisXConsoleDialog(
                     }
                 }
 
-                // Input field and send button
+                // Input field and send / stop button
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -273,6 +337,7 @@ fun IrisXConsoleDialog(
                         modifier = Modifier.weight(1f),
                         placeholder = { Text("Preguntá a IrisX...", style = MaterialTheme.typography.bodySmall) },
                         maxLines = 3,
+                        enabled = !isGenerating,
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedBorderColor = MaterialTheme.colorScheme.primary,
                             unfocusedBorderColor = Color(0xFF333333),
@@ -280,12 +345,27 @@ fun IrisXConsoleDialog(
                             unfocusedTextColor = Color.White
                         )
                     )
-                    Button(
-                        onClick = { sendMessage(inputText) },
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
-                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp)
-                    ) {
-                        Text("Enviar", color = Color.Black, fontWeight = FontWeight.Bold)
+
+                    if (isGenerating) {
+                        Button(
+                            onClick = {
+                                neuralEngine.cancel()
+                                currentGenerationJob?.cancel()
+                                isGenerating = false
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE57373)),
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp)
+                        ) {
+                            Text("⏹ Detener", color = Color.Black, fontWeight = FontWeight.Bold)
+                        }
+                    } else {
+                        Button(
+                            onClick = { sendMessage(inputText) },
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp)
+                        ) {
+                            Text("Enviar", color = Color.Black, fontWeight = FontWeight.Bold)
+                        }
                     }
                 }
             }
