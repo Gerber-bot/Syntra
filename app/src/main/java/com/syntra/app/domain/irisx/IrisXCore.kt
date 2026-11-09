@@ -248,11 +248,46 @@ class IrisXCore(
             return IrisXIntent.GeneralQuery("")
         }
 
-        // 1. Query last workout
+        // 1. Query last session of a specific category/muscle vs general last workout
+        val lastSessionCategoryRegex = Regex(
+            "(?:ultima\\s+sesion|ultimo\\s+entreno|ultimo\\s+entrenamiento)\\s+de\\s+(.+)$"
+        )
+        val lastCatMatch = lastSessionCategoryRegex.find(norm)
+        if (lastCatMatch != null) {
+            val catTarget = lastCatMatch.groupValues[1].trim()
+            if (catTarget.isNotBlank()) {
+                return IrisXIntent.QueryLastSessionByCategory(catTarget)
+            }
+        }
+
         if (norm.contains("ultimo entreno") || norm.contains("ultima sesion") ||
             norm.contains("ultimo entrenamiento") || norm == "resumen" || norm == "ultimo"
         ) {
             return IrisXIntent.QueryLastWorkout
+        }
+
+        // 1b. Query last load in an exercise: e.g. "¿cuánto levanté la última vez en sentadilla?", "última carga en press de banca"
+        val isLastLoadPattern = (norm.contains("cuanto levante") || norm.contains("cuanto hice") ||
+            norm.contains("ultima carga") || norm.contains("ultimo peso") ||
+            (norm.contains("ultima vez") && (norm.contains("en ") || norm.contains("con "))))
+        if (isLastLoadPattern) {
+            val exAfterPrep = Regex("(?:ultima\\s+vez\\s+(?:en|con)|levante\\s+(?:en|con)|hice\\s+(?:en|con)|carga\\s+(?:en|de)|peso\\s+(?:en|de)|en)\\s+(.+)$")
+                .find(norm)?.groupValues?.get(1)
+                ?.replace("la ultima vez", "")
+                ?.trim()
+                ?.takeIf { it.isNotBlank() && it != "este" && it != "este ejercicio" }
+            return IrisXIntent.QueryLastExerciseLoad(exerciseName = exAfterPrep)
+        }
+
+        // 1c. Query exercise alternatives: e.g. "¿qué ejercicio puedo hacer en lugar de este?", "alternativa a press de banca", "reemplazo de sentadilla"
+        val isAlternativePattern = norm.contains("en lugar de") || norm.contains("en vez de") ||
+            norm.contains("alternativa") || norm.contains("reemplazo") || norm.contains("sustituto") ||
+            (norm.contains("que ejercicio puedo hacer") && (norm.contains("para ") || norm.contains("en lugar")))
+        if (isAlternativePattern) {
+            val targetAfter = Regex("(?:en\\s+lugar\\s+de|en\\s+vez\\s+de|alternativas?\\s+(?:a|de|para)|reemplazos?\\s+(?:a|de|para)|sustitutos?\\s+(?:a|de|para)|hacer\\s+para)\\s+(.+)$")
+                .find(norm)?.groupValues?.get(1)?.trim()
+                ?.takeIf { it.isNotBlank() && it != "este" && it != "este ejercicio" && it != "eso" }
+            return IrisXIntent.QueryExerciseAlternatives(exerciseName = targetAfter)
         }
 
         // 2. Confirm forced alias overwrite: "confirmar alias X = Y"
@@ -461,12 +496,226 @@ class IrisXCore(
             is IrisXIntent.QueryPreferences -> handleQueryPreferences()
             is IrisXIntent.QueryRoutines -> handleQueryRoutines()
             is IrisXIntent.ClearConversationHistory -> handleClearConversations()
+            is IrisXIntent.QueryLastExerciseLoad -> handleQueryLastExerciseLoad(intent.exerciseName)
+            is IrisXIntent.QueryExerciseAlternatives -> handleQueryExerciseAlternatives(intent.exerciseName)
+            is IrisXIntent.QueryLastSessionByCategory -> handleQueryLastSessionByCategory(intent.categoryOrMuscle)
             is IrisXIntent.GeneralQuery -> handleGeneralQuery(intent.text, referenceTimeMillis)
         }
     }
 
     suspend fun getLearnedAliases(): Map<String, String> {
         return repository.getLearnedAliases()
+    }
+
+    private suspend fun handleQueryLastExerciseLoad(requestedExercise: String?): IrisXResponse {
+        val effectiveExercise = requestedExercise?.takeIf { it.isNotBlank() }
+            ?: contextState.activeExerciseName
+            ?: return IrisXResponse.Unrecognized(
+                message = "Indicame qué ejercicio querés consultar (por ejemplo: '¿cuánto levanté la última vez en sentadilla?')."
+            )
+
+        val sessions = repository.getAllSessions()
+        val allSets = repository.getAllSets()
+        val exercises = repository.getAllExercises()
+        val aliases = repository.getLearnedAliases()
+
+        val report = IrisXAnalytics.analyzeExerciseProgression(
+            exerciseName = effectiveExercise,
+            sessions = sessions,
+            allSets = allSets,
+            exercises = exercises,
+            learnedAliases = aliases
+        )
+
+        val lastPerf = report.history.lastOrNull()
+            ?: return IrisXResponse.Success(
+                message = "Todavía no tenés series registradas en '${report.exerciseName}'.",
+                actionTaken = "QUERY_LAST_EXERCISE_LOAD_EMPTY"
+            )
+
+        val sessionSets = allSets
+            .filter { it.sessionId == lastPerf.sessionId }
+            .filter { set ->
+                val exName = exercises.firstOrNull { it.id == set.exerciseId }?.displayName.orEmpty()
+                normalize(exName) == normalize(report.exerciseName) ||
+                    normalize(aliases[normalize(exName)] ?: exName) == normalize(report.exerciseName)
+            }
+            .sortedWith(compareBy<WorkoutSetEntity> { it.executionOrder }.thenBy { it.id })
+
+        val dateStr = DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(lastPerf.timestampMillis))
+        val topKg = SportsMetricsCalculator.formatKg(lastPerf.topLoadGrams / 1000.0)
+        val setsSummary = if (sessionSets.isNotEmpty()) {
+            sessionSets.joinToString(", ") { s ->
+                val kg = SportsMetricsCalculator.formatKg(s.loadGrams / 1000.0)
+                val mod = when {
+                    s.isAssisted -> " asist."
+                    s.isDumbbell -> " c/u"
+                    else -> ""
+                }
+                "$kg$mod × ${s.repetitions}"
+            }
+        } else {
+            "$topKg × ${lastPerf.topLoadReps} reps (${lastPerf.setsCount} series)"
+        }
+
+        contextState = contextState.copy(
+            activeExerciseName = report.exerciseName,
+            activeSessionId = lastPerf.sessionId,
+            lastQueryDomain = "LAST_EXERCISE_LOAD"
+        )
+
+        val msg = buildString {
+            append("🏋️ Último registro en ${report.exerciseName} ($dateStr):\n")
+            append("• Mejor serie: $topKg × ${lastPerf.topLoadReps} reps\n")
+            append("• Series ejecutadas (${lastPerf.setsCount}): $setsSummary")
+        }
+
+        return IrisXResponse.Success(
+            message = msg,
+            actionTaken = "QUERY_LAST_EXERCISE_LOAD",
+            payload = lastPerf
+        )
+    }
+
+    private suspend fun handleQueryExerciseAlternatives(requestedExercise: String?): IrisXResponse {
+        val effectiveTarget = requestedExercise?.takeIf { it.isNotBlank() }
+            ?: contextState.activeExerciseName
+            ?: contextState.activeMuscleGroup
+            ?: return IrisXResponse.Unrecognized(
+                message = "Indicame para qué ejercicio o grupo muscular buscás una alternativa (ej. '¿qué ejercicio puedo hacer en lugar de press de banca?')."
+            )
+
+        val normTarget = normalize(effectiveTarget)
+        val aliases = repository.getLearnedAliases()
+        val overrides = repository.getMuscleOverrides()
+        val canonicalTarget = aliases[normTarget] ?: effectiveTarget
+        val normCanonical = normalize(canonicalTarget)
+
+        val dbExercises = repository.getAllExercises()
+        val matchedDb = dbExercises.firstOrNull { normalize(it.displayName) == normCanonical }
+        val matchedCatalog = ExerciseCatalog.DEFAULT_CATALOG.firstOrNull {
+            normalize(it.displayName) == normCanonical || it.aliases.any { a -> normalize(a) == normTarget }
+        }
+
+        val targetDisplayName = matchedDb?.displayName ?: matchedCatalog?.displayName ?: canonicalTarget
+        val targetMuscle = matchedDb?.muscleGroup?.takeIf { it.isNotBlank() && it != "General" }
+            ?: matchedCatalog?.muscleGroup
+            ?: IrisXContextResolver.detectMuscleReference(normCanonical)
+            ?: IrisXClassifier.detectMuscleGroup(targetDisplayName, aliases, overrides)
+
+        val normMuscle = normalize(targetMuscle)
+        val candidatePool = (dbExercises.map { it.displayName to it.muscleGroup } +
+            ExerciseCatalog.DEFAULT_CATALOG.map { it.displayName to it.muscleGroup })
+            .distinctBy { normalize(it.first) }
+
+        val alternatives = candidatePool
+            .filter { (name, muscle) ->
+                normalize(name) != normCanonical &&
+                    normalize(name) != normTarget &&
+                    (normalize(muscle) == normMuscle ||
+                        IrisXClassifier.mapMuscleToCategory(muscle) == IrisXClassifier.mapMuscleToCategory(targetMuscle))
+            }
+            .map { it.first }
+            .take(5)
+
+        contextState = contextState.copy(
+            activeExerciseName = targetDisplayName,
+            activeMuscleGroup = targetMuscle,
+            lastQueryDomain = "EXERCISE_ALTERNATIVES"
+        )
+
+        if (alternatives.isEmpty()) {
+            return IrisXResponse.Success(
+                message = "No encontré alternativas catalogadas para '$targetDisplayName' ($targetMuscle).",
+                actionTaken = "QUERY_ALTERNATIVES_EMPTY"
+            )
+        }
+
+        val msg = buildString {
+            append("🔄 Alternativas biomecánicas para $targetDisplayName (grupo: $targetMuscle):\n")
+            alternatives.forEach { alt ->
+                append("• $alt\n")
+            }
+        }.trim()
+
+        return IrisXResponse.Success(
+            message = msg,
+            actionTaken = "QUERY_EXERCISE_ALTERNATIVES",
+            payload = alternatives
+        )
+    }
+
+    private suspend fun handleQueryLastSessionByCategory(categoryOrMuscle: String): IrisXResponse {
+        val sessions = repository.getAllSessions()
+        if (sessions.isEmpty()) {
+            return IrisXResponse.Success(
+                message = "No tenés entrenamientos registrados todavía.",
+                actionTaken = "QUERY_LAST_CATEGORY_EMPTY"
+            )
+        }
+
+        val allSets = repository.getAllSets().groupBy { it.sessionId }
+        val exercisesById = repository.getAllExercises().associateBy { it.id }
+        val aliases = repository.getLearnedAliases()
+        val overrides = repository.getMuscleOverrides()
+        val normRequested = normalize(categoryOrMuscle)
+        val detectedMuscle = IrisXContextResolver.detectMuscleReference(normRequested) ?: categoryOrMuscle
+
+        val sortedSessions = sessions.sortedWith(
+            compareByDescending<WorkoutSessionEntity> { it.startedAtMillis }.thenByDescending { it.id }
+        )
+
+        val matchedSession = sortedSessions.firstOrNull { session ->
+            val sets = allSets[session.id].orEmpty()
+            val exNames = sets.mapNotNull { exercisesById[it.exerciseId]?.displayName }.distinct()
+            val classification = IrisXClassifier.classifyWorkout(session.title, exNames, aliases, overrides)
+            val normPrimary = normalize(classification.primaryCategory.displayName)
+            val normTitle = normalize(session.title)
+            val normDetected = normalize(detectedMuscle)
+            normPrimary == normDetected ||
+                normPrimary.contains(normDetected) ||
+                normDetected.contains(normPrimary) ||
+                normTitle.contains(normRequested) ||
+                exNames.any { ex ->
+                    normalize(IrisXClassifier.detectMuscleGroup(ex, aliases, overrides)).contains(normDetected)
+                }
+        }
+
+        if (matchedSession == null) {
+            return IrisXResponse.Success(
+                message = "No encontré ninguna sesión previa clasificada en '$categoryOrMuscle'.",
+                actionTaken = "QUERY_LAST_CATEGORY_NOT_FOUND"
+            )
+        }
+
+        val sessionSets = allSets[matchedSession.id].orEmpty()
+            .sortedWith(compareBy<WorkoutSetEntity> { it.executionOrder }.thenBy { it.id })
+        val dateStr = DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT)
+            .format(Date(matchedSession.startedAtMillis))
+        val byExercise = sessionSets.groupBy { exercisesById[it.exerciseId]?.displayName ?: "Ejercicio #${it.exerciseId}" }
+
+        contextState = contextState.copy(
+            activeSessionId = matchedSession.id,
+            activeMuscleGroup = detectedMuscle,
+            lastQueryDomain = "LAST_CATEGORY_WORKOUT"
+        )
+
+        val msg = buildString {
+            append("📋 Última sesión de ${detectedMuscle.replaceFirstChar { it.titlecase(Locale.ROOT) }}: ${matchedSession.title} ($dateStr)\n")
+            append("Series totales: ${sessionSets.size} | Ejercicios: ${byExercise.size}\n")
+            byExercise.forEach { (exName, sets) ->
+                val formattedSets = sets.joinToString(", ") { s ->
+                    "${SportsMetricsCalculator.formatKg(s.loadGrams / 1000.0)} × ${s.repetitions}"
+                }
+                append("• $exName: $formattedSets\n")
+            }
+        }.trim()
+
+        return IrisXResponse.Success(
+            message = msg,
+            actionTaken = "QUERY_LAST_SESSION_BY_CATEGORY",
+            payload = matchedSession
+        )
     }
 
     private suspend fun handleQueryLastWorkout(): IrisXResponse {

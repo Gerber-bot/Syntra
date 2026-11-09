@@ -44,6 +44,10 @@ sealed class IrisXIntent {
     object QueryPreferences : IrisXIntent()
     object QueryRoutines : IrisXIntent()
     object ClearConversationHistory : IrisXIntent()
+    // Sprint 05: Active workout & rapid contextual queries
+    data class QueryLastExerciseLoad(val exerciseName: String? = null) : IrisXIntent()
+    data class QueryExerciseAlternatives(val exerciseName: String? = null) : IrisXIntent()
+    data class QueryLastSessionByCategory(val categoryOrMuscle: String) : IrisXIntent()
     data class GeneralQuery(val text: String) : IrisXIntent()
 }
 
