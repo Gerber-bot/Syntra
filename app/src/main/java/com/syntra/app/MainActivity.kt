@@ -34,11 +34,15 @@ import com.syntra.app.data.backup.BackupManager
 import com.syntra.app.data.backup.BackupValidationResult
 import com.syntra.app.data.backup.SyntraBackupPayload
 import com.syntra.app.domain.*
+import com.syntra.app.domain.neural.DeterministicInferenceEngine
+import com.syntra.app.domain.neural.LlamaCppInferenceEngine
+import com.syntra.app.domain.neural.NeuralInferenceEngine
 import com.syntra.app.ui.analytics.AnalyticsAndCoachScreen
 import com.syntra.app.ui.categories.ManageCategoriesDialog
 import com.syntra.app.ui.exercises.ExerciseLibraryDialog
 import com.syntra.app.ui.history.EditWorkoutSessionDialog
 import com.syntra.app.ui.irisx.IrisXConsoleDialog
+import com.syntra.app.ui.irisx.ManageNeuralModelDialog
 import com.syntra.app.ui.parser.EditExercisePreviewDialog
 import com.syntra.app.ui.routines.RoutinesScreen
 import com.syntra.app.ui.week.WeekScreen
@@ -81,12 +85,25 @@ private fun weightGrams(input: String): Int? = InputValidators.parseWeightGrams(
 
 private fun displayKg(grams: Int): String = InputValidators.formatWeightKg(grams)
 
+private fun getAppVersionName(context: android.content.Context): String {
+    return try {
+        val pInfo = context.packageManager.getPackageInfo(context.packageName, 0)
+        pInfo.versionName ?: "0.7.0-alpha2"
+    } catch (_: Exception) {
+        "0.7.0-alpha2"
+    }
+}
+
 private val SUB_PAGES_WITH_BACK_TO_HOME = setOf("Semana", "Peso", "Estadísticas", "Rutinas", "Analizar")
 private val BOTTOM_NAV_DESTINATIONS = listOf("Inicio", "Historial", "Semana", "Peso", "Perfil")
 
 @Composable
 private fun TrainerApp(db: AppDatabase) {
     val scope = rememberCoroutineScope()
+    val fallbackEngine = remember(db) { DeterministicInferenceEngine(db) }
+    val neuralEngine = remember(fallbackEngine) { LlamaCppInferenceEngine(fallbackEngine) }
+    var showManageNeuralModelDialog by remember { mutableStateOf(false) }
+
     val profileFlow = remember(db) { db.profileDao().observe() }
     val profile by profileFlow.collectAsState(initial = null)
     val activeDraftFlow = remember(db) { db.activeWorkoutDraftDao().observeCurrentDraft() }
@@ -373,8 +390,10 @@ private fun TrainerApp(db: AppDatabase) {
                         ProfileViewScreen(
                             profile = profile!!,
                             db = db,
+                            neuralEngine = neuralEngine,
                             onStartEdit = { isEditingProfile = true },
                             onOpenIrisX = { showIrisXConsole = true },
+                            onOpenManageModels = { showManageNeuralModelDialog = true },
                             onBackToHome = { page = "Inicio" }
                         )
                     }
@@ -389,8 +408,16 @@ private fun TrainerApp(db: AppDatabase) {
         }
         IrisXConsoleDialog(
             db = db,
+            neuralEngine = neuralEngine,
             activeWorkoutTitle = activeWorkoutTitle,
             onDismiss = { showIrisXConsole = false }
+        )
+    }
+
+    if (showManageNeuralModelDialog) {
+        ManageNeuralModelDialog(
+            engine = neuralEngine,
+            onDismiss = { showManageNeuralModelDialog = false }
         )
     }
 }
@@ -399,8 +426,10 @@ private fun TrainerApp(db: AppDatabase) {
 private fun ProfileViewScreen(
     profile: ProfileEntity,
     db: AppDatabase,
+    neuralEngine: NeuralInferenceEngine,
     onStartEdit: () -> Unit,
     onOpenIrisX: () -> Unit,
+    onOpenManageModels: () -> Unit,
     onBackToHome: () -> Unit
 ) {
     val context = LocalContext.current
@@ -902,6 +931,51 @@ private fun ProfileViewScreen(
             }
         }
 
+        // Card 6: Modelos neuronales locales (IrisX GGUF)
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF161616)),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Modelos neuronales GGUF",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        text = if (neuralEngine.isModelLoaded()) "● Activo" else "○ Inactivo",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (neuralEngine.isModelLoaded()) MaterialTheme.colorScheme.primary else Color.Gray
+                    )
+                }
+                Text(
+                    text = if (neuralEngine.isModelLoaded())
+                        "Modelo activo: ${neuralEngine.currentModelFile?.name} (${String.format("%.1f", (neuralEngine.currentModelFile?.length() ?: 0) / (1024.0 * 1024.0))} MB). Inferencia offline lista."
+                    else
+                        "Importá y administrá modelos como Qwen3-0.6B Q4_K_M para ejecutar inferencia neuronal privada 100% offline con llama.cpp en tu teléfono.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Button(
+                    onClick = onOpenManageModels,
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("🧠 Administrar modelos GGUF", color = Color.Black, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+
         if (showExerciseLibrary) {
             ExerciseLibraryDialog(
                 db = db,
@@ -1170,6 +1244,8 @@ private fun HomeScreen(
     onOpenIrisX: () -> Unit
 ) {
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+    val appVersionName = remember(context) { getAppVersionName(context) }
     val history by remember(db) { db.weighInDao().observeAll() }.collectAsState(initial = emptyList())
     val exercisesById = remember(exercises) { exercises.associateBy { it.id } }
 
@@ -1360,7 +1436,7 @@ private fun HomeScreen(
                     color = Color.White
                 )
                 Text(
-                    text = "Syntra v0.6.0 • Asistente IrisX",
+                    text = "Syntra v$appVersionName • Asistente IrisX",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.primary
                 )

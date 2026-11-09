@@ -15,6 +15,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -36,6 +37,7 @@ data class ChatMessage(
 @Composable
 fun IrisXConsoleDialog(
     db: AppDatabase,
+    neuralEngine: NeuralInferenceEngine? = null,
     activeWorkoutTitle: String? = null,
     onDismiss: () -> Unit
 ) {
@@ -45,7 +47,7 @@ fun IrisXConsoleDialog(
     val irisXCore = remember(repo) { IrisXCore(repo) }
 
     val fallbackEngine = remember(db) { DeterministicInferenceEngine(db) }
-    val neuralEngine = remember(fallbackEngine) { LlamaCppInferenceEngine(fallbackEngine) }
+    val effectiveNeuralEngine = neuralEngine ?: remember(fallbackEngine) { LlamaCppInferenceEngine(fallbackEngine) }
 
     var inputText by remember { mutableStateOf("") }
     var activeTopicLabel by remember { mutableStateOf<String?>(null) }
@@ -93,9 +95,9 @@ fun IrisXConsoleDialog(
         messages.add(ChatMessage(text = trimmed, isUser = true))
         inputText = ""
 
-        if (neuralEngine.isModelLoaded()) {
+        if (effectiveNeuralEngine.isModelLoaded()) {
             // Neural Engine Path
-            val guardian = IrisXGuardian.evaluateResources(context, neuralEngine.currentModelFile?.length() ?: 0L)
+            val guardian = IrisXGuardian.evaluateResources(context, effectiveNeuralEngine.currentModelFile?.length() ?: 0L)
             if (!guardian.canProceed) {
                 messages.add(
                     ChatMessage(
@@ -124,7 +126,7 @@ fun IrisXConsoleDialog(
                 val prompt = IrisXContextBuilder.buildPrompt(trimmed, db)
                 val responseBuilder = StringBuilder()
 
-                neuralEngine.generate(prompt, InferenceParams(maxTokens = 256)).collect { chunk ->
+                effectiveNeuralEngine.generate(prompt, InferenceParams(maxTokens = 256)).collect { chunk ->
                     if (chunk.errorMessage != null) {
                         responseBuilder.append("\n[Error: ${chunk.errorMessage}]")
                     } else {
@@ -144,9 +146,9 @@ fun IrisXConsoleDialog(
                 }
 
                 // Add metrics footer
-                val m = neuralEngine.metrics
+                val m = effectiveNeuralEngine.metrics
                 if (m.tokensPerSecond > 0.0) {
-                    val finalMsg = "${responseBuilder.toString().trim()}\n\n───\n⚡ ${String.format("%.1f", m.tokensPerSecond)} t/s • ${m.lastInferenceDurationMillis} ms • ${neuralEngine.currentModelFile?.name}"
+                    val finalMsg = "${responseBuilder.toString().trim()}\n\n───\n⚡ ${String.format("%.1f", m.tokensPerSecond)} t/s • ${m.lastInferenceDurationMillis} ms • ${effectiveNeuralEngine.currentModelFile?.name}"
                     if (botMessageIndex < messages.size) {
                         messages[botMessageIndex] = ChatMessage(text = finalMsg, isUser = false)
                     }
@@ -181,7 +183,7 @@ fun IrisXConsoleDialog(
 
     if (showModelManagerDialog) {
         ManageNeuralModelDialog(
-            engine = neuralEngine,
+            engine = effectiveNeuralEngine,
             onDismiss = { showModelManagerDialog = false }
         )
     }
@@ -211,6 +213,7 @@ fun IrisXConsoleDialog(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Row(
+                        modifier = Modifier.weight(1f),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
@@ -222,7 +225,7 @@ fun IrisXConsoleDialog(
                         ) {
                             Text("✦", color = Color.Black, fontWeight = FontWeight.Bold)
                         }
-                        Column {
+                        Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 text = "IrisX Neural Console",
                                 style = MaterialTheme.typography.titleMedium,
@@ -230,18 +233,31 @@ fun IrisXConsoleDialog(
                                 color = Color.White
                             )
                             Text(
-                                text = if (neuralEngine.isModelLoaded())
-                                    "● Motor neuronal activo: ${neuralEngine.currentModelFile?.name}"
+                                text = if (effectiveNeuralEngine.isModelLoaded())
+                                    "● Motor activo: ${effectiveNeuralEngine.currentModelFile?.name}"
                                 else
-                                    "○ Motor determinista: modelo neuronal no disponible",
+                                    "○ Motor determinista",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = if (neuralEngine.isModelLoaded()) MaterialTheme.colorScheme.primary else Color.Gray
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                color = if (effectiveNeuralEngine.isModelLoaded()) MaterialTheme.colorScheme.primary else Color.Gray
                             )
                         }
                     }
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        TextButton(onClick = { showModelManagerDialog = true }) {
-                            Text("🧠 Modelo", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        FilledTonalButton(
+                            onClick = { showModelManagerDialog = true },
+                            colors = ButtonDefaults.filledTonalButtonColors(
+                                containerColor = Color(0xFF262A30),
+                                contentColor = MaterialTheme.colorScheme.primary
+                            ),
+                            shape = RoundedCornerShape(8.dp),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                        ) {
+                            Text("🧠 Modelos", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
                         }
                         IconButton(onClick = onDismiss) {
                             Text("✕", color = Color.Gray, fontWeight = FontWeight.Bold)
@@ -250,6 +266,42 @@ fun IrisXConsoleDialog(
                 }
 
                 HorizontalDivider(color = Color(0xFF2A2A2A))
+
+                if (!effectiveNeuralEngine.isModelLoaded()) {
+                    Surface(
+                        color = Color(0xFF1E222A),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Motor determinista (offline)",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White
+                                )
+                                Text(
+                                    text = "Cargá Qwen3-0.6B para inferencia neuronal.",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = Color.Gray
+                                )
+                            }
+                            Button(
+                                onClick = { showModelManagerDialog = true },
+                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
+                                shape = RoundedCornerShape(6.dp),
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp)
+                            ) {
+                                Text("Cargar GGUF", color = Color.Black, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
 
                 // Suggestion chips
                 Row(
@@ -348,7 +400,7 @@ fun IrisXConsoleDialog(
                     if (isGenerating) {
                         Button(
                             onClick = {
-                                neuralEngine.cancel()
+                                effectiveNeuralEngine.cancel()
                                 currentGenerationJob?.cancel()
                                 isGenerating = false
                             },
