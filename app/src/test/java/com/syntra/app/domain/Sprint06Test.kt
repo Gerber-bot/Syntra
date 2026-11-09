@@ -1,9 +1,7 @@
 package com.syntra.app.domain
 
 import com.syntra.app.data.CategoryEntity
-import com.syntra.app.data.ExerciseEntity
 import com.syntra.app.data.WorkoutSessionEntity
-import com.syntra.app.data.WorkoutSetEntity
 import com.syntra.app.data.backup.*
 import org.junit.Assert.*
 import org.junit.Test

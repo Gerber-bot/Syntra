@@ -34,7 +34,6 @@ import com.syntra.app.data.backup.BackupManager
 import com.syntra.app.data.backup.BackupValidationResult
 import com.syntra.app.data.backup.SyntraBackupPayload
 import com.syntra.app.domain.*
-import com.syntra.app.domain.irisx.IrisXClassifier
 import com.syntra.app.ui.analytics.AnalyticsAndCoachScreen
 import com.syntra.app.ui.categories.ManageCategoriesDialog
 import com.syntra.app.ui.exercises.ExerciseLibraryDialog
@@ -81,6 +80,9 @@ class MainActivity : ComponentActivity() {
 private fun weightGrams(input: String): Int? = InputValidators.parseWeightGrams(input)
 
 private fun displayKg(grams: Int): String = InputValidators.formatWeightKg(grams)
+
+private val SUB_PAGES_WITH_BACK_TO_HOME = setOf("Semana", "Peso", "Estadísticas", "Rutinas", "Analizar")
+private val BOTTOM_NAV_DESTINATIONS = listOf("Inicio", "Historial", "Semana", "Peso", "Perfil")
 
 @Composable
 private fun TrainerApp(db: AppDatabase) {
@@ -205,7 +207,7 @@ private fun TrainerApp(db: AppDatabase) {
         showIrisXConsole = false
     }
 
-    BackHandler(enabled = !showIrisXConsole && page in setOf("Semana", "Peso", "Estadísticas", "Rutinas", "Analizar")) {
+    BackHandler(enabled = !showIrisXConsole && page in SUB_PAGES_WITH_BACK_TO_HOME) {
         page = "Inicio"
     }
 
@@ -230,7 +232,7 @@ private fun TrainerApp(db: AppDatabase) {
                 containerColor = Color(0xFF141414),
                 contentColor = Color.White
             ) {
-                listOf("Inicio", "Historial", "Semana", "Peso", "Perfil").forEach { destination ->
+                BOTTOM_NAV_DESTINATIONS.forEach { destination ->
                     NavigationBarItem(
                         selected = page == destination,
                         onClick = {

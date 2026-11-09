@@ -7,7 +7,6 @@ import com.syntra.app.data.WorkoutSetEntity
 import com.syntra.app.domain.LoadModality
 import com.syntra.app.domain.MetricDataQuality
 import com.syntra.app.domain.SportsMetricsCalculator
-import java.util.Locale
 import kotlin.math.roundToInt
 
 enum class RecommendationCategory(val displayName: String) {

@@ -3,9 +3,7 @@ package com.syntra.app.domain
 import com.syntra.app.domain.WorkoutPresentation
 import com.syntra.app.domain.WorkoutTextParser
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.sql.DriverManager
 

@@ -20,7 +20,6 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.syntra.app.data.AppDatabase
 import com.syntra.app.domain.irisx.IrisXCore
-import com.syntra.app.domain.irisx.IrisXIntent
 import com.syntra.app.domain.irisx.IrisXResponse
 import com.syntra.app.domain.irisx.RoomIrisXRepository
 import com.syntra.app.domain.neural.*

@@ -7,9 +7,7 @@ import com.syntra.app.domain.LoadModality
 import com.syntra.app.domain.MetricDataQuality
 import com.syntra.app.domain.SportsMetricsCalculator
 import java.text.Normalizer
-import java.util.Calendar
 import java.util.Locale
-import java.util.TimeZone
 import kotlin.math.roundToInt
 
 /**

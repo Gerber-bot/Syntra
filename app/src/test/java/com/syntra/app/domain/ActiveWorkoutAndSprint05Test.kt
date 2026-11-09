@@ -7,7 +7,6 @@ import com.syntra.app.data.IrisxMemoryEntity
 import com.syntra.app.data.IrisxMessageEntity
 import com.syntra.app.data.ProfileEntity
 import com.syntra.app.data.RoutineEntity
-import com.syntra.app.data.RoutineExerciseEntity
 import com.syntra.app.data.WorkoutSessionEntity
 import com.syntra.app.data.WorkoutSetEntity
 import com.syntra.app.data.backup.ActiveWorkoutDraftBackupDto

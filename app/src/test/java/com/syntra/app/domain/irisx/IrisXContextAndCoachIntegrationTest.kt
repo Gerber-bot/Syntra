@@ -3,7 +3,6 @@ package com.syntra.app.domain.irisx
 import com.syntra.app.data.ExerciseEntity
 import com.syntra.app.data.IrisxConversationEntity
 import com.syntra.app.data.IrisxMessageEntity
-import com.syntra.app.data.ProfileEntity
 import com.syntra.app.data.WorkoutSessionEntity
 import com.syntra.app.data.WorkoutSetEntity
 import kotlinx.coroutines.runBlocking

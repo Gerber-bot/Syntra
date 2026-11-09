@@ -1,7 +1,6 @@
 package com.syntra.app.domain.irisx
 
 import com.syntra.app.data.IrisxConversationEntity
-import com.syntra.app.data.IrisxMessageEntity
 import com.syntra.app.domain.ExerciseCatalog
 import java.text.Normalizer
 import java.util.Locale
