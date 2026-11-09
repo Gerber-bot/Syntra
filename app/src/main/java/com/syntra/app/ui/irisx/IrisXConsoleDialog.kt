@@ -34,6 +34,7 @@ data class ChatMessage(
 @Composable
 fun IrisXConsoleDialog(
     db: AppDatabase,
+    activeWorkoutTitle: String? = null,
     onDismiss: () -> Unit
 ) {
     val scope = rememberCoroutineScope()
@@ -146,10 +147,15 @@ fun IrisXConsoleDialog(
                                 color = Color.White
                             )
                             Text(
-                                text = if (activeTopicLabel != null) {
-                                    "Contexto activo: $activeTopicLabel"
-                                } else {
-                                    "Núcleo offline • Memoria contextual SQLite"
+                                text = when {
+                                    activeWorkoutTitle != null && activeTopicLabel != null ->
+                                        "En curso: $activeWorkoutTitle • Contexto: $activeTopicLabel"
+                                    activeWorkoutTitle != null ->
+                                        "Entrenamiento activo: $activeWorkoutTitle (notas preservadas)"
+                                    activeTopicLabel != null ->
+                                        "Contexto activo: $activeTopicLabel"
+                                    else ->
+                                        "Núcleo offline • Memoria contextual SQLite"
                                 },
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.primary
@@ -189,14 +195,25 @@ fun IrisXConsoleDialog(
                         .horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    val suggestions = listOf(
-                        "¿Cómo progresé en espalda?",
-                        "¿Y el mes pasado?",
-                        "Recomendaciones",
-                        "Último entreno",
-                        "Mis rutinas",
-                        "Ayuda comandos"
-                    )
+                    val suggestions = if (activeWorkoutTitle != null) {
+                        listOf(
+                            "¿Cuánto levanté la última vez en sentadilla?",
+                            "¿Qué ejercicio puedo hacer en lugar de press de banca?",
+                            "Última sesión de pecho",
+                            "Recomendaciones",
+                            "¿Cómo progresé en espalda?",
+                            "Último entreno"
+                        )
+                    } else {
+                        listOf(
+                            "¿Cómo progresé en espalda?",
+                            "¿Y el mes pasado?",
+                            "¿Cuánto levanté la última vez en sentadilla?",
+                            "Recomendaciones",
+                            "Último entreno",
+                            "Mis rutinas"
+                        )
+                    }
                     suggestions.forEach { chipText ->
                         SuggestionChip(
                             onClick = { sendMessage(chipText) },

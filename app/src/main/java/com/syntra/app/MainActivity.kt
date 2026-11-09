@@ -12,6 +12,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -38,6 +39,7 @@ import com.syntra.app.ui.exercises.ExerciseLibraryDialog
 import com.syntra.app.ui.irisx.IrisXConsoleDialog
 import com.syntra.app.ui.parser.EditExercisePreviewDialog
 import com.syntra.app.ui.routines.RoutinesScreen
+import com.syntra.app.ui.workout.ActiveWorkoutScreen
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.text.DateFormat
@@ -81,6 +83,42 @@ private fun TrainerApp(db: AppDatabase) {
     val scope = rememberCoroutineScope()
     val profileFlow = remember(db) { db.profileDao().observe() }
     val profile by profileFlow.collectAsState(initial = null)
+    val activeDraftFlow = remember(db) { db.activeWorkoutDraftDao().observeCurrentDraft() }
+    val activeDraft by activeDraftFlow.collectAsState(initial = null)
+    val sessions by remember(db) { db.workoutSessionDao().observeAll() }.collectAsState(initial = emptyList())
+    val allSets by remember(db) { db.workoutSetDao().observeAll() }.collectAsState(initial = emptyList())
+    val exercises by remember(db) { db.exerciseDao().observeAll() }.collectAsState(initial = emptyList())
+    val memories by remember(db) { db.irisxMemoryDao().observeAll() }.collectAsState(initial = emptyList())
+    val routines by remember(db) { db.routineDao().observeAllRoutines() }.collectAsState(initial = emptyList())
+    val routineExercises by remember(db) { db.routineDao().observeAllRoutineExercises() }.collectAsState(initial = emptyList())
+
+    val routinesWithExercises = remember(routines, routineExercises) {
+        val grouped = routineExercises.groupBy { it.routineId }
+        routines.map { r -> RoutineManager.fromEntities(r, grouped[r.id].orEmpty()) }
+    }
+    val learnedAliases = remember(memories) {
+        memories.filter { it.memoryType == "ALIAS" }.associate { it.sourceKey to it.targetValue }
+    }
+    val muscleOverrides = remember(memories, exercises) {
+        val exGroups = exercises.associate { it.normalizedName to it.muscleGroup }
+        val memOverrides = memories.filter { it.memoryType == "CLASSIFICATION_OVERRIDE" }.associate { it.sourceKey to it.targetValue }
+        exGroups + memOverrides
+    }
+    val sequenceConfig = remember(memories) {
+        NextSessionPlanner.extractConfigFromMemories(memories)
+    }
+    val nextSessionPlan = remember(sequenceConfig, sessions, allSets, exercises, routinesWithExercises, learnedAliases, muscleOverrides) {
+        NextSessionPlanner.computeNextSession(
+            config = sequenceConfig,
+            completedSessions = sessions,
+            allSets = allSets,
+            exercises = exercises,
+            routines = routinesWithExercises,
+            learnedAliases = learnedAliases,
+            muscleOverrides = muscleOverrides
+        )
+    }
+
     var loaded by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var page by remember { mutableStateOf("Inicio") }
@@ -164,13 +202,14 @@ private fun TrainerApp(db: AppDatabase) {
         contentWindowInsets = WindowInsets.safeDrawing,
         floatingActionButton = {
             if (!isEditingProfile) {
-                ExtendedFloatingActionButton(
+                FloatingActionButton(
                     onClick = { showIrisXConsole = true },
                     containerColor = MaterialTheme.colorScheme.primary,
                     contentColor = Color.Black,
-                    shape = RoundedCornerShape(16.dp)
+                    shape = CircleShape,
+                    modifier = Modifier.size(54.dp)
                 ) {
-                    Text("✦ IrisX", fontWeight = FontWeight.Bold)
+                    Text("✦", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleLarge)
                 }
             }
         },
@@ -222,11 +261,26 @@ private fun TrainerApp(db: AppDatabase) {
                 "Inicio" -> HomeScreen(
                     profile = profile!!,
                     db = db,
-                    onNavigate = { targetPage -> page = targetPage }
+                    sessions = sessions,
+                    allSets = allSets,
+                    exercises = exercises,
+                    learnedAliases = learnedAliases,
+                    muscleOverrides = muscleOverrides,
+                    nextSessionPlan = nextSessionPlan,
+                    activeDraft = activeDraft,
+                    onNavigate = { targetPage -> page = targetPage },
+                    onOpenIrisX = { showIrisXConsole = true }
+                )
+                "EntrenamientoActivo" -> ActiveWorkoutScreen(
+                    db = db,
+                    suggestedNextPlan = nextSessionPlan,
+                    routinesWithExercises = routinesWithExercises,
+                    onBackToHome = { page = "Inicio" },
+                    onCompletedNavigateToHistory = { page = "Historial" }
                 )
                 "Historial" -> HistoryScreen(
                     db = db,
-                    onNavigateToAnalyze = { page = "Analizar" }
+                    onNavigateToAnalyze = { page = "EntrenamientoActivo" }
                 )
                 "Analizar" -> ParserScreen(
                     db = db,
@@ -305,8 +359,12 @@ private fun TrainerApp(db: AppDatabase) {
     }
 
     if (showIrisXConsole) {
+        val activeWorkoutTitle = activeDraft?.let { d ->
+            d.title.ifBlank { d.plannedCategory ?: "Sesión en curso" }
+        }
         IrisXConsoleDialog(
             db = db,
+            activeWorkoutTitle = activeWorkoutTitle,
             onDismiss = { showIrisXConsole = false }
         )
     }
@@ -918,10 +976,133 @@ private fun ProfileForm(
 private fun HomeScreen(
     profile: ProfileEntity,
     db: AppDatabase,
-    onNavigate: (String) -> Unit
+    sessions: List<WorkoutSessionEntity>,
+    allSets: List<WorkoutSetEntity>,
+    exercises: List<ExerciseEntity>,
+    learnedAliases: Map<String, String>,
+    muscleOverrides: Map<String, String>,
+    nextSessionPlan: NextSessionPlan,
+    activeDraft: ActiveWorkoutDraftEntity?,
+    onNavigate: (String) -> Unit,
+    onOpenIrisX: () -> Unit
 ) {
+    val scope = rememberCoroutineScope()
     val history by remember(db) { db.weighInDao().observeAll() }.collectAsState(initial = emptyList())
-    val sessions by remember(db) { db.workoutSessionDao().observeAll() }.collectAsState(initial = emptyList())
+    val exercisesById = remember(exercises) { exercises.associateBy { it.id } }
+
+    var showSequenceConfigDialog by remember { mutableStateOf(false) }
+    var sequenceInputText by remember(nextSessionPlan.sequenceSteps) {
+        mutableStateOf(
+            if (nextSessionPlan.sequenceSteps.isNotEmpty()) {
+                nextSessionPlan.sequenceSteps.joinToString(", ")
+            } else {
+                "Pecho, Espalda, Piernas"
+            }
+        )
+    }
+    var manualStepInput by remember(nextSessionPlan.nextCategoryName, nextSessionPlan.manualOverrideActive) {
+        mutableStateOf(if (nextSessionPlan.manualOverrideActive) nextSessionPlan.nextCategoryName.orEmpty() else "")
+    }
+
+    if (showSequenceConfigDialog) {
+        AlertDialog(
+            onDismissRequest = { showSequenceConfigDialog = false },
+            containerColor = Color(0xFF1E1E1E),
+            title = {
+                Text(
+                    text = "Configurar secuencia de entrenamiento",
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = "Definí tu orden rotativo (separado por comas). Syntra avanzará automáticamente al siguiente paso sólo cuando completes y guardes una sesión.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.LightGray
+                    )
+                    OutlinedTextField(
+                        value = sequenceInputText,
+                        onValueChange = { sequenceInputText = it },
+                        label = { Text("Secuencia (ej. Pecho, Espalda, Piernas)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = manualStepInput,
+                        onValueChange = { manualStepInput = it },
+                        label = { Text("Elegir manualmente próxima sesión (opcional)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        scope.launch {
+                            val now = System.currentTimeMillis()
+                            val steps = NextSessionPlanner.parseSequenceSteps(sequenceInputText)
+                            val serialized = NextSessionPlanner.serializeSequenceSteps(steps)
+                            val existingSteps = db.irisxMemoryDao().findByTypeAndKey(
+                                NextSessionPlanner.MEMORY_TYPE_SEQUENCE,
+                                NextSessionPlanner.KEY_STEPS
+                            )
+                            if (serialized.isNotBlank()) {
+                                db.irisxMemoryDao().insert(
+                                    IrisxMemoryEntity(
+                                        id = existingSteps?.id ?: 0,
+                                        memoryType = NextSessionPlanner.MEMORY_TYPE_SEQUENCE,
+                                        sourceKey = NextSessionPlanner.KEY_STEPS,
+                                        targetValue = serialized,
+                                        confidence = 1.0,
+                                        createdAtMillis = existingSteps?.createdAtMillis ?: now,
+                                        updatedAtMillis = now
+                                    )
+                                )
+                            } else if (existingSteps != null) {
+                                db.irisxMemoryDao().deleteById(existingSteps.id)
+                            }
+
+                            val existingManual = db.irisxMemoryDao().findByTypeAndKey(
+                                NextSessionPlanner.MEMORY_TYPE_SEQUENCE,
+                                NextSessionPlanner.KEY_MANUAL_NEXT
+                            )
+                            val cleanManual = manualStepInput.trim()
+                            if (cleanManual.isNotBlank()) {
+                                db.irisxMemoryDao().insert(
+                                    IrisxMemoryEntity(
+                                        id = existingManual?.id ?: 0,
+                                        memoryType = NextSessionPlanner.MEMORY_TYPE_SEQUENCE,
+                                        sourceKey = NextSessionPlanner.KEY_MANUAL_NEXT,
+                                        targetValue = cleanManual,
+                                        confidence = 1.0,
+                                        createdAtMillis = existingManual?.createdAtMillis ?: now,
+                                        updatedAtMillis = now
+                                    )
+                                )
+                            } else if (existingManual != null) {
+                                db.irisxMemoryDao().deleteById(existingManual.id)
+                            }
+                            showSequenceConfigDialog = false
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = Color.Black
+                    )
+                ) {
+                    Text("Guardar secuencia", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                OutlinedButton(onClick = { showSequenceConfigDialog = false }) {
+                    Text("Cancelar", color = Color.White)
+                }
+            }
+        )
+    }
 
     Column(
         modifier = Modifier
@@ -929,135 +1110,78 @@ private fun HomeScreen(
             .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        Column {
-            Text(
-                text = "Hola, ${profile.preferredName}",
-                style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.Bold,
-                color = Color.White
-            )
-            Text(
-                text = "Syntra v0.4.0 • Asistente IrisX",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.primary
-            )
-        }
-
-        // Summary Cards
+        // 1. Saludo personalizado
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Card(
-                modifier = Modifier.weight(1f),
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF161616)),
-                shape = RoundedCornerShape(12.dp)
+            Column {
+                Text(
+                    text = "Hola, ${profile.preferredName}",
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
+                )
+                Text(
+                    text = "Syntra v0.5.0 • Asistente IrisX",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+            Surface(
+                color = Color(0xFF161616),
+                shape = RoundedCornerShape(10.dp)
             ) {
-                Column(Modifier.padding(12.dp)) {
-                    Text("ÚLTIMO PESO", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
-                    Text(
-                        text = history.firstOrNull()?.let { displayKg(it.weightGrams) + " kg" } ?: "Sin datos",
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White
+                Text(
+                    text = history.firstOrNull()?.let { "⚖ ${displayKg(it.weightGrams)} kg" } ?: "⚖ Sin peso",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = Color.LightGray,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                )
+            }
+        }
+
+        // 2. Tarjeta de última sesión (Categoría, Fecha, Cantidad de ejercicios, Cantidad de series)
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF141414)),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            if (sessions.isNotEmpty()) {
+                val latest = sessions.first()
+                val latestSets = remember(latest.id, allSets) { allSets.filter { it.sessionId == latest.id } }
+                val latestExerciseCount = remember(latestSets) { latestSets.map { it.exerciseId }.distinct().size }
+                val latestCategory = remember(latest, latestSets, exercisesById, learnedAliases, muscleOverrides) {
+                    NextSessionPlanner.classifyCompletedSession(
+                        session = latest,
+                        sessionSets = latestSets,
+                        exercisesById = exercisesById,
+                        learnedAliases = learnedAliases,
+                        muscleOverrides = muscleOverrides
                     )
                 }
-            }
-            Card(
-                modifier = Modifier.weight(1f),
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF161616)),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Column(Modifier.padding(12.dp)) {
-                    Text("ENTRENAMIENTOS", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
-                    Text(
-                        text = "${sessions.size} sesiones",
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                }
-            }
-        }
+                val dateStr = DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT)
+                    .format(Date(latest.startedAtMillis))
 
-        // Quick Actions (Accesos rápidos)
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            OutlinedButton(
-                onClick = { onNavigate("Historial") },
-                modifier = Modifier.weight(1f).height(46.dp),
-                shape = RoundedCornerShape(8.dp)
-            ) {
-                Text("📋 Historial", color = Color.White, style = MaterialTheme.typography.bodySmall)
-            }
-            OutlinedButton(
-                onClick = { onNavigate("Analizar") },
-                modifier = Modifier.weight(1f).height(46.dp),
-                shape = RoundedCornerShape(8.dp)
-            ) {
-                Text("✎ Analizar", color = Color.White, style = MaterialTheme.typography.bodySmall)
-            }
-            OutlinedButton(
-                onClick = { onNavigate("Peso") },
-                modifier = Modifier.weight(1f).height(46.dp),
-                shape = RoundedCornerShape(8.dp)
-            ) {
-                Text("⚖ Peso", color = Color.White, style = MaterialTheme.typography.bodySmall)
-            }
-        }
-
-        // Sprint 04: Analytics & Coach and Routines access row
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Button(
-                onClick = { onNavigate("Estadísticas") },
-                modifier = Modifier.weight(1f).height(46.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = Color(0xFF1A2824),
-                    contentColor = MaterialTheme.colorScheme.primary
-                ),
-                shape = RoundedCornerShape(8.dp)
-            ) {
-                Text("📊 Estadísticas & Coach", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall)
-            }
-            Button(
-                onClick = { onNavigate("Rutinas") },
-                modifier = Modifier.weight(1f).height(46.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = Color(0xFF1E2226),
-                    contentColor = Color.White
-                ),
-                shape = RoundedCornerShape(8.dp)
-            ) {
-                Text("🗂 Rutinas", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall)
-            }
-        }
-
-        if (sessions.isNotEmpty()) {
-            val latest = sessions.first()
-            val dateStr = DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(latest.startedAtMillis))
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF141414)),
-                shape = RoundedCornerShape(12.dp)
-            ) {
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(14.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(14.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column {
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(3.dp)
+                    ) {
                         Text(
                             text = "ÚLTIMA SESIÓN",
                             style = MaterialTheme.typography.labelSmall,
                             color = Color.Gray
                         )
                         Text(
-                            text = latest.title,
+                            text = "${latestCategory.icon} ${latestCategory.displayName} — ${latest.title}",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
                             color = Color.White
@@ -1067,36 +1191,186 @@ private fun HomeScreen(
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.primary
                         )
+                        Text(
+                            text = "$latestExerciseCount ejercicios • ${latestSets.size} series",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color.LightGray
+                        )
                     }
                     Button(
                         onClick = { onNavigate("Historial") },
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF222222))
                     ) {
-                        Text("Ver detalle", color = Color.White, style = MaterialTheme.typography.bodySmall)
+                        Text("Historial", color = Color.White, style = MaterialTheme.typography.bodySmall)
                     }
+                }
+            } else {
+                Column(
+                    modifier = Modifier.padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text("ÚLTIMA SESIÓN", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                    Text(
+                        text = "Aún no registraste sesiones completadas",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+                    Text(
+                        text = "Iniciá tu primer entrenamiento activo para ver acá tu categoría, ejercicios y series.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.Gray
+                    )
                 }
             }
         }
 
+        // 3. Tarjeta de próxima sesión (Secuencia configurable)
         Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF161C1A)),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            text = "PRÓXIMA SESIÓN PLANIFICADA",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Text(
+                            text = if (nextSessionPlan.nextCategoryName != null) {
+                                "Próxima sesión: ${nextSessionPlan.nextCategoryName}"
+                            } else {
+                                "Próxima sesión: Sin secuencia definida"
+                            },
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+                    }
+                    OutlinedButton(
+                        onClick = { showSequenceConfigDialog = true },
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                    ) {
+                        Text(
+                            text = if (nextSessionPlan.isConfigured) "⚙ Secuencia" else "Configurar",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+                Text(
+                    text = nextSessionPlan.reason,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.LightGray
+                )
+                if (nextSessionPlan.suggestedRoutine != null) {
+                    Text(
+                        text = "🗂 Rutina vinculada: ${nextSessionPlan.suggestedRoutine.routine.name} (${nextSessionPlan.suggestedRoutine.exercises.size} ejercicios)",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+        }
+
+        // 4. Botón principal destacado: ▶ Iniciar entrenamiento (o Continuar si hay borrador activo)
+        val hasRecoverableDraft = activeDraft != null &&
+            WorkoutSessionState.fromString(activeDraft.state) in setOf(
+                WorkoutSessionState.ACTIVE,
+                WorkoutSessionState.REVIEW_PENDING,
+                WorkoutSessionState.ERROR
+            )
+
+        Button(
+            onClick = { onNavigate("EntrenamientoActivo") },
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(56.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = MaterialTheme.colorScheme.primary,
+                contentColor = Color.Black
+            ),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            val btnLabel = if (hasRecoverableDraft) {
+                val draftTitle = activeDraft?.title?.takeIf { it.isNotBlank() }
+                    ?: activeDraft?.plannedCategory
+                    ?: "en curso"
+                "▶ Continuar entrenamiento ($draftTitle)"
+            } else {
+                "▶ Iniciar entrenamiento"
+            }
+            Text(
+                text = btnLabel,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+        }
+
+        // 5. Tarjeta IrisX + accesos limpios a Estadísticas y Rutinas
+        Card(
+            onClick = onOpenIrisX,
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(containerColor = Color(0xFF121A18)),
             shape = RoundedCornerShape(12.dp)
         ) {
             Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "✦ IrisX — Copiloto deportivo offline",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        text = "Abrir consola →",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
                 Text(
-                    text = "IrisX Core",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.primary
-                )
-                Text(
-                    text = "Tu copiloto privado procesa texto de entrenamiento y mantiene tu historial local sin conexión.",
+                    text = "Consultá cargas previas, alternativas de ejercicios, progresión por grupo muscular o recomendaciones de IrisX Coach en cualquier momento.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            OutlinedButton(
+                onClick = { onNavigate("Estadísticas") },
+                modifier = Modifier.weight(1f).height(44.dp),
+                shape = RoundedCornerShape(8.dp)
+            ) {
+                Text("📊 Estadísticas & Coach", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodySmall)
+            }
+            OutlinedButton(
+                onClick = { onNavigate("Rutinas") },
+                modifier = Modifier.weight(1f).height(44.dp),
+                shape = RoundedCornerShape(8.dp)
+            ) {
+                Text("🗂 Rutinas", color = Color.White, style = MaterialTheme.typography.bodySmall)
+            }
+        }
+
+        Spacer(Modifier.height(56.dp))
     }
 }
 
