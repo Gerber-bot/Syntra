@@ -2,6 +2,7 @@ package com.syntra.app
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -35,10 +36,13 @@ import com.syntra.app.data.backup.SyntraBackupPayload
 import com.syntra.app.domain.*
 import com.syntra.app.domain.irisx.IrisXClassifier
 import com.syntra.app.ui.analytics.AnalyticsAndCoachScreen
+import com.syntra.app.ui.categories.ManageCategoriesDialog
 import com.syntra.app.ui.exercises.ExerciseLibraryDialog
+import com.syntra.app.ui.history.EditWorkoutSessionDialog
 import com.syntra.app.ui.irisx.IrisXConsoleDialog
 import com.syntra.app.ui.parser.EditExercisePreviewDialog
 import com.syntra.app.ui.routines.RoutinesScreen
+import com.syntra.app.ui.week.WeekScreen
 import com.syntra.app.ui.workout.ActiveWorkoutScreen
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -197,6 +201,14 @@ private fun TrainerApp(db: AppDatabase) {
         return
     }
 
+    BackHandler(enabled = showIrisXConsole) {
+        showIrisXConsole = false
+    }
+
+    BackHandler(enabled = !showIrisXConsole && page in setOf("Semana", "Peso", "Estadísticas", "Rutinas", "Analizar")) {
+        page = "Inicio"
+    }
+
     Scaffold(
         containerColor = Color.Black,
         contentWindowInsets = WindowInsets.safeDrawing,
@@ -218,7 +230,7 @@ private fun TrainerApp(db: AppDatabase) {
                 containerColor = Color(0xFF141414),
                 contentColor = Color.White
             ) {
-                listOf("Inicio", "Historial", "Analizar", "Peso", "Perfil").forEach { destination ->
+                listOf("Inicio", "Historial", "Semana", "Peso", "Perfil").forEach { destination ->
                     NavigationBarItem(
                         selected = page == destination,
                         onClick = {
@@ -230,7 +242,7 @@ private fun TrainerApp(db: AppDatabase) {
                                 text = when(destination) {
                                     "Inicio" -> "⌂"
                                     "Historial" -> "📋"
-                                    "Analizar" -> "✎"
+                                    "Semana" -> "📅"
                                     "Peso" -> "⚖"
                                     else -> "⚙"
                                 },
@@ -280,7 +292,14 @@ private fun TrainerApp(db: AppDatabase) {
                 )
                 "Historial" -> HistoryScreen(
                     db = db,
-                    onNavigateToAnalyze = { page = "EntrenamientoActivo" }
+                    onNavigateToAnalyze = { page = "Analizar" },
+                    onNavigateToHome = { page = "Inicio" }
+                )
+                "Semana" -> WeekScreen(
+                    db = db,
+                    nextSessionPlan = nextSessionPlan,
+                    onNavigateToActiveWorkout = { page = "EntrenamientoActivo" },
+                    onNavigateToHistory = { page = "Historial" }
                 )
                 "Analizar" -> ParserScreen(
                     db = db,
@@ -320,6 +339,9 @@ private fun TrainerApp(db: AppDatabase) {
                     }
                 }
                 "Perfil" -> {
+                    BackHandler(enabled = isEditingProfile) {
+                        isEditingProfile = false
+                    }
                     if (isEditingProfile) {
                         ProfileForm(
                             current = profile,
@@ -350,7 +372,8 @@ private fun TrainerApp(db: AppDatabase) {
                             profile = profile!!,
                             db = db,
                             onStartEdit = { isEditingProfile = true },
-                            onOpenIrisX = { showIrisXConsole = true }
+                            onOpenIrisX = { showIrisXConsole = true },
+                            onBackToHome = { page = "Inicio" }
                         )
                     }
                 }
@@ -375,7 +398,8 @@ private fun ProfileViewScreen(
     profile: ProfileEntity,
     db: AppDatabase,
     onStartEdit: () -> Unit,
-    onOpenIrisX: () -> Unit
+    onOpenIrisX: () -> Unit,
+    onBackToHome: () -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -384,6 +408,19 @@ private fun ProfileViewScreen(
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var pendingRestorePayload by remember { mutableStateOf<SyntraBackupPayload?>(null) }
     var showExerciseLibrary by remember { mutableStateOf(false) }
+    var showManageCategoriesDialog by remember { mutableStateOf(false) }
+
+    BackHandler(enabled = showExerciseLibrary) {
+        showExerciseLibrary = false
+    }
+
+    BackHandler(enabled = showManageCategoriesDialog) {
+        showManageCategoriesDialog = false
+    }
+
+    BackHandler(enabled = !showExerciseLibrary && !showManageCategoriesDialog) {
+        onBackToHome()
+    }
 
     val exportLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/json")
@@ -564,6 +601,144 @@ private fun ProfileViewScreen(
             Text("Editar perfil", fontWeight = FontWeight.Bold)
         }
 
+        // Card: Preferencias de entrenamiento
+        val memories by remember(db) { db.irisxMemoryDao().observeAll() }.collectAsState(initial = emptyList())
+        val keepScreenOnPref = remember(memories) {
+            memories.firstOrNull { it.memoryType == "PREFERENCE" && it.sourceKey == "keep_screen_on_during_workout" }?.targetValue == "true"
+        }
+        val orgModePref = remember(memories) {
+            memories.firstOrNull { it.memoryType == "PREFERENCE" && it.sourceKey == "workout_organization_mode" }?.targetValue ?: "BY_TRAINING_DAY"
+        }
+
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF161616)),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    text = "Preferencias de entrenamiento",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+
+                Text(
+                    text = "Organización en Historial:",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.LightGray
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    FilterChip(
+                        selected = orgModePref == "BY_TRAINING_DAY",
+                        onClick = {
+                            scope.launch {
+                                val now = System.currentTimeMillis()
+                                val existing = db.irisxMemoryDao().findByTypeAndKey("PREFERENCE", "workout_organization_mode")
+                                db.irisxMemoryDao().insert(
+                                    IrisxMemoryEntity(
+                                        id = existing?.id ?: 0,
+                                        memoryType = "PREFERENCE",
+                                        sourceKey = "workout_organization_mode",
+                                        targetValue = "BY_TRAINING_DAY",
+                                        confidence = 1.0,
+                                        createdAtMillis = existing?.createdAtMillis ?: now,
+                                        updatedAtMillis = now
+                                    )
+                                )
+                            }
+                        },
+                        label = { Text("Por día", style = MaterialTheme.typography.labelSmall) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = MaterialTheme.colorScheme.primary,
+                            selectedLabelColor = Color.Black
+                        )
+                    )
+                    FilterChip(
+                        selected = orgModePref == "BY_MUSCLE_GROUP",
+                        onClick = {
+                            scope.launch {
+                                val now = System.currentTimeMillis()
+                                val existing = db.irisxMemoryDao().findByTypeAndKey("PREFERENCE", "workout_organization_mode")
+                                db.irisxMemoryDao().insert(
+                                    IrisxMemoryEntity(
+                                        id = existing?.id ?: 0,
+                                        memoryType = "PREFERENCE",
+                                        sourceKey = "workout_organization_mode",
+                                        targetValue = "BY_MUSCLE_GROUP",
+                                        confidence = 1.0,
+                                        createdAtMillis = existing?.createdAtMillis ?: now,
+                                        updatedAtMillis = now
+                                    )
+                                )
+                            }
+                        },
+                        label = { Text("Por grupo muscular", style = MaterialTheme.typography.labelSmall) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = MaterialTheme.colorScheme.primary,
+                            selectedLabelColor = Color.Black
+                        )
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            text = "Mantener pantalla encendida",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = Color.White
+                        )
+                        Text(
+                            text = "Solo durante la sesión activa (cero wake locks)",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color.Gray
+                        )
+                    }
+                    Switch(
+                        checked = keepScreenOnPref,
+                        onCheckedChange = { isChecked ->
+                            scope.launch {
+                                val now = System.currentTimeMillis()
+                                val existing = db.irisxMemoryDao().findByTypeAndKey("PREFERENCE", "keep_screen_on_during_workout")
+                                db.irisxMemoryDao().insert(
+                                    IrisxMemoryEntity(
+                                        id = existing?.id ?: 0,
+                                        memoryType = "PREFERENCE",
+                                        sourceKey = "keep_screen_on_during_workout",
+                                        targetValue = isChecked.toString(),
+                                        confidence = 1.0,
+                                        createdAtMillis = existing?.createdAtMillis ?: now,
+                                        updatedAtMillis = now
+                                    )
+                                )
+                            }
+                        },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color.Black,
+                            checkedTrackColor = MaterialTheme.colorScheme.primary
+                        )
+                    )
+                }
+
+                OutlinedButton(
+                    onClick = { showManageCategoriesDialog = true },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("📁 Administrar categorías de entrenamiento", style = MaterialTheme.typography.bodySmall, color = Color.White)
+                }
+            }
+        }
+
         // Card 3: Seguridad y copias de seguridad (FASE 1)
         Card(
             modifier = Modifier.fillMaxWidth(),
@@ -625,7 +800,6 @@ private fun ProfileViewScreen(
         }
 
         // Card 4: IrisX Memory (FASE 7)
-        val memories by remember(db) { db.irisxMemoryDao().observeAll() }.collectAsState(initial = emptyList())
         val aliases = remember(memories) { memories.filter { it.memoryType == "ALIAS" } }
 
         Card(
@@ -730,6 +904,13 @@ private fun ProfileViewScreen(
             ExerciseLibraryDialog(
                 db = db,
                 onDismiss = { showExerciseLibrary = false }
+            )
+        }
+
+        if (showManageCategoriesDialog) {
+            ManageCategoriesDialog(
+                db = db,
+                onDismiss = { showManageCategoriesDialog = false }
             )
         }
 
@@ -1006,7 +1187,10 @@ private fun HomeScreen(
 
     if (showSequenceConfigDialog) {
         AlertDialog(
-            onDismissRequest = { showSequenceConfigDialog = false },
+            onDismissRequest = {
+                manualStepInput = ""
+                showSequenceConfigDialog = false
+            },
             containerColor = Color(0xFF1E1E1E),
             title = {
                 Text(
@@ -1016,23 +1200,69 @@ private fun HomeScreen(
                 )
             },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(
-                        text = "Definí tu orden rotativo (separado por comas). Syntra avanzará automáticamente al siguiente paso sólo cuando completes y guardes una sesión.",
+                        text = "1. Secuencia rotativa persistente (separada por comas):",
                         style = MaterialTheme.typography.bodySmall,
-                        color = Color.LightGray
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.primary
                     )
                     OutlinedTextField(
                         value = sequenceInputText,
                         onValueChange = { sequenceInputText = it },
-                        label = { Text("Secuencia (ej. Pecho, Espalda, Piernas)") },
+                        label = { Text("Secuencia rotativa") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
+
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        text = "2. Selección manual de próxima sesión:",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+
+                    if (nextSessionPlan.manualOverrideActive && nextSessionPlan.nextCategoryName != null) {
+                        Surface(
+                            color = Color(0xFF241C14),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(10.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(Modifier.weight(1f)) {
+                                    Text("Turno manual activo:", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                                    Text(nextSessionPlan.nextCategoryName.orEmpty(), fontWeight = FontWeight.Bold, color = Color(0xFFFFB74D))
+                                }
+                                TextButton(
+                                    onClick = {
+                                        scope.launch {
+                                            val existingManual = db.irisxMemoryDao().findByTypeAndKey(
+                                                NextSessionPlanner.MEMORY_TYPE_SEQUENCE,
+                                                NextSessionPlanner.KEY_MANUAL_NEXT
+                                            )
+                                            if (existingManual != null) {
+                                                db.irisxMemoryDao().deleteById(existingManual.id)
+                                            }
+                                            manualStepInput = ""
+                                        }
+                                    }
+                                ) {
+                                    Text("Quitar", color = MaterialTheme.colorScheme.error)
+                                }
+                            }
+                        }
+                    }
+
                     OutlinedTextField(
                         value = manualStepInput,
                         onValueChange = { manualStepInput = it },
-                        label = { Text("Elegir manualmente próxima sesión (opcional)") },
+                        label = { Text("Asignar turno manual para hoy (ej. Piernas)") },
+                        placeholder = { Text("Dejar vacío para seguir rotación") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -1082,9 +1312,10 @@ private fun HomeScreen(
                                         updatedAtMillis = now
                                     )
                                 )
-                            } else if (existingManual != null) {
+                            } else if (existingManual != null && manualStepInput.isNotEmpty()) {
                                 db.irisxMemoryDao().deleteById(existingManual.id)
                             }
+                            manualStepInput = ""
                             showSequenceConfigDialog = false
                         }
                     },
@@ -1093,11 +1324,14 @@ private fun HomeScreen(
                         contentColor = Color.Black
                     )
                 ) {
-                    Text("Guardar secuencia", fontWeight = FontWeight.Bold)
+                    Text("Guardar cambios", fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {
-                OutlinedButton(onClick = { showSequenceConfigDialog = false }) {
+                OutlinedButton(onClick = {
+                    manualStepInput = ""
+                    showSequenceConfigDialog = false
+                }) {
                     Text("Cancelar", color = Color.White)
                 }
             }
@@ -1124,7 +1358,7 @@ private fun HomeScreen(
                     color = Color.White
                 )
                 Text(
-                    text = "Syntra v0.5.0 • Asistente IrisX",
+                    text = "Syntra v0.6.0 • Asistente IrisX",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.primary
                 )
@@ -1273,6 +1507,41 @@ private fun HomeScreen(
                     style = MaterialTheme.typography.bodySmall,
                     color = Color.LightGray
                 )
+                if (nextSessionPlan.manualOverrideActive) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Surface(
+                            color = Color(0xFF261D12),
+                            shape = RoundedCornerShape(4.dp)
+                        ) {
+                            Text(
+                                text = "★ Selección manual activa",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color(0xFFFFB74D),
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                        TextButton(
+                            onClick = {
+                                scope.launch {
+                                    val existingManual = db.irisxMemoryDao().findByTypeAndKey(
+                                        NextSessionPlanner.MEMORY_TYPE_SEQUENCE,
+                                        NextSessionPlanner.KEY_MANUAL_NEXT
+                                    )
+                                    if (existingManual != null) {
+                                        db.irisxMemoryDao().deleteById(existingManual.id)
+                                    }
+                                }
+                            },
+                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
+                        ) {
+                            Text("Volver a rotación ↺", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                        }
+                    }
+                }
                 if (nextSessionPlan.suggestedRoutine != null) {
                     Text(
                         text = "🗂 Rutina vinculada: ${nextSessionPlan.suggestedRoutine.routine.name} (${nextSessionPlan.suggestedRoutine.exercises.size} ejercicios)",
@@ -1961,12 +2230,15 @@ private fun ParserScreen(
 @Composable
 private fun HistoryScreen(
     db: AppDatabase,
-    onNavigateToAnalyze: () -> Unit
+    onNavigateToAnalyze: () -> Unit,
+    onNavigateToHome: () -> Unit
 ) {
     val sessions by remember(db) { db.workoutSessionDao().observeAll() }.collectAsState(initial = emptyList())
     val exercises by remember(db) { db.exerciseDao().observeAll() }.collectAsState(initial = emptyList())
     val allSets by remember(db) { db.workoutSetDao().observeAll() }.collectAsState(initial = emptyList())
     val memories by remember(db) { db.irisxMemoryDao().observeAll() }.collectAsState(initial = emptyList())
+    val configuredCategories by remember(db) { db.categoryDao().observeAllActive() }.collectAsState(initial = emptyList())
+
     val exerciseNameMap = remember(exercises) { exercises.associate { it.id to it.displayName } }
     val memoryAliases = remember(memories) {
         memories.filter { it.memoryType == "ALIAS" }.associate { it.sourceKey to it.targetValue }
@@ -1978,20 +2250,44 @@ private fun HistoryScreen(
     }
     val scope = rememberCoroutineScope()
     var sessionToDelete by remember { mutableStateOf<WorkoutSessionEntity?>(null) }
-    var selectedCategory by remember { mutableStateOf<WorkoutCategoryKey?>(null) }
+    var sessionToEdit by remember { mutableStateOf<WorkoutSessionEntity?>(null) }
+    var selectedCategorySummary by remember { mutableStateOf<DynamicCategorySummary?>(null) }
 
     val sessionCategoryMap = remember(sessions, sessionExerciseNames, memoryAliases) {
         sessions.associate { s ->
             val exNames = sessionExerciseNames[s.id] ?: emptyList()
-            s.id to WorkoutCategoryClassifier.classify(
+            val resolved = WorkoutCategoryClassifier.resolveSessionCategory(
+                explicitCategory = s.category,
                 title = s.title,
                 exerciseNames = exNames,
                 learnedAliases = memoryAliases
             )
+            s.id to resolved
         }
     }
-    val categorySummaries = remember(sessions, sessionCategoryMap) {
-        WorkoutCategoryClassifier.buildSummaries(sessions, sessionCategoryMap)
+    val dynamicSummaries = remember(sessions, configuredCategories, sessionCategoryMap) {
+        WorkoutCategoryClassifier.buildDynamicSummaries(sessions, configuredCategories, sessionCategoryMap)
+    }
+
+    BackHandler(enabled = sessionToEdit != null) {
+        sessionToEdit = null
+    }
+
+    BackHandler(enabled = sessionToEdit == null && selectedCategorySummary != null) {
+        selectedCategorySummary = null
+    }
+
+    BackHandler(enabled = sessionToEdit == null && selectedCategorySummary == null) {
+        onNavigateToHome()
+    }
+
+    if (sessionToEdit != null) {
+        EditWorkoutSessionDialog(
+            session = sessionToEdit!!,
+            db = db,
+            exerciseNameMap = exerciseNameMap,
+            onDismiss = { sessionToEdit = null }
+        )
     }
 
     if (sessionToDelete != null) {
@@ -2037,7 +2333,7 @@ private fun HistoryScreen(
         modifier = Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        if (selectedCategory == null) {
+        if (selectedCategorySummary == null) {
             // Nivel 1: Categorías
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -2100,9 +2396,9 @@ private fun HistoryScreen(
                     modifier = Modifier.fillMaxSize(),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    items(categorySummaries, key = { it.key }) { summary ->
+                    items(dynamicSummaries, key = { it.categoryName }) { summary ->
                         Card(
-                            onClick = { selectedCategory = summary.key },
+                            onClick = { selectedCategorySummary = summary },
                             modifier = Modifier.fillMaxWidth(),
                             colors = CardDefaults.cardColors(containerColor = Color(0xFF161616)),
                             shape = RoundedCornerShape(12.dp)
@@ -2126,7 +2422,7 @@ private fun HistoryScreen(
                                     }
                                     Column {
                                         Text(
-                                            text = summary.displayName,
+                                            text = summary.categoryName,
                                             style = MaterialTheme.typography.titleMedium,
                                             fontWeight = FontWeight.Bold,
                                             color = Color.White
@@ -2155,12 +2451,19 @@ private fun HistoryScreen(
             }
         } else {
             // Nivel 2: Sesiones por fecha de la categoría seleccionada
-            val currentCat = selectedCategory!!
-            val categorySessions = remember(sessions, currentCat, sessionCategoryMap) {
-                if (currentCat == WorkoutCategoryKey.TODAS) {
+            val currentSummary = selectedCategorySummary!!
+            val categorySessions = remember(sessions, currentSummary, sessionCategoryMap) {
+                if (currentSummary.isAll) {
                     sessions
+                } else if (currentSummary.categoryName == "Otras / Sin clasificar") {
+                    sessions.filter {
+                        val c = sessionCategoryMap[it.id].orEmpty()
+                        c.isEmpty() || c.equals("Sin clasificar", ignoreCase = true) || c.equals("Otras / Sin clasificar", ignoreCase = true)
+                    }
                 } else {
-                    sessions.filter { sessionCategoryMap[it.id] == currentCat }
+                    sessions.filter {
+                        sessionCategoryMap[it.id].equals(currentSummary.categoryName, ignoreCase = true)
+                    }
                 }.sortedByDescending { it.startedAtMillis }
             }
 
@@ -2174,14 +2477,14 @@ private fun HistoryScreen(
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     OutlinedButton(
-                        onClick = { selectedCategory = null },
+                        onClick = { selectedCategorySummary = null },
                         shape = RoundedCornerShape(8.dp)
                     ) {
                         Text("← Categorías", style = MaterialTheme.typography.bodySmall, color = Color.White)
                     }
                     Column {
                         Text(
-                            text = "${currentCat.icon} ${currentCat.displayName}",
+                            text = "${currentSummary.icon} ${currentSummary.categoryName}",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
                             color = Color.White
@@ -2213,7 +2516,7 @@ private fun HistoryScreen(
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         Text(
-                            text = "No hay sesiones de ${currentCat.displayName}",
+                            text = "No hay sesiones de ${currentSummary.categoryName}",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
                             color = Color.White
@@ -2239,9 +2542,10 @@ private fun HistoryScreen(
                     items(categorySessions, key = { it.id }) { session ->
                         SessionHistoryCard(
                             session = session,
-                            categoryKey = currentCat,
+                            categoryKey = null,
                             db = db,
                             exerciseNameMap = exerciseNameMap,
+                            onEdit = { sessionToEdit = session },
                             onDelete = { sessionToDelete = session }
                         )
                     }
@@ -2257,6 +2561,7 @@ private fun SessionHistoryCard(
     categoryKey: WorkoutCategoryKey? = null,
     db: AppDatabase,
     exerciseNameMap: Map<Long, String>,
+    onEdit: () -> Unit,
     onDelete: () -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -2265,9 +2570,9 @@ private fun SessionHistoryCard(
         DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(session.startedAtMillis))
     }
 
-    val isCategoryRedundant = remember(session.title, categoryKey) {
+    val isCategoryRedundant = remember(session.title, session.category, categoryKey) {
         val titleNorm = session.title.trim().lowercase()
-        val catNorm = categoryKey?.displayName?.trim()?.lowercase() ?: ""
+        val catNorm = session.category.trim().lowercase().ifEmpty { categoryKey?.displayName?.trim()?.lowercase() ?: "" }
         titleNorm == catNorm || titleNorm == "entrenamiento" || titleNorm == "rutina" || titleNorm.isBlank()
     }
 
@@ -2303,8 +2608,25 @@ private fun SessionHistoryCard(
                             color = MaterialTheme.colorScheme.primary
                         )
                     }
+                    if (session.category.isNotBlank()) {
+                        Spacer(Modifier.height(2.dp))
+                        Surface(
+                            color = Color(0xFF222222),
+                            shape = RoundedCornerShape(4.dp)
+                        ) {
+                            Text(
+                                text = session.category,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = onEdit) {
+                        Text("✎", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+                    }
                     TextButton(onClick = { expanded = !expanded }) {
                         Text(if (expanded) "Ocultar ▲" else "Ver detalle ▼", style = MaterialTheme.typography.labelSmall)
                     }

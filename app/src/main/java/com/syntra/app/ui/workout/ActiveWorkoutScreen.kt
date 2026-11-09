@@ -1,6 +1,9 @@
 package com.syntra.app.ui.workout
 
+import android.app.Activity
 import android.os.SystemClock
+import android.view.WindowManager
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -11,6 +14,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -45,6 +49,22 @@ fun ActiveWorkoutScreen(
     val draftFlow = remember(db) { db.activeWorkoutDraftDao().observeCurrentDraft() }
     val persistedDraft by draftFlow.collectAsState(initial = null)
 
+    val context = LocalContext.current
+    val memories by remember(db) { db.irisxMemoryDao().observeAll() }.collectAsState(initial = emptyList())
+    val keepScreenOnPreference = remember(memories) {
+        memories.firstOrNull { it.memoryType == "PREFERENCE" && it.sourceKey == "keep_screen_on_during_workout" }?.targetValue == "true"
+    }
+
+    DisposableEffect(keepScreenOnPreference) {
+        val activity = context as? Activity
+        if (keepScreenOnPreference) {
+            activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+        onDispose {
+            activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
+
     var editorValue by remember { mutableStateOf(TextFieldValue("")) }
     var titleValue by remember { mutableStateOf("") }
     var initializedForUuid by remember { mutableStateOf<String?>(null) }
@@ -60,6 +80,22 @@ fun ActiveWorkoutScreen(
     var commitErrorMessage by remember { mutableStateOf<String?>(null) }
     var isCommitting by remember { mutableStateOf(false) }
     var showCancelConfirmDialog by remember { mutableStateOf(false) }
+
+    val currentDraftState = persistedDraft?.let { WorkoutSessionState.fromString(it.state) } ?: WorkoutSessionState.IDLE
+
+    BackHandler(enabled = currentDraftState == WorkoutSessionState.REVIEW_PENDING) {
+        scope.launch {
+            val nowWall = System.currentTimeMillis()
+            val nowElapsed = SystemClock.elapsedRealtime()
+            manager.cancelReviewAndResume(nowWall, nowElapsed)
+            reviewBundle = null
+            commitErrorMessage = null
+        }
+    }
+
+    BackHandler(enabled = currentDraftState == WorkoutSessionState.ACTIVE || currentDraftState == WorkoutSessionState.ERROR) {
+        onBackToHome()
+    }
 
     // Recover or synchronize editor state when a persisted draft is loaded
     LaunchedEffect(persistedDraft?.sessionUuid, persistedDraft?.state) {
@@ -373,7 +409,11 @@ fun ActiveWorkoutScreen(
             }
         }
 
-        // Persistent Chronometer Card (HH:MM:SS)
+        val displayCategory = activeDraft.plannedCategory?.takeIf { it.isNotBlank() }
+            ?: titleValue.trim().takeIf { it.isNotBlank() }
+            ?: "General"
+
+        // Persistent Chronometer Card (HH:MM:SS) with unified Header
         Card(
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(containerColor = Color(0xFF121A18)),
@@ -388,7 +428,7 @@ fun ActiveWorkoutScreen(
             ) {
                 Column {
                     Text(
-                        text = if (isTimerPaused) "TIEMPO EN PAUSA (REVISIÓN)" else "ENTRENAMIENTO ACTIVO",
+                        text = if (isTimerPaused) "TIEMPO EN PAUSA • $displayCategory" else "ENTRENAMIENTO ACTIVO — $displayCategory",
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.primary
@@ -401,31 +441,23 @@ fun ActiveWorkoutScreen(
                         color = Color.White
                     )
                 }
-                if (activeDraft.plannedCategory != null) {
-                    Surface(
-                        color = Color(0xFF1E2A26),
-                        shape = RoundedCornerShape(8.dp)
-                    ) {
-                        Text(
-                            text = "🎯 ${activeDraft.plannedCategory}",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.primary,
-                            fontWeight = FontWeight.SemiBold,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-                        )
-                    }
+                Surface(
+                    color = Color(0xFF1E2A26),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text(
+                        text = "🎯 $displayCategory",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                    )
                 }
             }
         }
 
-        // Session Title Field
-        OutlinedTextField(
-            value = titleValue,
-            onValueChange = { titleValue = it },
-            label = { Text("Título o enfoque de la sesión (ej. Pecho, Espalda)") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth()
-        )
+        // Rest Timer Component (Presets 30/60/90/120s + vibration + timestamp countdown)
+        RestTimerBar()
 
         // Integrated Free-Text Notepad with Cursor & Line-break preservation
         Card(
@@ -497,11 +529,11 @@ fun ActiveWorkoutScreen(
             }
         }
 
-        // Primary Finalize Button + Secondary Discard Button (leaves space on bottom-end for floating IrisX button)
+        // Primary Finalize Button + Secondary Discard Button
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(end = 68.dp),
+                .padding(bottom = 64.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             Button(
@@ -529,19 +561,24 @@ fun ActiveWorkoutScreen(
                 },
                 modifier = Modifier
                     .weight(1f)
-                    .height(50.dp),
+                    .height(52.dp),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = MaterialTheme.colorScheme.primary,
                     contentColor = Color.Black
                 ),
                 shape = RoundedCornerShape(10.dp)
             ) {
-                Text("⏹ Finalizar y revisar", fontWeight = FontWeight.Bold)
+                Text(
+                    text = "⏹ Finalizar y revisar",
+                    fontWeight = FontWeight.Bold,
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 1
+                )
             }
 
             OutlinedButton(
                 onClick = { showCancelConfirmDialog = true },
-                modifier = Modifier.height(50.dp),
+                modifier = Modifier.height(52.dp),
                 shape = RoundedCornerShape(10.dp)
             ) {
                 Text("Descartar", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
