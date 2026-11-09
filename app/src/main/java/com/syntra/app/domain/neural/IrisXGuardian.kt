@@ -168,15 +168,33 @@ object IrisXGuardian {
 
     private fun evaluateBattery(context: Context): GuardianCheckResult {
         return try {
-            val filter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
-            val batteryStatus = context.registerReceiver(null, filter)
-            val level = batteryStatus?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
-            val scale = batteryStatus?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
-            val pct = if (level >= 0 && scale > 0) (level * 100) / scale else 100
+            val bm = context.getSystemService(Context.BATTERY_SERVICE) as? BatteryManager
+            val capacity = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                bm?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: -1
+            } else {
+                -1
+            }
 
-            val status = batteryStatus?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
-            val isCharging = status == BatteryManager.BATTERY_STATUS_CHARGING ||
-                    status == BatteryManager.BATTERY_STATUS_FULL
+            val isChargingFromBm = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val status = bm?.getIntProperty(BatteryManager.BATTERY_PROPERTY_STATUS) ?: -1
+                status == BatteryManager.BATTERY_STATUS_CHARGING || status == BatteryManager.BATTERY_STATUS_FULL
+            } else {
+                false
+            }
+
+            val (pct, isCharging) = if (capacity in 0..100) {
+                Pair(capacity, isChargingFromBm)
+            } else {
+                val filter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
+                val batteryStatus = context.registerReceiver(null, filter)
+                val level = batteryStatus?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
+                val scale = batteryStatus?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
+                val stickyPct = if (level >= 0 && scale > 0) (level * 100) / scale else 100
+                val status = batteryStatus?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
+                val stickyCharging = status == BatteryManager.BATTERY_STATUS_CHARGING ||
+                        status == BatteryManager.BATTERY_STATUS_FULL
+                Pair(stickyPct, stickyCharging)
+            }
 
             when {
                 !isCharging && pct < MIN_BATTERY_PERCENTAGE -> {

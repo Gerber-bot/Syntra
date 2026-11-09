@@ -171,6 +171,39 @@ class IrisXCoreTest {
     }
 
     @Test
+    fun `interprets natural equivalent queries like que hice la ultima vez`() = runBlocking {
+        fakeRepo.latestSession = WorkoutSessionEntity(
+            id = 1,
+            title = "Pecho y Tríceps",
+            category = "Pecho",
+            startedAtMillis = 1000L,
+            finishedAtMillis = 2000L
+        )
+
+        val intent = irisXCore.parseInput("¿Qué hice la última vez?")
+        assertTrue(intent is IrisXIntent.QueryLastWorkout)
+
+        val res = irisXCore.execute(intent)
+        assertTrue(res is IrisXResponse.Success)
+        val msg = (res as IrisXResponse.Success).message
+        assertTrue(msg.contains("Pecho y Tríceps"))
+    }
+
+    @Test
+    fun `explains RIR and training concepts deterministically`() = runBlocking {
+        val resRir = irisXCore.ask("¿Qué es RIR 1?")
+        assertTrue(resRir is IrisXResponse.Success)
+        val msgRir = (resRir as IrisXResponse.Success).message
+        assertTrue(msgRir.contains("RIR"))
+        assertTrue(msgRir.contains("repetición más"))
+
+        val resSobrecarga = irisXCore.ask("¿Qué es sobrecarga progresiva?")
+        assertTrue(resSobrecarga is IrisXResponse.Success)
+        val msgSobrecarga = (resSobrecarga as IrisXResponse.Success).message
+        assertTrue(msgSobrecarga.contains("sobrecarga progresiva"))
+    }
+
+    @Test
     fun `delete alias removes equivalence from memory`() = runBlocking {
         fakeRepo.learnedAliases["camilla"] = "Extensión de cuádriceps"
         val response = irisXCore.execute(IrisXIntent.DeleteAlias("camilla"))

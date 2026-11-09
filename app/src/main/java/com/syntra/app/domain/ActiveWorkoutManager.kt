@@ -215,12 +215,12 @@ class RoomActiveWorkoutPersistencePort(
     ): Long {
         return db.withTransaction {
             val resolvedCategory = WorkoutCategoryClassifier.resolveSessionCategory(
-                explicitCategory = draft.plannedCategory,
+                explicitCategory = null, // Planned category from sequence planner must not override actual exercises
                 routineCategory = draft.sourceRoutineId?.let { db.routineDao().getRoutineById(it)?.targetCategory },
                 title = finalTitle,
                 exerciseNames = finalExercises.map { it.name },
                 learnedAliases = db.irisxMemoryDao().findByType("ALIAS").associate { it.sourceKey to it.targetValue }
-            )
+            ).ifBlank { draft.plannedCategory.orEmpty() }
             val sId = db.workoutSessionDao().insert(
                 WorkoutSessionEntity(
                     title = finalTitle,

@@ -60,4 +60,13 @@ class RestTimerTest {
         RestTimerDiagnostics.clear()
         assertEquals(0, RestTimerDiagnostics.getEvents().size)
     }
+
+    @Test
+    fun restTimerDiagnostics_recordsScreenAndExactAlarmStatus() {
+        RestTimerDiagnostics.log("TIMER_RECEIVED", "driftMillis=45ms screenOn=false canExact=true")
+        val event = RestTimerDiagnostics.getEvents().first()
+        assertEquals("TIMER_RECEIVED", event.type)
+        assertTrue(event.details.contains("screenOn=false"))
+        assertTrue(event.details.contains("canExact=true"))
+    }
 }

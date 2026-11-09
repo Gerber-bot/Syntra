@@ -193,6 +193,7 @@ object WorkoutCategoryClassifier {
         exerciseNames: List<String> = emptyList(),
         learnedAliases: Map<String, String> = emptyMap()
     ): String {
+        // Priority 1: Explicit confirmed category
         val explicitClean = explicitCategory?.trim().orEmpty()
         if (explicitClean.isNotBlank() &&
             !explicitClean.equals("Sin clasificar", ignoreCase = true) &&
@@ -202,21 +203,25 @@ object WorkoutCategoryClassifier {
             return explicitClean
         }
 
+        // Priority 2: Classify according to the exercises actually performed!
+        if (exerciseNames.isNotEmpty()) {
+            val irisClass = classify(
+                title = title,
+                exerciseNames = exerciseNames,
+                learnedAliases = learnedAliases
+            )
+            if (irisClass != WorkoutCategoryKey.SIN_CLASIFICAR && irisClass != WorkoutCategoryKey.TODAS) {
+                return irisClass.displayName
+            }
+        }
+
+        // 3. Routine category
         val routineClean = routineCategory?.trim().orEmpty()
         if (routineClean.isNotBlank() &&
             !routineClean.equals("General", ignoreCase = true) &&
             !routineClean.equals("Sin clasificar", ignoreCase = true)
         ) {
             return routineClean
-        }
-
-        val irisClass = classify(
-            title = title,
-            exerciseNames = exerciseNames,
-            learnedAliases = learnedAliases
-        )
-        if (irisClass != WorkoutCategoryKey.SIN_CLASIFICAR && irisClass != WorkoutCategoryKey.TODAS) {
-            return irisClass.displayName
         }
 
         val normTitle = normalize(title)

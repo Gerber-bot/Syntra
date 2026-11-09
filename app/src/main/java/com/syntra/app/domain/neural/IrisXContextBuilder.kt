@@ -18,7 +18,8 @@ object IrisXContextBuilder {
     suspend fun buildPrompt(
         userMessage: String,
         db: AppDatabase,
-        systemPersona: String = "Sos IrisX, la entrenadora deportiva y copiloto inteligente de Syntra. Tu tono es directo, analítico, enfocado en sobrecarga progresiva y fundamentos biomecánicos. Respondés de forma concisa y fundamentada en datos reales."
+        systemPersona: String = "Sos IrisX, la entrenadora deportiva y copiloto inteligente de Syntra. Tu tono es directo, analítico, enfocado en sobrecarga progresiva y fundamentos biomecánicos. Respondés de forma concisa y fundamentada en datos reales.",
+        conversationHistory: List<Pair<String, String>> = emptyList()
     ): String = withContext(Dispatchers.IO) {
         val facts = StringBuilder()
 
@@ -92,6 +93,14 @@ object IrisXContextBuilder {
         sb.append("2. Si te preguntan sobre pesos, marcas o entrenamientos, usá únicamente los datos verificados provistos.\n")
         sb.append("3. Si no hay datos suficientes sobre un ejercicio o fecha, aclaralo con honestidad técnica.\n")
         sb.append("<|im_end|>\n")
+
+        // Include bounded recent history from this active conversation (max 6 turns)
+        for ((role, text) in conversationHistory.takeLast(6)) {
+            val clean = if (role == "user") extractUserMessage(text) else stripChatMlTokens(text)
+            if (clean.isNotBlank()) {
+                sb.append("<|im_start|>$role\n").append(clean).append("\n<|im_end|>\n")
+            }
+        }
 
         sb.append("<|im_start|>user\n")
         sb.append(userMessage.trim()).append("\n")

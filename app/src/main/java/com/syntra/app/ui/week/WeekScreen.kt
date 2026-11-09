@@ -367,8 +367,11 @@ private fun WeekSessionCard(
                     fontWeight = FontWeight.Bold,
                     color = Color.White
                 )
+                val showCategoryBadge = session.category.isNotBlank() &&
+                    !session.title.equals(session.category, ignoreCase = true) &&
+                    !session.title.contains(session.category, ignoreCase = true)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (session.category.isNotBlank()) {
+                    if (showCategoryBadge) {
                         Surface(
                             color = Color(0xFF222222),
                             shape = RoundedCornerShape(4.dp)

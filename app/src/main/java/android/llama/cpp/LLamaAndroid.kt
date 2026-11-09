@@ -15,23 +15,20 @@ class LLamaAndroid {
 
     private val threadLocalState: ThreadLocal<State> = ThreadLocal.withInitial { State.Idle }
 
-    private var isLibraryLoaded = false
     @Volatile
     private var isModelLoaded = false
 
     private val runLoop: CoroutineDispatcher = Executors.newSingleThreadExecutor {
         thread(start = false, name = "Llm-RunLoop") {
-            try {
-                System.loadLibrary("llama-android")
-                isLibraryLoaded = true
-                log_to_android()
-                backend_init(false)
-                Log.d(tag, system_info())
-            } catch (e: Throwable) {
-                isLibraryLoaded = false
-                Log.w(tag, "Native library llama-android not available: ${e.message}")
+            if (ensureNativeLoaded()) {
+                try {
+                    log_to_android()
+                    backend_init(false)
+                    Log.d(tag, system_info())
+                } catch (e: Throwable) {
+                    Log.w(tag, "Failed to initialize native backend: ${e.message}")
+                }
             }
-
             it.run()
         }.apply {
             uncaughtExceptionHandler = Thread.UncaughtExceptionHandler { _, exception: Throwable ->
@@ -40,7 +37,9 @@ class LLamaAndroid {
         }
     }.asCoroutineDispatcher()
 
-    fun isNativeLibraryLoaded(): Boolean = isLibraryLoaded
+    fun isNativeLibraryLoaded(): Boolean = ensureNativeLoaded()
+
+    fun getNativeLoadError(): String? = libraryLoadError
 
     fun hasModelLoaded(): Boolean = isModelLoaded
 
@@ -170,6 +169,40 @@ class LLamaAndroid {
     }
 
     companion object {
+        @Volatile
+        private var libraryLoadAttempted = false
+        @Volatile
+        private var libraryLoadError: String? = null
+        @Volatile
+        private var isLibraryLoaded = false
+
+        fun ensureNativeLoaded(): Boolean {
+            if (libraryLoadAttempted) return isLibraryLoaded
+            synchronized(this) {
+                if (libraryLoadAttempted) return isLibraryLoaded
+                libraryLoadAttempted = true
+                try {
+                    val deps = listOf("ggml-base", "ggml", "ggml-cpu", "llama", "llama-android")
+                    for (dep in deps) {
+                        try {
+                            System.loadLibrary(dep)
+                        } catch (t: Throwable) {
+                            if (dep == "llama-android") throw t
+                        }
+                    }
+                    isLibraryLoaded = true
+                    libraryLoadError = null
+                } catch (t: Throwable) {
+                    isLibraryLoaded = false
+                    libraryLoadError = "${t.javaClass.simpleName}: ${t.message}"
+                    Log.w("LLamaAndroid", "Native library llama-android not available: $libraryLoadError", t)
+                }
+                return isLibraryLoaded
+            }
+        }
+
+        fun getNativeLoadError(): String? = libraryLoadError
+
         private class IntVar(value: Int) {
             @Volatile
             var value: Int = value

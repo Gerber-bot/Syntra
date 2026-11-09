@@ -49,6 +49,10 @@ interface IrisXRepository {
     suspend fun getRoutinesWithExercises(): List<RoutineWithExercises> = emptyList()
     suspend fun getOrCreateActiveConversation(): IrisxConversationEntity =
         IrisxConversationEntity(id = 1L, title = "Conversación activa")
+    suspend fun createNewConversation(title: String = "Nueva conversación"): IrisxConversationEntity =
+        IrisxConversationEntity(id = System.currentTimeMillis(), title = title)
+    suspend fun getAllConversations(): List<IrisxConversationEntity> = emptyList()
+    suspend fun renameConversation(conversationId: Long, newTitle: String) {}
     suspend fun updateConversationState(conversation: IrisxConversationEntity) {}
     suspend fun appendMessage(message: IrisxMessageEntity): Long = 0L
     suspend fun getMessages(conversationId: Long): List<IrisxMessageEntity> = emptyList()
@@ -186,15 +190,28 @@ class RoomIrisXRepository(private val db: AppDatabase) : IrisXRepository {
     override suspend fun getOrCreateActiveConversation(): IrisxConversationEntity {
         val existing = db.irisxConversationDao().getAllConversations().firstOrNull()
         if (existing != null) return existing
+        return createNewConversation("Conversación principal")
+    }
+
+    override suspend fun createNewConversation(title: String): IrisxConversationEntity {
         val now = System.currentTimeMillis()
         val created = IrisxConversationEntity(
-            title = "Conversación principal",
+            title = title,
             activePeriodScope = PeriodScope.THIS_MONTH.key,
             createdAtMillis = now,
             updatedAtMillis = now
         )
         val id = db.irisxConversationDao().insertConversation(created)
         return created.copy(id = id)
+    }
+
+    override suspend fun getAllConversations(): List<IrisxConversationEntity> {
+        return db.irisxConversationDao().getAllConversations()
+    }
+
+    override suspend fun renameConversation(conversationId: Long, newTitle: String) {
+        val conv = db.irisxConversationDao().getConversationById(conversationId) ?: return
+        db.irisxConversationDao().updateConversation(conv.copy(title = newTitle, updatedAtMillis = System.currentTimeMillis()))
     }
 
     override suspend fun updateConversationState(conversation: IrisxConversationEntity) {
@@ -259,7 +276,11 @@ class IrisXCore(
         }
 
         if (norm.contains("ultimo entreno") || norm.contains("ultima sesion") ||
-            norm.contains("ultimo entrenamiento") || norm == "resumen" || norm == "ultimo"
+            norm.contains("ultimo entrenamiento") || norm == "resumen" || norm == "ultimo" ||
+            norm.contains("que hice la ultima vez") || norm.contains("que entrene la ultima vez") ||
+            norm.contains("que hice el ultimo entreno") || norm.contains("que hice hoy") ||
+            norm.contains("mi ultimo entreno") || norm.contains("mi ultima sesion") ||
+            norm.contains("que entrene hoy")
         ) {
             return IrisXIntent.QueryLastWorkout
         }
@@ -1186,6 +1207,35 @@ class IrisXCore(
         }
 
         return when {
+            norm.contains("que es rir") || norm == "rir" || norm.startsWith("rir ") || norm.contains("repeticiones en recamara") || norm.contains("que significa rir") -> {
+                IrisXResponse.Success(
+                    "RIR (Reps in Reserve / Repeticiones en recámara) indica cuántas repeticiones te faltaron para llegar al fallo concéntrico estricto:\n\n" +
+                    "• RIR 0: Llegaste al límite, no salía una más.\n" +
+                    "• RIR 1: Terminaste la serie pudiendo completar exactamente 1 repetición más con buena técnica.\n" +
+                    "• RIR 2: Te quedaban 2 repeticiones en reserva.\n\n" +
+                    "En hipertrofia, la evidencia científica recomienda moverse habitualmente entre RIR 1 y RIR 2."
+                )
+            }
+            norm.contains("que es rpe") || norm == "rpe" || norm.startsWith("rpe ") || norm.contains("esfuerzo percibido") -> {
+                IrisXResponse.Success(
+                    "RPE (Rate of Perceived Exertion / Escala de esfuerzo percibido) califica la intensidad del esfuerzo de 1 a 10:\n\n" +
+                    "• RPE 10 = RIR 0 (Esfuerzo máximo / fallo)\n" +
+                    "• RPE 9 = RIR 1 (Podías hacer 1 repetición más)\n" +
+                    "• RPE 8 = RIR 2 (Podías hacer 2 repeticiones más)"
+                )
+            }
+            norm.contains("que es fallo") || norm.contains("fallo muscular") || norm == "fallo" || norm.contains("al fallo") -> {
+                IrisXResponse.Success(
+                    "El fallo muscular momentáneo ocurre cuando el músculo no puede generar la fuerza suficiente para completar la fase concéntrica de la repetición con técnica adecuada.\n\n" +
+                    "En Syntra podés registrarlo añadiendo la letra 'f' a las repeticiones (por ejemplo, '13bloques 9f')."
+                )
+            }
+            norm.contains("sobrecarga progresiva") || norm.contains("que es sobrecarga") -> {
+                IrisXResponse.Success(
+                    "La sobrecarga progresiva consiste en exigirle gradualmente más a tu musculatura a lo largo de las semanas para forzar adaptaciones de fuerza e hipertrofia.\n\n" +
+                    "Podés aplicarla sumando repeticiones con el mismo peso, aumentando la carga, mejorando el control técnico y rango de movimiento, o sumando series efectivas."
+                )
+            }
             norm.contains("hola") || norm.contains("buen dia") || norm.contains("buenas") -> {
                 IrisXResponse.Success(
                     "Hola. Soy IrisX, tu asistente local de entrenamiento en Syntra. ¿En qué te ayudo hoy?\n" +

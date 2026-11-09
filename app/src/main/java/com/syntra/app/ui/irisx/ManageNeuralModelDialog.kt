@@ -170,10 +170,11 @@ fun ManageNeuralModelDialog(
                             )
 
                             val isNative = LlamaCppInferenceEngine.isNativeAvailable()
+                            val nativeError = LlamaCppInferenceEngine.getNativeLoadError()
                             Text(
-                                text = "Binario JNI: ${if (isNative) "libllama-android.so cargada (ARM64)" else "No disponible (simulación JVM)"}",
+                                text = if (isNative) "Binario JNI: libllama-android.so cargada (ARM64)" else "Binario JNI: No cargada (${nativeError ?: "Falta biblioteca nativa"})",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = if (isNative) SyntraColors.SoftMint else SyntraColors.TextMuted
+                                color = if (isNative) SyntraColors.NeonMint else SyntraColors.Error
                             )
                         }
                     }
@@ -181,6 +182,7 @@ fun ManageNeuralModelDialog(
 
                 // Neural In-App Test Bench Card
                 item {
+                    val isNative = LlamaCppInferenceEngine.isNativeAvailable()
                     SyntraCard(modifier = Modifier.fillMaxWidth()) {
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             Text(
@@ -251,11 +253,17 @@ fun ManageNeuralModelDialog(
                                         }
                                     },
                                     modifier = Modifier.fillMaxWidth(),
-                                    enabled = engine.isModelLoaded() && !isLoadingModel
+                                    enabled = isNative && engine.isModelLoaded() && !isLoadingModel
                                 )
                             }
 
-                            if (!engine.isModelLoaded()) {
+                            if (!isNative) {
+                                Text(
+                                    text = "La inferencia neuronal requiere la biblioteca nativa ARM64. En entorno JVM no se ejecuta para evitar métricas simuladas.",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = SyntraColors.Error
+                                )
+                            } else if (!engine.isModelLoaded()) {
                                 Text(
                                     text = "Cargá un modelo GGUF abajo para habilitar la prueba neuronal.",
                                     style = MaterialTheme.typography.labelSmall,

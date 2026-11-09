@@ -491,24 +491,6 @@ private fun ProfileViewScreen(
         }
     }
 
-    val apkLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocument()
-    ) { uri ->
-        if (uri != null) {
-            try {
-                val intent = Intent(Intent.ACTION_VIEW).apply {
-                    setDataAndType(uri, "application/vnd.android.package-archive")
-                    flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK
-                }
-                context.startActivity(intent)
-                statusMessage = "Abriendo instalador del sistema..."
-                errorMessage = null
-            } catch (e: Exception) {
-                errorMessage = "No se pudo iniciar la instalación del APK: ${e.message}"
-                statusMessage = null
-            }
-        }
-    }
 
     if (pendingRestorePayload != null) {
         val payload = pendingRestorePayload!!
@@ -852,45 +834,6 @@ private fun ProfileViewScreen(
             }
         }
 
-        // Card: Centro de Actualizaciones Locales (Inalámbrico y APK local)
-        SyntraCard(modifier = Modifier.fillMaxWidth()) {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "Centro de actualizaciones locales",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = SyntraColors.NeonMint
-                    )
-                    SyntraBadge(
-                        text = "Offline-first",
-                        containerColor = SyntraColors.DarkMint,
-                        contentColor = SyntraColors.NeonMint
-                    )
-                }
-                Text(
-                    text = "Syntra es privada y no requiere servidores externos. Podés actualizar de forma inalámbrica mediante ADB Wi-Fi desde tu PC o seleccionando un APK compilado que hayas transferido a tu teléfono.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = SyntraColors.TextSecondary
-                )
-                Text(
-                    text = "⚠️ Conservación de datos: Al actualizar, nunca desinstales la aplicación previamente para no borrar la base de datos interna SQLite.",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = SyntraColors.SoftMint
-                )
-                SyntraButton(
-                    text = "📦 Seleccionar APK local para actualizar",
-                    onClick = {
-                        apkLauncher.launch(arrayOf("application/vnd.android.package-archive", "application/octet-stream", "*/*"))
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
-        }
 
         // Card 4: IrisX Memory (FASE 7)
         val aliases = remember(memories) { memories.filter { it.memoryType == "ALIAS" } }
@@ -1935,7 +1878,7 @@ private fun ParserScreen(
     onNavigateToHistory: () -> Unit,
     onOpenRoutines: () -> Unit = {}
 ) {
-    var input by remember { mutableStateOf("Piernas\nSentadilla 70kg 12 10 8\nSentadilla 65kg 8\nBuenos días 40kg 12 10 10") }
+    var input by remember { mutableStateOf("") }
     var analyzed by remember { mutableStateOf(false) }
 
     LaunchedEffect(initialDraft) {
@@ -2110,7 +2053,9 @@ private fun ParserScreen(
                                                     isAssisted = s.isAssisted,
                                                     isDumbbell = s.isDumbbell,
                                                     note = s.note,
-                                                    plannedTarget = ex.plannedTarget
+                                                    plannedTarget = ex.plannedTarget,
+                                                    loadUnit = s.loadUnit,
+                                                    isToFailure = s.isToFailure
                                                 )
                                             )
                                         }
@@ -2824,7 +2769,10 @@ private fun SessionHistoryCard(
                                 repetitions = s.repetitions,
                                 isAssisted = s.isAssisted,
                                 isDumbbell = s.isDumbbell,
-                                note = s.note
+                                note = s.note,
+                                loadUnit = s.loadUnit,
+                                rawLoadValue = s.loadGrams / 1000.0,
+                                isToFailure = s.isToFailure
                             )
                         }
                         val planned = exSets.firstOrNull { it.plannedTarget != null }?.plannedTarget

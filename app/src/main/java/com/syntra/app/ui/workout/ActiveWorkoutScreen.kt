@@ -455,8 +455,15 @@ fun ActiveWorkoutScreen(
                     try {
                         val nowWall = System.currentTimeMillis()
                         val nowElapsed = SystemClock.elapsedRealtime()
-                        val effectiveTitle = titleValue.trim().ifEmpty {
-                            reviewBundle?.parsePreview?.sessionTitle ?: "Entrenamiento"
+                        val inferredCat = WorkoutCategoryClassifier.resolveSessionCategory(
+                            explicitCategory = null,
+                            title = titleValue,
+                            exerciseNames = editedExercises.map { it.name }
+                        )
+                        val effectiveTitle = if (titleValue.isBlank() || titleValue.equals(activeDraft.plannedCategory, ignoreCase = true)) {
+                            inferredCat.ifBlank { reviewBundle?.parsePreview?.sessionTitle ?: "Entrenamiento" }
+                        } else {
+                            titleValue.trim()
                         }
                         when (val res = manager.confirmAndCommitSession(
                             editedTitle = effectiveTitle,

@@ -19,11 +19,11 @@ class LlamaCppInferenceEngine(
 
     companion object {
         fun isNativeAvailable(): Boolean {
-            return try {
-                LLamaAndroid.instance().isNativeLibraryLoaded()
-            } catch (_: Throwable) {
-                false
-            }
+            return LLamaAndroid.ensureNativeLoaded()
+        }
+
+        fun getNativeLoadError(): String? {
+            return LLamaAndroid.getNativeLoadError()
         }
     }
 

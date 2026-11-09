@@ -151,4 +151,36 @@ class WorkoutPresentationTest {
         assertEquals("70 kg", sentadilla.groups[2].formattedWeight())
         assertEquals("6", sentadilla.groups[2].formattedReps())
     }
+
+    @Test
+    fun preservesBlocksUnitAndFailureNotationInPresentation() {
+        val sets = listOf(
+            ParsedSet(
+                weightGrams = 13000,
+                repetitions = 11,
+                loadUnit = "BLOQUES",
+                rawLoadValue = 13.0,
+                isToFailure = false
+            ),
+            ParsedSet(
+                weightGrams = 13000,
+                repetitions = 9,
+                loadUnit = "BLOQUES",
+                rawLoadValue = 13.0,
+                isToFailure = false
+            ),
+            ParsedSet(
+                weightGrams = 13000,
+                repetitions = 9,
+                loadUnit = "BLOQUES",
+                rawLoadValue = 13.0,
+                isToFailure = true
+            )
+        )
+        val groups = WorkoutPresentation.groupConsecutiveSets(sets)
+        assertEquals(1, groups.size)
+        assertEquals("13 bloques", groups[0].formattedWeight())
+        assertEquals("11, 9, 9f", groups[0].formattedReps())
+        assertTrue(groups[0].isToFailure)
+    }
 }
