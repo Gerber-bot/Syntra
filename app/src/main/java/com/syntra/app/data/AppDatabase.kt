@@ -158,6 +158,29 @@ data class RoutineExerciseEntity(
     val notes: String = ""
 )
 
+@Entity(tableName = "active_workout_drafts")
+data class ActiveWorkoutDraftEntity(
+    @PrimaryKey val slotId: Int = 1,
+    val sessionUuid: String,
+    val state: String, // "IDLE", "ACTIVE", "REVIEW_PENDING", "COMPLETED", "CANCELLED", "ERROR"
+    val title: String,
+    val rawNotesText: String,
+    val cursorPosition: Int = 0,
+    val sourceRoutineId: Long? = null,
+    val plannedCategory: String? = null,
+    val startedAtWallMillis: Long,
+    val startedAtElapsedRealtimeMillis: Long,
+    val accumulatedPausedMillis: Long = 0L,
+    val reviewStartedAtWallMillis: Long? = null,
+    val reviewStartedAtElapsedMillis: Long? = null,
+    val finalizedAtWallMillis: Long? = null,
+    val lastSavedAtWallMillis: Long,
+    val lastKnownElapsedRealtimeMillis: Long,
+    val lastPersistedDurationMillis: Long = 0L,
+    val committedSessionId: Long? = null,
+    val lastErrorMessage: String? = null
+)
+
 @Dao
 interface ProfileDao {
     @Query("SELECT * FROM profiles WHERE id = 1 LIMIT 1")
@@ -431,6 +454,24 @@ interface RoutineDao {
     suspend fun deleteAllRoutineExercises()
 }
 
+@Dao
+interface ActiveWorkoutDraftDao {
+    @Query("SELECT * FROM active_workout_drafts WHERE slotId = 1 LIMIT 1")
+    fun observeCurrentDraft(): Flow<ActiveWorkoutDraftEntity?>
+
+    @Query("SELECT * FROM active_workout_drafts WHERE slotId = 1 LIMIT 1")
+    suspend fun getCurrentDraft(): ActiveWorkoutDraftEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun saveDraft(draft: ActiveWorkoutDraftEntity)
+
+    @Query("DELETE FROM active_workout_drafts WHERE slotId = 1")
+    suspend fun clearCurrentDraft()
+
+    @Query("DELETE FROM active_workout_drafts")
+    suspend fun deleteAllDrafts()
+}
+
 @Database(
     entities = [
         ProfileEntity::class,
@@ -443,9 +484,10 @@ interface RoutineDao {
         IrisxConversationEntity::class,
         IrisxMessageEntity::class,
         RoutineEntity::class,
-        RoutineExerciseEntity::class
+        RoutineExerciseEntity::class,
+        ActiveWorkoutDraftEntity::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -458,6 +500,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun irisxMemoryDao(): IrisxMemoryDao
     abstract fun irisxConversationDao(): IrisxConversationDao
     abstract fun routineDao(): RoutineDao
+    abstract fun activeWorkoutDraftDao(): ActiveWorkoutDraftDao
 
     companion object {
         @Volatile private var instance: AppDatabase? = null
@@ -554,10 +597,38 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS active_workout_drafts (
+                        slotId INTEGER PRIMARY KEY NOT NULL,
+                        sessionUuid TEXT NOT NULL,
+                        state TEXT NOT NULL,
+                        title TEXT NOT NULL,
+                        rawNotesText TEXT NOT NULL,
+                        cursorPosition INTEGER NOT NULL DEFAULT 0,
+                        sourceRoutineId INTEGER,
+                        plannedCategory TEXT,
+                        startedAtWallMillis INTEGER NOT NULL,
+                        startedAtElapsedRealtimeMillis INTEGER NOT NULL,
+                        accumulatedPausedMillis INTEGER NOT NULL DEFAULT 0,
+                        reviewStartedAtWallMillis INTEGER,
+                        reviewStartedAtElapsedMillis INTEGER,
+                        finalizedAtWallMillis INTEGER,
+                        lastSavedAtWallMillis INTEGER NOT NULL,
+                        lastKnownElapsedRealtimeMillis INTEGER NOT NULL,
+                        lastPersistedDurationMillis INTEGER NOT NULL DEFAULT 0,
+                        committedSessionId INTEGER,
+                        lastErrorMessage TEXT
+                    )
+                """.trimIndent())
+            }
+        }
+
         fun get(context: Context): AppDatabase = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(
                 context.applicationContext, AppDatabase::class.java, "syntra.db"
-            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
             .build().also { instance = it }
         }
     }
