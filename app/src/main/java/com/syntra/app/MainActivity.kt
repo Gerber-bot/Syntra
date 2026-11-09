@@ -47,6 +47,8 @@ import com.syntra.app.ui.parser.EditExercisePreviewDialog
 import com.syntra.app.ui.routines.RoutinesScreen
 import com.syntra.app.ui.week.WeekScreen
 import com.syntra.app.ui.workout.ActiveWorkoutScreen
+import com.syntra.app.ui.theme.SyntraTheme
+import com.syntra.app.ui.theme.SyntraColors
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.text.DateFormat
@@ -58,21 +60,11 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         val database = AppDatabase.get(applicationContext)
         setContent {
-            MaterialTheme(colorScheme = darkColorScheme(
-                background = Color.Black,
-                surface = Color(0xFF141414),
-                surfaceVariant = Color(0xFF1E1E1E),
-                primary = Color(0xFF75D9C1),
-                onPrimary = Color.Black,
-                onBackground = Color.White,
-                onSurface = Color.White,
-                onSurfaceVariant = Color(0xFFAAAAAA),
-                error = Color(0xFFFF6B6B)
-            )) {
+            SyntraTheme {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
-                    color = Color.Black,
-                    contentColor = Color.White
+                    color = SyntraColors.BackgroundBlack,
+                    contentColor = SyntraColors.TextPrimary
                 ) {
                     TrainerApp(database)
                 }
