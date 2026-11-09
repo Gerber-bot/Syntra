@@ -1,10 +1,8 @@
 package com.syntra.app.ui.workout
 
-import android.content.Context
 import android.os.Build
-import android.os.VibrationEffect
-import android.os.Vibrator
-import android.os.VibratorManager
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -26,128 +24,104 @@ fun RestTimerBar(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    var totalSeconds by remember { mutableIntStateOf(90) }
-    var targetEndTimeWallMillis by remember { mutableStateOf<Long?>(null) }
-    var pausedRemainingSeconds by remember { mutableStateOf<Int?>(null) }
-    var isRunning by remember { mutableStateOf(false) }
-    var isExpanded by remember { mutableStateOf(true) }
-    var showCompletedFlash by remember { mutableStateOf(false) }
+    val timerState by RestTimerManager.state.collectAsState()
 
-    fun triggerVibration() {
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                val vibratorManager = context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager
-                vibratorManager?.defaultVibrator?.vibrate(
-                    VibrationEffect.createWaveform(longArrayOf(0, 350, 150, 350), -1)
-                )
-            } else {
-                @Suppress("DEPRECATION")
-                val vibrator = context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    vibrator?.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 350, 150, 350), -1))
-                } else {
-                    vibrator?.vibrate(longArrayOf(0, 350, 150, 350), -1)
-                }
-            }
-        } catch (_: Exception) {
-            // Ignore vibration error on devices without vibrator hardware
-        }
+    var isExpanded by remember { mutableStateOf(true) }
+    var showDiagnostics by remember { mutableStateOf(false) }
+    var showPermissionDialog by remember { mutableStateOf(false) }
+    var pendingDurationSec by remember { mutableIntStateOf(90) }
+    var permissionWarningDismissed by remember { mutableStateOf(false) }
+
+    // Recover active timer state from persistent storage upon mounting
+    LaunchedEffect(Unit) {
+        RestTimerManager.initFromPrefs(context)
     }
 
-    var secondsLeft by remember { mutableIntStateOf(0) }
-
-    // Timestamp-based countdown ticker
-    LaunchedEffect(isRunning, targetEndTimeWallMillis) {
-        if (!isRunning || targetEndTimeWallMillis == null) return@LaunchedEffect
-        while (isActive) {
-            val now = System.currentTimeMillis()
-            val remaining = ((targetEndTimeWallMillis!! - now + 999) / 1000).toInt()
-            if (remaining <= 0) {
-                secondsLeft = 0
-                isRunning = false
-                targetEndTimeWallMillis = null
-                pausedRemainingSeconds = null
-                showCompletedFlash = true
-                RestTimerAlarmScheduler.cancelAlarm(context)
-                triggerVibration()
-                break
-            } else {
-                secondsLeft = remaining
-            }
+    // Ticker driven by central manager
+    LaunchedEffect(timerState.isRunning, timerState.targetElapsedMillis) {
+        if (!timerState.isRunning || timerState.targetElapsedMillis == null) return@LaunchedEffect
+        while (isActive && timerState.isRunning) {
+            RestTimerManager.tickCountdown(context)
             delay(500L)
         }
     }
 
-    LaunchedEffect(showCompletedFlash) {
-        if (showCompletedFlash) {
+    // Auto-dismiss completed banner after 4 seconds
+    LaunchedEffect(timerState.showCompletedFlash) {
+        if (timerState.showCompletedFlash) {
             delay(4000L)
-            showCompletedFlash = false
+            RestTimerManager.dismissFlash()
         }
     }
 
-    fun startTimer(durationSec: Int) {
-        totalSeconds = durationSec
-        secondsLeft = durationSec
-        pausedRemainingSeconds = null
-        val target = System.currentTimeMillis() + (durationSec * 1000L)
-        targetEndTimeWallMillis = target
-        isRunning = true
-        showCompletedFlash = false
-        isExpanded = false // Collapse presets when running to preserve screen space
-        RestTimerAlarmScheduler.scheduleAlarm(context, target)
-    }
-
-    fun pauseTimer() {
-        if (isRunning && targetEndTimeWallMillis != null) {
-            val now = System.currentTimeMillis()
-            val rem = ((targetEndTimeWallMillis!! - now + 999) / 1000).toInt().coerceAtLeast(0)
-            pausedRemainingSeconds = rem
-            secondsLeft = rem
-            isRunning = false
-            targetEndTimeWallMillis = null
-            RestTimerAlarmScheduler.cancelAlarm(context)
-        }
-    }
-
-    fun resumeTimer() {
-        val rem = pausedRemainingSeconds ?: secondsLeft
-        if (rem > 0) {
-            val target = System.currentTimeMillis() + (rem * 1000L)
-            targetEndTimeWallMillis = target
-            pausedRemainingSeconds = null
-            isRunning = true
-            RestTimerAlarmScheduler.scheduleAlarm(context, target)
-        }
-    }
-
-    fun resetTimer() {
-        isRunning = false
-        targetEndTimeWallMillis = null
-        pausedRemainingSeconds = null
-        secondsLeft = 0
-        showCompletedFlash = false
-        isExpanded = true
-        RestTimerAlarmScheduler.cancelAlarm(context)
-    }
-
-    fun addTime(extraSeconds: Int) {
-        if (isRunning && targetEndTimeWallMillis != null) {
-            val updated = targetEndTimeWallMillis!! + (extraSeconds * 1000L)
-            targetEndTimeWallMillis = updated
-            totalSeconds += extraSeconds
-            RestTimerAlarmScheduler.scheduleAlarm(context, updated)
-        } else if (pausedRemainingSeconds != null) {
-            pausedRemainingSeconds = (pausedRemainingSeconds!! + extraSeconds).coerceAtLeast(0)
-            secondsLeft = pausedRemainingSeconds!!
-            totalSeconds += extraSeconds
+    fun requestStart(durationSec: Int) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+            !RestTimerAlarmScheduler.canScheduleExactAlarms(context) &&
+            !permissionWarningDismissed
+        ) {
+            pendingDurationSec = durationSec
+            showPermissionDialog = true
         } else {
-            startTimer(extraSeconds)
+            isExpanded = false
+            RestTimerManager.startTimer(context, durationSec)
         }
+    }
+
+    if (showPermissionDialog) {
+        AlertDialog(
+            onDismissRequest = {
+                showPermissionDialog = false
+                permissionWarningDismissed = true
+                isExpanded = false
+                RestTimerManager.startTimer(context, pendingDurationSec)
+            },
+            title = {
+                Text(
+                    text = "Avisos de descanso puntuales",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = SyntraColors.TextPrimary
+                )
+            },
+            text = {
+                Text(
+                    text = "En Android 14/15 y HyperOS, para que el temporizador vibre exactamente al terminar el descanso con la pantalla bloqueada o mientras usás otra app, Syntra requiere autorización de alarmas exactas.\n\nSin este permiso, el sistema operativo puede retrasar la vibración por ahorro de batería.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = SyntraColors.TextSecondary
+                )
+            },
+            confirmButton = {
+                SyntraButton(
+                    text = "Habilitar en Ajustes",
+                    onClick = {
+                        showPermissionDialog = false
+                        permissionWarningDismissed = true
+                        RestTimerAlarmScheduler.openExactAlarmSetting(context)
+                        isExpanded = false
+                        RestTimerManager.startTimer(context, pendingDurationSec)
+                    }
+                )
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        showPermissionDialog = false
+                        permissionWarningDismissed = true
+                        isExpanded = false
+                        RestTimerManager.startTimer(context, pendingDurationSec)
+                    }
+                ) {
+                    Text("Continuar sin permiso", color = SyntraColors.TextMuted)
+                }
+            },
+            containerColor = SyntraColors.SurfaceCardElevated,
+            shape = RoundedCornerShape(16.dp)
+        )
     }
 
     SyntraCard(
         modifier = modifier.fillMaxWidth(),
-        glowingBorder = isRunning
+        glowingBorder = timerState.isRunning
     ) {
         Column(
             verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -165,30 +139,48 @@ fun RestTimerBar(
                         text = "⏱ Temporizador de descanso",
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold,
-                        color = if (showCompletedFlash) SyntraColors.NeonMint else SyntraColors.TextPrimary
+                        color = if (timerState.showCompletedFlash) SyntraColors.NeonMint else SyntraColors.TextPrimary
                     )
-                    if (isRunning) {
+                    if (timerState.isRunning) {
                         SyntraBadge(
                             text = "En curso",
                             containerColor = SyntraColors.DarkMint,
                             contentColor = SyntraColors.NeonMint
                         )
+                    } else if (timerState.isPaused) {
+                        SyntraBadge(
+                            text = "Pausado",
+                            containerColor = SyntraColors.SurfaceHighlight,
+                            contentColor = SyntraColors.TextMuted
+                        )
                     }
                 }
 
-                TextButton(
-                    onClick = { isExpanded = !isExpanded },
-                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
-                ) {
-                    Text(
-                        text = if (isExpanded) "Ocultar ▲" else "Presets ▼",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = SyntraColors.SoftMint
-                    )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(
+                        onClick = { showDiagnostics = !showDiagnostics },
+                        modifier = Modifier.size(28.dp)
+                    ) {
+                        Text(
+                            text = "⚙",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (showDiagnostics) SyntraColors.NeonMint else SyntraColors.TextMuted
+                        )
+                    }
+                    TextButton(
+                        onClick = { isExpanded = !isExpanded },
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
+                    ) {
+                        Text(
+                            text = if (isExpanded) "Ocultar ▲" else "Presets ▼",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = SyntraColors.SoftMint
+                        )
+                    }
                 }
             }
 
-            if (showCompletedFlash) {
+            if (timerState.showCompletedFlash) {
                 Surface(
                     color = SyntraColors.DarkMint.copy(alpha = 0.5f),
                     shape = RoundedCornerShape(10.dp),
@@ -205,11 +197,13 @@ fun RestTimerBar(
             }
 
             // Running or Paused Display
-            if (isRunning || pausedRemainingSeconds != null) {
-                val displayMins = secondsLeft / 60
-                val displaySecs = secondsLeft % 60
+            if (timerState.isRunning || timerState.isPaused) {
+                val displayMins = timerState.secondsLeft / 60
+                val displaySecs = timerState.secondsLeft % 60
                 val timeString = String.format("%02d:%02d", displayMins, displaySecs)
-                val progress = if (totalSeconds > 0) (secondsLeft.toFloat() / totalSeconds.toFloat()).coerceIn(0f, 1f) else 0f
+                val progress = if (timerState.totalSeconds > 0) {
+                    (timerState.secondsLeft.toFloat() / timerState.totalSeconds.toFloat()).coerceIn(0f, 1f)
+                } else 0f
 
                 LinearProgressIndicator(
                     progress = { progress },
@@ -228,28 +222,34 @@ fun RestTimerBar(
                         style = MaterialTheme.typography.headlineMedium,
                         fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Bold,
-                        color = if (secondsLeft <= 10) SyntraColors.Error else SyntraColors.NeonMint
+                        color = if (timerState.secondsLeft <= 10) SyntraColors.Error else SyntraColors.NeonMint
                     )
 
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         Button(
-                            onClick = { if (isRunning) pauseTimer() else resumeTimer() },
+                            onClick = {
+                                if (timerState.isRunning) {
+                                    RestTimerManager.pauseTimer(context)
+                                } else {
+                                    RestTimerManager.resumeTimer(context)
+                                }
+                            },
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = if (isRunning) SyntraColors.SurfaceHighlight else SyntraColors.NeonMint,
-                                contentColor = if (isRunning) SyntraColors.TextPrimary else Color(0xFF05100E)
+                                containerColor = if (timerState.isRunning) SyntraColors.SurfaceHighlight else SyntraColors.NeonMint,
+                                contentColor = if (timerState.isRunning) SyntraColors.TextPrimary else Color(0xFF05100E)
                             ),
                             contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
                             shape = RoundedCornerShape(50)
                         ) {
                             Text(
-                                text = if (isRunning) "Pausa" else "Reanudar",
+                                text = if (timerState.isRunning) "Pausa" else "Reanudar",
                                 style = MaterialTheme.typography.labelSmall,
                                 fontWeight = FontWeight.Bold
                             )
                         }
 
                         OutlinedButton(
-                            onClick = { addTime(15) },
+                            onClick = { RestTimerManager.addTime(context, 15) },
                             contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
                             shape = RoundedCornerShape(50),
                             border = androidx.compose.foundation.BorderStroke(1.dp, SyntraColors.BorderSubtle)
@@ -258,7 +258,7 @@ fun RestTimerBar(
                         }
 
                         OutlinedButton(
-                            onClick = { resetTimer() },
+                            onClick = { RestTimerManager.resetTimer(context) },
                             contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
                             shape = RoundedCornerShape(50),
                             border = androidx.compose.foundation.BorderStroke(1.dp, SyntraColors.BorderSubtle)
@@ -277,31 +277,119 @@ fun RestTimerBar(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     listOf(30, 60, 90, 120).forEach { sec ->
+                        val isCurrentPreset = timerState.totalSeconds == sec && (timerState.isRunning || timerState.isPaused)
                         OutlinedButton(
-                            onClick = { startTimer(sec) },
+                            onClick = { requestStart(sec) },
                             modifier = Modifier.weight(1f),
                             shape = RoundedCornerShape(50),
                             contentPadding = PaddingValues(vertical = 4.dp),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, if (totalSeconds == sec && (isRunning || pausedRemainingSeconds != null)) SyntraColors.NeonMint else SyntraColors.BorderSubtle),
+                            border = androidx.compose.foundation.BorderStroke(
+                                1.dp,
+                                if (isCurrentPreset) SyntraColors.NeonMint else SyntraColors.BorderSubtle
+                            ),
                             colors = ButtonDefaults.outlinedButtonColors(
-                                containerColor = if (totalSeconds == sec && (isRunning || pausedRemainingSeconds != null)) SyntraColors.DarkMint else SyntraColors.SurfaceCardElevated
+                                containerColor = if (isCurrentPreset) SyntraColors.DarkMint else SyntraColors.SurfaceCardElevated
                             )
                         ) {
                             Text(
                                 text = "${sec}s",
                                 style = MaterialTheme.typography.bodySmall,
                                 fontWeight = FontWeight.Bold,
-                                color = if (totalSeconds == sec && (isRunning || pausedRemainingSeconds != null)) SyntraColors.NeonMint else SyntraColors.TextPrimary
+                                color = if (isCurrentPreset) SyntraColors.NeonMint else SyntraColors.TextPrimary
                             )
                         }
                     }
                     OutlinedButton(
-                        onClick = { addTime(30) },
+                        onClick = { RestTimerManager.addTime(context, 30) },
                         shape = RoundedCornerShape(50),
                         border = androidx.compose.foundation.BorderStroke(1.dp, SyntraColors.BorderSubtle),
                         contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
                     ) {
                         Text("+", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold, color = SyntraColors.NeonMint)
+                    }
+                }
+            }
+
+            // Diagnostics & Perms Expandable Panel
+            if (showDiagnostics) {
+                val canExact = RestTimerAlarmScheduler.canScheduleExactAlarms(context)
+                val events = remember(showDiagnostics) { RestTimerDiagnostics.getEvents().takeLast(6).reversed() }
+
+                Surface(
+                    color = Color(0xFF071110),
+                    shape = RoundedCornerShape(10.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, SyntraColors.BorderSubtle),
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Diagnóstico de Alarmas & Vibración",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = SyntraColors.SoftMint
+                            )
+                            TextButton(
+                                onClick = { RestTimerDiagnostics.clear() },
+                                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)
+                            ) {
+                                Text("Limpiar", style = MaterialTheme.typography.labelSmall, color = SyntraColors.TextMuted)
+                            }
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = if (canExact) "Alarma exacta: Concedido ✅" else "Alarma exacta: Denegado ⚠️",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (canExact) SyntraColors.NeonMint else SyntraColors.Error
+                            )
+                            if (!canExact) {
+                                TextButton(
+                                    onClick = { RestTimerAlarmScheduler.openExactAlarmSetting(context) },
+                                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)
+                                ) {
+                                    Text("Ajustes ↗", style = MaterialTheme.typography.labelSmall, color = SyntraColors.NeonMint)
+                                }
+                            }
+                        }
+
+                        Text(
+                            text = "Últimos eventos registrados:",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = SyntraColors.TextMuted
+                        )
+
+                        if (events.isEmpty()) {
+                            Text(
+                                text = "Sin eventos registrados aún.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = SyntraColors.TextMuted
+                            )
+                        } else {
+                            events.forEach { event ->
+                                Text(
+                                    text = event.format(),
+                                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                                    fontFamily = FontFamily.Monospace,
+                                    color = when {
+                                        event.type.contains("ERROR") -> SyntraColors.Error
+                                        event.type.contains("VIBRATION") -> SyntraColors.NeonMint
+                                        else -> SyntraColors.TextSecondary
+                                    }
+                                )
+                            }
+                        }
                     }
                 }
             }

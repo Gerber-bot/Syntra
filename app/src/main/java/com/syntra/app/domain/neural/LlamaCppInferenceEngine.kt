@@ -139,8 +139,9 @@ class LlamaCppInferenceEngine(
         var tokenCount = 0
 
         try {
-            LLamaAndroid.instance().nlen = params.maxTokens.coerceIn(16, 512)
-            LLamaAndroid.instance().send(prompt, formatChat = true).collect { piece ->
+            val maxTok = params.maxTokens.coerceIn(16, 512)
+            LLamaAndroid.instance().nlen = maxTok
+            LLamaAndroid.instance().send(prompt, maxTokens = maxTok, formatChat = true).collect { piece ->
                 if (isCancelled) {
                     emit(GenerationChunk(text = "", isComplete = true, errorMessage = "Inferencia cancelada por el usuario."))
                     state = EngineState.READY

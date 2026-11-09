@@ -112,7 +112,7 @@ class LLamaAndroid {
                     val context = new_context(model)
                     if (context == 0L) throw IllegalStateException("new_context() failed")
 
-                    val batch = new_batch(512, 0, 1)
+                    val batch = new_batch(2048, 0, 1)
                     if (batch == 0L) throw IllegalStateException("new_batch() failed")
 
                     val sampler = new_sampler()
@@ -127,12 +127,14 @@ class LLamaAndroid {
         }
     }
 
-    fun send(message: String, formatChat: Boolean = true): Flow<String> = flow {
+    fun send(message: String, maxTokens: Int = nlen, formatChat: Boolean = true): Flow<String> = flow {
         when (val state = threadLocalState.get() ?: State.Idle) {
             is State.Loaded -> {
-                val ncur = IntVar(completion_init(state.context, state.batch, message, formatChat, nlen))
-                while (ncur.value <= nlen) {
-                    val str = completion_loop(state.context, state.batch, state.sampler, nlen, ncur)
+                val promptTokens = completion_init(state.context, state.batch, message, formatChat, maxTokens)
+                val targetEnd = promptTokens + maxTokens
+                val ncur = IntVar(promptTokens)
+                while (ncur.value < targetEnd) {
+                    val str = completion_loop(state.context, state.batch, state.sampler, targetEnd, ncur)
                     if (str == null) {
                         break
                     }
