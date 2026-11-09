@@ -62,6 +62,7 @@ class BackupManager(private val db: AppDatabase) {
             WorkoutSessionBackupDto(
                 id = s.id,
                 title = s.title,
+                category = s.category,
                 startedAtMillis = s.startedAtMillis,
                 finishedAtMillis = s.finishedAtMillis,
                 notes = s.notes
@@ -176,9 +177,20 @@ class BackupManager(private val db: AppDatabase) {
             )
         }
 
+        val categories = db.categoryDao().getAll().map { c ->
+            CategoryBackupDto(
+                id = c.id,
+                name = c.name,
+                icon = c.icon,
+                orderIndex = c.orderIndex,
+                isHidden = c.isHidden,
+                colorHex = c.colorHex
+            )
+        }
+
         return SyntraBackupPayload(
             formatVersion = BackupSerializer.CURRENT_FORMAT_VERSION,
-            appVersion = "0.5.0",
+            appVersion = "0.6.0",
             exportedAtMillis = System.currentTimeMillis(),
             profile = profileDto,
             weighIns = weighIns,
@@ -191,7 +203,8 @@ class BackupManager(private val db: AppDatabase) {
             irisxMessages = messages,
             routines = routines,
             routineExercises = routineExercises,
-            activeWorkoutDraft = activeDraft
+            activeWorkoutDraft = activeDraft,
+            categories = categories
         )
     }
 
@@ -293,6 +306,7 @@ class BackupManager(private val db: AppDatabase) {
                         WorkoutSessionEntity(
                             id = s.id,
                             title = s.title,
+                            category = s.category,
                             startedAtMillis = s.startedAtMillis,
                             finishedAtMillis = s.finishedAtMillis,
                             notes = s.notes
@@ -438,6 +452,22 @@ class BackupManager(private val db: AppDatabase) {
                         committedSessionId = d.committedSessionId,
                         lastErrorMessage = d.lastErrorMessage
                     )
+                )
+            }
+
+            if (payload.categories.isNotEmpty()) {
+                db.categoryDao().deleteAll()
+                db.categoryDao().insertAll(
+                    payload.categories.map { c ->
+                        CategoryEntity(
+                            id = c.id,
+                            name = c.name,
+                            icon = c.icon,
+                            orderIndex = c.orderIndex,
+                            isHidden = c.isHidden,
+                            colorHex = c.colorHex
+                        )
+                    }
                 )
             }
         }

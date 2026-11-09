@@ -42,7 +42,17 @@ data class WorkoutSessionBackupDto(
     val title: String,
     val startedAtMillis: Long,
     val finishedAtMillis: Long? = null,
-    val notes: String = ""
+    val notes: String = "",
+    val category: String = ""
+)
+
+data class CategoryBackupDto(
+    val id: Long = 0,
+    val name: String,
+    val icon: String = "📁",
+    val orderIndex: Int = 0,
+    val isHidden: Boolean = false,
+    val colorHex: String = "#75D9C1"
 )
 
 data class WorkoutSetBackupDto(
@@ -140,8 +150,8 @@ data class ActiveWorkoutDraftBackupDto(
 )
 
 data class SyntraBackupPayload(
-    val formatVersion: Int = 2,
-    val appVersion: String = "0.5.0",
+    val formatVersion: Int = 3,
+    val appVersion: String = "0.6.0",
     val exportedAtMillis: Long,
     val profile: ProfileBackupDto?,
     val weighIns: List<WeighInBackupDto> = emptyList(),
@@ -154,7 +164,8 @@ data class SyntraBackupPayload(
     val irisxMessages: List<IrisxMessageBackupDto> = emptyList(),
     val routines: List<RoutineBackupDto> = emptyList(),
     val routineExercises: List<RoutineExerciseBackupDto> = emptyList(),
-    val activeWorkoutDraft: ActiveWorkoutDraftBackupDto? = null
+    val activeWorkoutDraft: ActiveWorkoutDraftBackupDto? = null,
+    val categories: List<CategoryBackupDto> = emptyList()
 )
 
 sealed class BackupValidationResult {

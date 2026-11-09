@@ -7,7 +7,7 @@ import org.json.JSONObject
 object BackupSerializer {
 
     const val MIN_SUPPORTED_FORMAT_VERSION = 1
-    const val CURRENT_FORMAT_VERSION = 2
+    const val CURRENT_FORMAT_VERSION = 3
 
     fun serialize(payload: SyntraBackupPayload): String {
         val root = JSONObject()
@@ -75,6 +75,7 @@ object BackupSerializer {
             sessionsArr.put(JSONObject().apply {
                 put("id", s.id)
                 put("title", s.title)
+                put("category", s.category)
                 put("startedAtMillis", s.startedAtMillis)
                 put("finishedAtMillis", s.finishedAtMillis ?: JSONObject.NULL)
                 put("notes", s.notes)
@@ -204,6 +205,19 @@ object BackupSerializer {
         } else {
             root.put("activeWorkoutDraft", JSONObject.NULL)
         }
+
+        val categoriesArr = JSONArray()
+        payload.categories.forEach { c ->
+            categoriesArr.put(JSONObject().apply {
+                put("id", c.id)
+                put("name", c.name)
+                put("icon", c.icon)
+                put("orderIndex", c.orderIndex)
+                put("isHidden", c.isHidden)
+                put("colorHex", c.colorHex)
+            })
+        }
+        root.put("workoutCategories", categoriesArr)
 
         return root.toString(2)
     }
@@ -359,7 +373,8 @@ object BackupSerializer {
                         title = title.ifEmpty { "Sesión" },
                         startedAtMillis = startedAt,
                         finishedAtMillis = if (item.isNull("finishedAtMillis")) null else item.optLong("finishedAtMillis"),
-                        notes = item.optString("notes", "")
+                        notes = item.optString("notes", ""),
+                        category = item.optString("category", "")
                     )
                 )
             }
@@ -560,6 +575,30 @@ object BackupSerializer {
             null
         }
 
+        // Workout Categories validation (optional for backward compatibility)
+        val categoriesList = mutableListOf<CategoryBackupDto>()
+        if (root.has("workoutCategories")) {
+            val arr = root.optJSONArray("workoutCategories")
+            if (arr != null) {
+                for (i in 0 until arr.length()) {
+                    val cObj = arr.optJSONObject(i) ?: continue
+                    val name = cObj.optString("name", "").trim()
+                    if (name.isNotEmpty()) {
+                        categoriesList.add(
+                            CategoryBackupDto(
+                                id = cObj.optLong("id", 0L),
+                                name = name,
+                                icon = cObj.optString("icon", "📁"),
+                                orderIndex = cObj.optInt("orderIndex", 0),
+                                isHidden = cObj.optBoolean("isHidden", false),
+                                colorHex = cObj.optString("colorHex", "#75D9C1")
+                            )
+                        )
+                    }
+                }
+            }
+        }
+
         return BackupValidationResult.Success(
             SyntraBackupPayload(
                 formatVersion = formatVersion,
@@ -576,7 +615,8 @@ object BackupSerializer {
                 irisxMessages = messagesList,
                 routines = routinesList,
                 routineExercises = routineExercisesList,
-                activeWorkoutDraft = activeDraftDto
+                activeWorkoutDraft = activeDraftDto,
+                categories = categoriesList
             )
         )
     }

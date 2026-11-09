@@ -584,6 +584,50 @@ class MigrationTest {
             assertEquals("ACTIVE", rs.getString("state"))
         }
 
+        // 7. Apply MIGRATION_4_5 (v4 -> v5)
+        stmt.execute("ALTER TABLE workout_sessions ADD COLUMN category TEXT NOT NULL DEFAULT ''")
+        stmt.execute("""
+            CREATE TABLE IF NOT EXISTS workout_categories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                name TEXT NOT NULL,
+                icon TEXT NOT NULL DEFAULT '📁',
+                orderIndex INTEGER NOT NULL DEFAULT 0,
+                isHidden INTEGER NOT NULL DEFAULT 0,
+                colorHex TEXT NOT NULL DEFAULT '#75D9C1'
+            )
+        """.trimIndent())
+        stmt.execute("CREATE UNIQUE INDEX IF NOT EXISTS index_workout_categories_name ON workout_categories (name)")
+
+        val defaultCategories = listOf(
+            Triple("Pecho", "🛡️", 0),
+            Triple("Espalda", "🏹", 1),
+            Triple("Piernas", "🦵", 2),
+            Triple("Hombros", "🏋️", 3),
+            Triple("Brazos", "💪", 4),
+            Triple("Full Body", "⚡", 5),
+            Triple("Torso", "🏛️", 6),
+            Triple("Push", "↗️", 7),
+            Triple("Pull", "↙️", 8)
+        )
+        for ((name, icon, order) in defaultCategories) {
+            stmt.execute("INSERT OR IGNORE INTO workout_categories (name, icon, orderIndex, isHidden, colorHex) VALUES ('$name', '$icon', $order, 0, '#75D9C1')")
+        }
+
+        stmt.execute("UPDATE workout_sessions SET category = 'Pecho' WHERE category = '' AND (title LIKE '%Pecho%' OR title LIKE '%Chest%')")
+
+        // Verify category backfill on session 10 ("Pecho v0.2.1")
+        stmt.executeQuery("SELECT title, category FROM workout_sessions WHERE id = 10").use { rs ->
+            assertTrue(rs.next())
+            assertEquals("Pecho v0.2.1", rs.getString("title"))
+            assertEquals("Pecho", rs.getString("category"))
+        }
+
+        // Verify workout_categories count
+        stmt.executeQuery("SELECT COUNT(*) FROM workout_categories WHERE isHidden = 0").use { rs ->
+            assertTrue(rs.next())
+            assertEquals(9, rs.getInt(1))
+        }
+
         stmt.close()
         connection.close()
     }

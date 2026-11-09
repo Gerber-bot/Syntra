@@ -65,7 +65,21 @@ data class WorkoutSessionEntity(
     val title: String,
     val startedAtMillis: Long,
     val finishedAtMillis: Long? = null,
-    val notes: String = ""
+    val notes: String = "",
+    val category: String = ""
+)
+
+@Entity(
+    tableName = "workout_categories",
+    indices = [Index(value = ["name"], unique = true)]
+)
+data class CategoryEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val name: String,
+    val icon: String = "📁",
+    val orderIndex: Int = 0,
+    val isHidden: Boolean = false,
+    val colorHex: String = "#75D9C1"
 )
 
 @Entity(tableName = "workout_sets", indices = [Index("sessionId"), Index("exerciseId")])
@@ -266,6 +280,42 @@ interface ExerciseAliasDao {
 }
 
 @Dao
+interface CategoryDao {
+    @Query("SELECT * FROM workout_categories WHERE isHidden = 0 ORDER BY orderIndex ASC, name ASC")
+    fun observeAllActive(): Flow<List<CategoryEntity>>
+
+    @Query("SELECT * FROM workout_categories ORDER BY orderIndex ASC, name ASC")
+    fun observeAll(): Flow<List<CategoryEntity>>
+
+    @Query("SELECT * FROM workout_categories ORDER BY orderIndex ASC, name ASC")
+    suspend fun getAll(): List<CategoryEntity>
+
+    @Query("SELECT * FROM workout_categories WHERE name = :name LIMIT 1")
+    suspend fun findByName(name: String): CategoryEntity?
+
+    @Query("SELECT * FROM workout_categories WHERE id = :id LIMIT 1")
+    suspend fun findById(id: Long): CategoryEntity?
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insert(category: CategoryEntity): Long
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertAll(categories: List<CategoryEntity>)
+
+    @Update
+    suspend fun update(category: CategoryEntity)
+
+    @Delete
+    suspend fun delete(category: CategoryEntity)
+
+    @Query("DELETE FROM workout_categories WHERE id = :id")
+    suspend fun deleteById(id: Long)
+
+    @Query("DELETE FROM workout_categories")
+    suspend fun deleteAll()
+}
+
+@Dao
 interface WorkoutSessionDao {
     @Query("SELECT * FROM workout_sessions ORDER BY startedAtMillis DESC, id DESC")
     fun observeAll(): Flow<List<WorkoutSessionEntity>>
@@ -314,6 +364,12 @@ interface WorkoutSetDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(sets: List<WorkoutSetEntity>)
+
+    @Update
+    suspend fun update(set: WorkoutSetEntity)
+
+    @Delete
+    suspend fun delete(set: WorkoutSetEntity)
 
     @Query("DELETE FROM workout_sets WHERE sessionId = :sessionId")
     suspend fun deleteForSession(sessionId: Long)
@@ -485,9 +541,10 @@ interface ActiveWorkoutDraftDao {
         IrisxMessageEntity::class,
         RoutineEntity::class,
         RoutineExerciseEntity::class,
-        ActiveWorkoutDraftEntity::class
+        ActiveWorkoutDraftEntity::class,
+        CategoryEntity::class
     ],
-    version = 4,
+    version = 5,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -501,6 +558,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun irisxConversationDao(): IrisxConversationDao
     abstract fun routineDao(): RoutineDao
     abstract fun activeWorkoutDraftDao(): ActiveWorkoutDraftDao
+    abstract fun categoryDao(): CategoryDao
 
     companion object {
         @Volatile private var instance: AppDatabase? = null
@@ -625,10 +683,55 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE workout_sessions ADD COLUMN category TEXT NOT NULL DEFAULT ''")
+
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS workout_categories (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        name TEXT NOT NULL,
+                        icon TEXT NOT NULL DEFAULT '📁',
+                        orderIndex INTEGER NOT NULL DEFAULT 0,
+                        isHidden INTEGER NOT NULL DEFAULT 0,
+                        colorHex TEXT NOT NULL DEFAULT '#75D9C1'
+                    )
+                """.trimIndent())
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_workout_categories_name ON workout_categories (name)")
+
+                val defaultCategories = listOf(
+                    Triple("Pecho", "🛡️", 0),
+                    Triple("Espalda", "🏹", 1),
+                    Triple("Piernas", "🦵", 2),
+                    Triple("Hombros", "🏋️", 3),
+                    Triple("Brazos", "💪", 4),
+                    Triple("Full Body", "⚡", 5),
+                    Triple("Torso", "🏛️", 6),
+                    Triple("Push", "↗️", 7),
+                    Triple("Pull", "↙️", 8)
+                )
+                for ((name, icon, order) in defaultCategories) {
+                    db.execSQL(
+                        "INSERT OR IGNORE INTO workout_categories (name, icon, orderIndex, isHidden, colorHex) VALUES ('$name', '$icon', $order, 0, '#75D9C1')"
+                    )
+                }
+
+                db.execSQL("UPDATE workout_sessions SET category = 'Pecho' WHERE category = '' AND (title LIKE '%Pecho%' OR title LIKE '%Chest%')")
+                db.execSQL("UPDATE workout_sessions SET category = 'Espalda' WHERE category = '' AND (title LIKE '%Espalda%' OR title LIKE '%Back%')")
+                db.execSQL("UPDATE workout_sessions SET category = 'Piernas' WHERE category = '' AND (title LIKE '%Pierna%' OR title LIKE '%Leg%')")
+                db.execSQL("UPDATE workout_sessions SET category = 'Hombros' WHERE category = '' AND (title LIKE '%Hombro%' OR title LIKE '%Shoulder%')")
+                db.execSQL("UPDATE workout_sessions SET category = 'Brazos' WHERE category = '' AND (title LIKE '%Brazo%' OR title LIKE '%Arm%' OR title LIKE '%Bícep%' OR title LIKE '%Trícep%')")
+                db.execSQL("UPDATE workout_sessions SET category = 'Full Body' WHERE category = '' AND (title LIKE '%Full Body%' OR title LIKE '%Cuerpo Completo%')")
+                db.execSQL("UPDATE workout_sessions SET category = 'Torso' WHERE category = '' AND title LIKE '%Torso%'")
+                db.execSQL("UPDATE workout_sessions SET category = 'Push' WHERE category = '' AND title LIKE '%Push%'")
+                db.execSQL("UPDATE workout_sessions SET category = 'Pull' WHERE category = '' AND title LIKE '%Pull%'")
+            }
+        }
+
         fun get(context: Context): AppDatabase = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(
                 context.applicationContext, AppDatabase::class.java, "syntra.db"
-            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
             .build().also { instance = it }
         }
     }
