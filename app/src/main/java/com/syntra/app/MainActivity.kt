@@ -1303,8 +1303,8 @@ private fun HomeScreen(
             shape = RoundedCornerShape(12.dp)
         ) {
             val btnLabel = if (hasRecoverableDraft) {
-                val draftTitle = activeDraft?.title?.takeIf { it.isNotBlank() }
-                    ?: activeDraft?.plannedCategory
+                val draftTitle = activeDraft.title.takeIf { it.isNotBlank() }
+                    ?: activeDraft.plannedCategory
                     ?: "en curso"
                 "▶ Continuar entrenamiento ($draftTitle)"
             } else {

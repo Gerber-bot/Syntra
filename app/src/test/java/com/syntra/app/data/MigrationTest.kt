@@ -337,4 +337,254 @@ class MigrationTest {
         stmt.close()
         connection.close()
     }
+
+    @Test
+    fun `direct migration chain from Syntra v0_2_1 Room v2 to v0_5_0 Room v4 preserves profiles, weigh-ins, exercises, sessions, sets, aliases, and memories`() {
+        val connection = DriverManager.getConnection("jdbc:sqlite::memory:")
+        val stmt = connection.createStatement()
+
+        // 1. Create exact Room v2 schema (as installed in Syntra v0.2.1 on the phone)
+        stmt.execute("""
+            CREATE TABLE IF NOT EXISTS `profiles` (
+                `id` INTEGER NOT NULL,
+                `name` TEXT NOT NULL,
+                `preferredName` TEXT NOT NULL,
+                `heightCm` INTEGER NOT NULL,
+                `initialWeightGrams` INTEGER NOT NULL,
+                `activityLevel` TEXT NOT NULL,
+                `goal` TEXT NOT NULL,
+                `createdAtMillis` INTEGER NOT NULL,
+                `updatedAtMillis` INTEGER NOT NULL,
+                PRIMARY KEY(`id`)
+            )
+        """.trimIndent())
+        stmt.execute("""
+            CREATE TABLE IF NOT EXISTS `weigh_ins` (
+                `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                `measuredAtMillis` INTEGER NOT NULL,
+                `weightGrams` INTEGER NOT NULL,
+                `note` TEXT NOT NULL
+            )
+        """.trimIndent())
+        stmt.execute("""
+            CREATE TABLE IF NOT EXISTS `exercises` (
+                `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                `displayName` TEXT NOT NULL,
+                `normalizedName` TEXT NOT NULL,
+                `muscleGroup` TEXT NOT NULL,
+                `secondaryMuscleGroups` TEXT NOT NULL DEFAULT '',
+                `equipment` TEXT,
+                `exerciseType` TEXT NOT NULL DEFAULT 'strength',
+                `status` TEXT NOT NULL DEFAULT 'CONFIRMED',
+                `createdAtMillis` INTEGER NOT NULL
+            )
+        """.trimIndent())
+        stmt.execute("""
+            CREATE TABLE IF NOT EXISTS `exercise_aliases` (
+                `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                `exerciseId` INTEGER NOT NULL,
+                `normalizedAlias` TEXT NOT NULL,
+                `createdAtMillis` INTEGER NOT NULL
+            )
+        """.trimIndent())
+        stmt.execute("""
+            CREATE TABLE IF NOT EXISTS `workout_sessions` (
+                `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                `title` TEXT NOT NULL,
+                `startedAtMillis` INTEGER NOT NULL,
+                `finishedAtMillis` INTEGER,
+                `notes` TEXT NOT NULL DEFAULT ''
+            )
+        """.trimIndent())
+        stmt.execute("""
+            CREATE TABLE IF NOT EXISTS `workout_sets` (
+                `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                `sessionId` INTEGER NOT NULL,
+                `exerciseId` INTEGER NOT NULL,
+                `orderInExercise` INTEGER NOT NULL,
+                `executionOrder` INTEGER NOT NULL DEFAULT 0,
+                `loadGrams` INTEGER NOT NULL,
+                `repetitions` INTEGER NOT NULL,
+                `rir` INTEGER,
+                `isAssisted` INTEGER NOT NULL DEFAULT 0,
+                `isDumbbell` INTEGER NOT NULL DEFAULT 0,
+                `note` TEXT NOT NULL DEFAULT '',
+                `plannedTarget` TEXT
+            )
+        """.trimIndent())
+        stmt.execute("""
+            CREATE TABLE IF NOT EXISTS `irisx_memories` (
+                `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                `memoryType` TEXT NOT NULL,
+                `sourceKey` TEXT NOT NULL,
+                `targetValue` TEXT NOT NULL,
+                `confidence` REAL NOT NULL DEFAULT 1.0,
+                `createdAtMillis` INTEGER NOT NULL,
+                `updatedAtMillis` INTEGER NOT NULL
+            )
+        """.trimIndent())
+        stmt.execute("CREATE INDEX IF NOT EXISTS index_irisx_memories_memoryType ON irisx_memories (memoryType)")
+        stmt.execute("CREATE UNIQUE INDEX IF NOT EXISTS index_irisx_memories_sourceKey_memoryType ON irisx_memories (sourceKey, memoryType)")
+
+        // 2. Populate v0.2.1 user data across all 7 tables
+        stmt.execute("""
+            INSERT INTO profiles VALUES (1, 'Federico', 'Fede', 178, 76000, 'Moderado', 'Mejorar fuerza', 1700000000000, 1700000000000)
+        """.trimIndent())
+        stmt.execute("""
+            INSERT INTO weigh_ins (id, measuredAtMillis, weightGrams, note)
+            VALUES (1, 1700000000000, 76000, 'Inicial'), (2, 1700500000000, 75400, 'Semana 2')
+        """.trimIndent())
+        stmt.execute("""
+            INSERT INTO exercises (id, displayName, normalizedName, muscleGroup, secondaryMuscleGroups, equipment, exerciseType, status, createdAtMillis)
+            VALUES (1, 'Press de banca', 'press de banca', 'Pecho', 'Tríceps, Hombro anterior', 'Barra', 'strength', 'CONFIRMED', 1700000000000)
+        """.trimIndent())
+        stmt.execute("""
+            INSERT INTO exercise_aliases (id, exerciseId, normalizedAlias, createdAtMillis)
+            VALUES (1, 1, 'banca plana', 1700000000000)
+        """.trimIndent())
+        stmt.execute("""
+            INSERT INTO workout_sessions (id, title, startedAtMillis, finishedAtMillis, notes)
+            VALUES (10, 'Pecho v0.2.1', 1700600000000, 1700603600000, 'Sesión en Redmi Note 13')
+        """.trimIndent())
+        stmt.execute("""
+            INSERT INTO workout_sets (id, sessionId, exerciseId, orderInExercise, executionOrder, loadGrams, repetitions, rir, isAssisted, isDumbbell, note, plannedTarget)
+            VALUES (100, 10, 1, 1, 1, 75000, 8, 1, 0, 0, '', '3 series de 8–10 repeticiones')
+        """.trimIndent())
+        stmt.execute("""
+            INSERT INTO irisx_memories (id, memoryType, sourceKey, targetValue, confidence, createdAtMillis, updatedAtMillis)
+            VALUES (1, 'ALIAS', 'banca plana', 'Press de banca', 1.0, 1700000000000, 1700000000000)
+        """.trimIndent())
+
+        // 3. Apply MIGRATION_2_3
+        stmt.execute("""
+            CREATE TABLE IF NOT EXISTS irisx_conversations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                title TEXT NOT NULL,
+                activeMuscleGroup TEXT,
+                activeExerciseName TEXT,
+                activeSessionId INTEGER,
+                activePeriodScope TEXT,
+                createdAtMillis INTEGER NOT NULL,
+                updatedAtMillis INTEGER NOT NULL
+            )
+        """.trimIndent())
+        stmt.execute("""
+            CREATE TABLE IF NOT EXISTS irisx_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                conversationId INTEGER NOT NULL,
+                senderRole TEXT NOT NULL,
+                content TEXT NOT NULL,
+                intentType TEXT,
+                referencedExercise TEXT,
+                referencedMuscleGroup TEXT,
+                referencedSessionId INTEGER,
+                createdAtMillis INTEGER NOT NULL
+            )
+        """.trimIndent())
+        stmt.execute("CREATE INDEX IF NOT EXISTS index_irisx_messages_conversationId ON irisx_messages (conversationId)")
+        stmt.execute("""
+            CREATE TABLE IF NOT EXISTS workout_routines (
+                id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                name TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                targetCategory TEXT NOT NULL DEFAULT 'General',
+                createdAtMillis INTEGER NOT NULL,
+                updatedAtMillis INTEGER NOT NULL
+            )
+        """.trimIndent())
+        stmt.execute("""
+            CREATE TABLE IF NOT EXISTS routine_exercises (
+                id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                routineId INTEGER NOT NULL,
+                exerciseId INTEGER,
+                exerciseName TEXT NOT NULL,
+                orderIndex INTEGER NOT NULL,
+                targetSets INTEGER NOT NULL,
+                minReps INTEGER NOT NULL,
+                maxReps INTEGER NOT NULL,
+                suggestedLoadGrams INTEGER,
+                isDumbbell INTEGER NOT NULL DEFAULT 0,
+                isAssisted INTEGER NOT NULL DEFAULT 0,
+                notes TEXT NOT NULL DEFAULT ''
+            )
+        """.trimIndent())
+        stmt.execute("CREATE INDEX IF NOT EXISTS index_routine_exercises_routineId ON routine_exercises (routineId)")
+        stmt.execute("CREATE INDEX IF NOT EXISTS index_routine_exercises_exerciseId ON routine_exercises (exerciseId)")
+
+        // 4. Apply MIGRATION_3_4
+        stmt.execute("""
+            CREATE TABLE IF NOT EXISTS active_workout_drafts (
+                slotId INTEGER PRIMARY KEY NOT NULL,
+                sessionUuid TEXT NOT NULL,
+                state TEXT NOT NULL,
+                title TEXT NOT NULL,
+                rawNotesText TEXT NOT NULL,
+                cursorPosition INTEGER NOT NULL DEFAULT 0,
+                sourceRoutineId INTEGER,
+                plannedCategory TEXT,
+                startedAtWallMillis INTEGER NOT NULL,
+                startedAtElapsedRealtimeMillis INTEGER NOT NULL,
+                accumulatedPausedMillis INTEGER NOT NULL DEFAULT 0,
+                reviewStartedAtWallMillis INTEGER,
+                reviewStartedAtElapsedMillis INTEGER,
+                finalizedAtWallMillis INTEGER,
+                lastSavedAtWallMillis INTEGER NOT NULL,
+                lastKnownElapsedRealtimeMillis INTEGER NOT NULL,
+                lastPersistedDurationMillis INTEGER NOT NULL DEFAULT 0,
+                committedSessionId INTEGER,
+                lastErrorMessage TEXT
+            )
+        """.trimIndent())
+
+        // 5. Verify 100% of v0.2.1 records are intact after v2 -> v3 -> v4 upgrade
+        stmt.executeQuery("SELECT preferredName, initialWeightGrams FROM profiles WHERE id = 1").use { rs ->
+            assertTrue(rs.next())
+            assertEquals("Fede", rs.getString("preferredName"))
+            assertEquals(76000, rs.getInt("initialWeightGrams"))
+        }
+        stmt.executeQuery("SELECT COUNT(*) FROM weigh_ins").use { rs ->
+            assertTrue(rs.next())
+            assertEquals(2, rs.getInt(1))
+        }
+        stmt.executeQuery("SELECT displayName, muscleGroup FROM exercises WHERE id = 1").use { rs ->
+            assertTrue(rs.next())
+            assertEquals("Press de banca", rs.getString("displayName"))
+            assertEquals("Pecho", rs.getString("muscleGroup"))
+        }
+        stmt.executeQuery("SELECT normalizedAlias FROM exercise_aliases WHERE id = 1").use { rs ->
+            assertTrue(rs.next())
+            assertEquals("banca plana", rs.getString("normalizedAlias"))
+        }
+        stmt.executeQuery("SELECT title, notes FROM workout_sessions WHERE id = 10").use { rs ->
+            assertTrue(rs.next())
+            assertEquals("Pecho v0.2.1", rs.getString("title"))
+            assertEquals("Sesión en Redmi Note 13", rs.getString("notes"))
+        }
+        stmt.executeQuery("SELECT loadGrams, repetitions, plannedTarget FROM workout_sets WHERE id = 100").use { rs ->
+            assertTrue(rs.next())
+            assertEquals(75000, rs.getInt("loadGrams"))
+            assertEquals(8, rs.getInt("repetitions"))
+            assertEquals("3 series de 8–10 repeticiones", rs.getString("plannedTarget"))
+        }
+        stmt.executeQuery("SELECT targetValue FROM irisx_memories WHERE sourceKey = 'banca plana'").use { rs ->
+            assertTrue(rs.next())
+            assertEquals("Press de banca", rs.getString("targetValue"))
+        }
+
+        // 6. Verify v4 active_workout_drafts is ready for use
+        stmt.execute("""
+            INSERT INTO active_workout_drafts (
+                slotId, sessionUuid, state, title, rawNotesText, cursorPosition,
+                startedAtWallMillis, startedAtElapsedRealtimeMillis, lastSavedAtWallMillis, lastKnownElapsedRealtimeMillis
+            ) VALUES (1, 'uuid-v4', 'ACTIVE', 'Espalda', 'Dominadas 10kg 8', 16, 1710000000000, 50000, 1710000000000, 50000)
+        """.trimIndent())
+        stmt.executeQuery("SELECT sessionUuid, state FROM active_workout_drafts WHERE slotId = 1").use { rs ->
+            assertTrue(rs.next())
+            assertEquals("uuid-v4", rs.getString("sessionUuid"))
+            assertEquals("ACTIVE", rs.getString("state"))
+        }
+
+        stmt.close()
+        connection.close()
+    }
 }

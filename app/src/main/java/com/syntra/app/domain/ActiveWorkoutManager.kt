@@ -10,6 +10,8 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * Valid states for the Active Workout lifecycle (Sprint 05).
@@ -282,8 +284,10 @@ class RoomActiveWorkoutPersistencePort(
 class ActiveWorkoutManager(
     private val port: ActiveWorkoutPersistencePort
 ) {
+    private val mutationMutex = Mutex()
     private val commitLock = Any()
     @Volatile private var commitInFlightUuid: String? = null
+    @Volatile private var lastCompletedUuid: String? = null
 
     /**
      * Returns the current recoverable draft if one exists in ACTIVE, REVIEW_PENDING, or ERROR state.
@@ -291,17 +295,17 @@ class ActiveWorkoutManager(
     suspend fun getRecoverableDraft(
         nowWallMillis: Long = System.currentTimeMillis(),
         nowElapsedRealtimeMillis: Long = nowWallMillis
-    ): ActiveWorkoutDraftEntity? {
-        val existing = port.getCurrentDraft() ?: return null
+    ): ActiveWorkoutDraftEntity? = mutationMutex.withLock {
+        val existing = port.getCurrentDraft() ?: return@withLock null
         val state = WorkoutSessionState.fromString(existing.state)
         if (state == WorkoutSessionState.COMPLETED || state == WorkoutSessionState.CANCELLED || state == WorkoutSessionState.IDLE) {
-            return null
+            return@withLock null
         }
         val normalized = ActiveWorkoutTimer.normalizeDraftClocks(existing, nowWallMillis, nowElapsedRealtimeMillis)
         if (normalized != existing) {
             port.saveDraft(normalized)
         }
-        return normalized
+        normalized
     }
 
     /**
@@ -317,13 +321,18 @@ class ActiveWorkoutManager(
         forceReplaceExisting: Boolean = false,
         nowWallMillis: Long = System.currentTimeMillis(),
         nowElapsedRealtimeMillis: Long = nowWallMillis
-    ): ActiveWorkoutDraftEntity {
-        val existing = getRecoverableDraft(nowWallMillis, nowElapsedRealtimeMillis)
+    ): ActiveWorkoutDraftEntity = mutationMutex.withLock {
+        val existingRaw = port.getCurrentDraft()
+        val existing = existingRaw?.takeIf {
+            val st = WorkoutSessionState.fromString(it.state)
+            st != WorkoutSessionState.COMPLETED && st != WorkoutSessionState.CANCELLED && st != WorkoutSessionState.IDLE
+        }?.let { ActiveWorkoutTimer.normalizeDraftClocks(it, nowWallMillis, nowElapsedRealtimeMillis) }
+
         if (existing != null && !forceReplaceExisting) {
-            if (recoverExisting) {
-                return existing
+            if (existing != existingRaw) {
+                port.saveDraft(existing)
             }
-            return existing
+            return@withLock existing
         }
 
         val initialCursor = initialNotesText.length
@@ -349,7 +358,7 @@ class ActiveWorkoutManager(
             lastErrorMessage = null
         )
         port.saveDraft(newDraft)
-        return newDraft
+        newDraft
     }
 
     /**
@@ -377,16 +386,36 @@ class ActiveWorkoutManager(
 
     /**
      * Autosaves the free-text notepad, preserving line breaks, cursor position, and current timer duration.
+     * Protected against race conditions:
+     * - Serialized via `mutationMutex`.
+     * - If `expectedSessionUuid` is provided and does not match the active draft, or the session was already
+     *   completed/cancelled, or a newer write (`lastSavedAtWallMillis > nowWallMillis`) is already stored,
+     *   the delayed autosave is safely ignored without resurrecting or overwriting newer state.
      */
     suspend fun autosaveNotes(
         rawNotesText: String,
         cursorPosition: Int,
         title: String? = null,
+        expectedSessionUuid: String? = null,
         nowWallMillis: Long = System.currentTimeMillis(),
         nowElapsedRealtimeMillis: Long = nowWallMillis
-    ): Pair<ActiveWorkoutDraftEntity?, DraftSaveStatus> {
-        return try {
-            val current = port.getCurrentDraft() ?: return null to DraftSaveStatus.ERROR
+    ): Pair<ActiveWorkoutDraftEntity?, DraftSaveStatus> = mutationMutex.withLock {
+        try {
+            val current = port.getCurrentDraft() ?: return@withLock null to DraftSaveStatus.ERROR
+            if (expectedSessionUuid != null && current.sessionUuid != expectedSessionUuid) {
+                return@withLock current to DraftSaveStatus.SAVED
+            }
+            if (current.sessionUuid == lastCompletedUuid ||
+                current.committedSessionId != null ||
+                WorkoutSessionState.fromString(current.state) in setOf(WorkoutSessionState.COMPLETED, WorkoutSessionState.CANCELLED)
+            ) {
+                return@withLock null to DraftSaveStatus.SAVED
+            }
+            // Prevent out-of-order delayed autosave from overwriting a newer edit
+            if (nowWallMillis < current.lastSavedAtWallMillis) {
+                return@withLock current to DraftSaveStatus.SAVED
+            }
+
             val normalized = ActiveWorkoutTimer.normalizeDraftClocks(current, nowWallMillis, nowElapsedRealtimeMillis)
             val safeCursor = cursorPosition.coerceIn(0, rawNotesText.length)
             val updated = normalized.copy(
@@ -411,12 +440,12 @@ class ActiveWorkoutManager(
     suspend fun beginFinalizationReview(
         nowWallMillis: Long = System.currentTimeMillis(),
         nowElapsedRealtimeMillis: Long = nowWallMillis
-    ): ActiveWorkoutReviewBundle? {
-        val current = port.getCurrentDraft() ?: return null
+    ): ActiveWorkoutReviewBundle? = mutationMutex.withLock {
+        val current = port.getCurrentDraft() ?: return@withLock null
         val normalized = ActiveWorkoutTimer.normalizeDraftClocks(current, nowWallMillis, nowElapsedRealtimeMillis)
         val currentState = WorkoutSessionState.fromString(normalized.state)
         if (currentState == WorkoutSessionState.COMPLETED || currentState == WorkoutSessionState.CANCELLED) {
-            return null
+            return@withLock null
         }
 
         val reviewDraft = if (currentState == WorkoutSessionState.REVIEW_PENDING && normalized.reviewStartedAtElapsedMillis != null) {
@@ -427,7 +456,7 @@ class ActiveWorkoutManager(
                 state = WorkoutSessionState.REVIEW_PENDING.name,
                 reviewStartedAtWallMillis = nowWallMillis,
                 reviewStartedAtElapsedMillis = nowElapsedRealtimeMillis,
-                lastSavedAtWallMillis = nowWallMillis,
+                lastSavedAtWallMillis = nowWallMillis.coerceAtLeast(normalized.lastSavedAtWallMillis),
                 lastKnownElapsedRealtimeMillis = nowElapsedRealtimeMillis,
                 lastPersistedDurationMillis = snapshot.elapsedDurationMillis,
                 lastErrorMessage = null
@@ -448,7 +477,7 @@ class ActiveWorkoutManager(
         val enrichedPreview = preview.copy(sessionTitle = effectiveTitle)
         val frozenSnapshot = ActiveWorkoutTimer.computeSnapshot(reviewDraft, nowWallMillis, nowElapsedRealtimeMillis)
 
-        return ActiveWorkoutReviewBundle(
+        ActiveWorkoutReviewBundle(
             draft = reviewDraft,
             frozenTimer = frozenSnapshot,
             parsePreview = enrichedPreview
@@ -462,12 +491,12 @@ class ActiveWorkoutManager(
     suspend fun cancelReviewAndResume(
         nowWallMillis: Long = System.currentTimeMillis(),
         nowElapsedRealtimeMillis: Long = nowWallMillis
-    ): ActiveWorkoutDraftEntity? {
-        val current = port.getCurrentDraft() ?: return null
+    ): ActiveWorkoutDraftEntity? = mutationMutex.withLock {
+        val current = port.getCurrentDraft() ?: return@withLock null
         val normalized = ActiveWorkoutTimer.normalizeDraftClocks(current, nowWallMillis, nowElapsedRealtimeMillis)
         val state = WorkoutSessionState.fromString(normalized.state)
         if (state != WorkoutSessionState.REVIEW_PENDING && state != WorkoutSessionState.ERROR) {
-            return normalized
+            return@withLock normalized
         }
 
         val pauseDeltaElapsed = normalized.reviewStartedAtElapsedMillis?.let {
@@ -481,12 +510,12 @@ class ActiveWorkoutManager(
             accumulatedPausedMillis = normalized.accumulatedPausedMillis + pauseDeltaElapsed,
             reviewStartedAtWallMillis = null,
             reviewStartedAtElapsedMillis = null,
-            lastSavedAtWallMillis = nowWallMillis,
+            lastSavedAtWallMillis = nowWallMillis.coerceAtLeast(normalized.lastSavedAtWallMillis),
             lastKnownElapsedRealtimeMillis = nowElapsedRealtimeMillis,
             lastErrorMessage = null
         )
         port.saveDraft(resumed)
-        return resumed
+        resumed
     }
 
     /**
@@ -500,9 +529,9 @@ class ActiveWorkoutManager(
         editedExercises: List<ParsedExercise>? = null,
         nowWallMillis: Long = System.currentTimeMillis(),
         nowElapsedRealtimeMillis: Long = nowWallMillis
-    ): FinalizationResult {
+    ): FinalizationResult = mutationMutex.withLock {
         val draft = port.getCurrentDraft()
-            ?: return FinalizationResult.Failure(
+            ?: return@withLock FinalizationResult.Failure(
                 errorMessage = "No existe una sesión activa para finalizar.",
                 preservedDraft = ActiveWorkoutDraftEntity(
                     slotId = 1,
@@ -518,8 +547,11 @@ class ActiveWorkoutManager(
             )
 
         // Idempotency guard 1: already committed in DB
-        if (draft.committedSessionId != null || WorkoutSessionState.fromString(draft.state) == WorkoutSessionState.COMPLETED) {
-            return FinalizationResult.Success(
+        if (draft.committedSessionId != null ||
+            draft.sessionUuid == lastCompletedUuid ||
+            WorkoutSessionState.fromString(draft.state) == WorkoutSessionState.COMPLETED
+        ) {
+            return@withLock FinalizationResult.Success(
                 sessionId = draft.committedSessionId ?: 0L,
                 sessionUuid = draft.sessionUuid,
                 alreadyCommitted = true
@@ -529,7 +561,7 @@ class ActiveWorkoutManager(
         // Idempotency guard 2: concurrent click in-flight for the same sessionUuid
         synchronized(commitLock) {
             if (commitInFlightUuid == draft.sessionUuid) {
-                return FinalizationResult.Success(
+                return@withLock FinalizationResult.Success(
                     sessionId = draft.committedSessionId ?: -1L,
                     sessionUuid = draft.sessionUuid,
                     alreadyCommitted = true
@@ -558,10 +590,10 @@ class ActiveWorkoutManager(
                 val errDraft = normalized.copy(
                     state = WorkoutSessionState.ERROR.name,
                     lastErrorMessage = errMsg,
-                    lastSavedAtWallMillis = nowWallMillis
+                    lastSavedAtWallMillis = nowWallMillis.coerceAtLeast(normalized.lastSavedAtWallMillis)
                 )
                 port.saveDraft(errDraft)
-                return FinalizationResult.Failure(errMsg, errDraft)
+                return@withLock FinalizationResult.Failure(errMsg, errDraft)
             }
 
             val resolvedTitle = editedTitle?.trim()?.takeIf { it.isNotEmpty() }
@@ -579,7 +611,8 @@ class ActiveWorkoutManager(
                 finishedAtMillis = finishedWall
             )
 
-            // Mark COMPLETED first, then clear current draft slot so no active draft remains
+            // Mark COMPLETED first, record lastCompletedUuid, then clear current draft slot so no active draft remains
+            lastCompletedUuid = normalized.sessionUuid
             val completedDraft = normalized.copy(
                 state = WorkoutSessionState.COMPLETED.name,
                 finalizedAtWallMillis = finishedWall,
@@ -589,7 +622,7 @@ class ActiveWorkoutManager(
             port.saveDraft(completedDraft)
             port.clearCurrentDraft()
 
-            return FinalizationResult.Success(
+            FinalizationResult.Success(
                 sessionId = committedId,
                 sessionUuid = normalized.sessionUuid,
                 alreadyCommitted = false
@@ -599,14 +632,14 @@ class ActiveWorkoutManager(
             val errorDraft = draft.copy(
                 state = WorkoutSessionState.ERROR.name,
                 lastErrorMessage = errMsg,
-                lastSavedAtWallMillis = nowWallMillis
+                lastSavedAtWallMillis = nowWallMillis.coerceAtLeast(draft.lastSavedAtWallMillis)
             )
             try {
                 port.saveDraft(errorDraft)
             } catch (_: Exception) {
                 // Keep original draft untouched if saving error state also fails
             }
-            return FinalizationResult.Failure(
+            FinalizationResult.Failure(
                 errorMessage = errMsg,
                 preservedDraft = errorDraft
             )
@@ -622,9 +655,9 @@ class ActiveWorkoutManager(
     /**
      * Discards the active workout draft ONLY when the user explicitly confirms (`confirmed == true`).
      */
-    suspend fun cancelSession(confirmed: Boolean): Boolean {
-        if (!confirmed) return false
+    suspend fun cancelSession(confirmed: Boolean): Boolean = mutationMutex.withLock {
+        if (!confirmed) return@withLock false
         port.clearCurrentDraft()
-        return true
+        true
     }
 }

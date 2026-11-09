@@ -715,10 +715,87 @@ class ActiveWorkoutAndSprint05Test {
         val validated = BackupSerializer.deserializeAndValidate(json)
         assertTrue(validated is BackupValidationResult.Success)
         val restored = (validated as BackupValidationResult.Success).payload
-        assertNotNull(restored.activeWorkoutDraft)
-        assertEquals("uuid-sprint-05-test", restored.activeWorkoutDraft!!.sessionUuid)
-        assertEquals("Dominadas 10kg 8 8\nRemo 60kg 10 10", restored.activeWorkoutDraft!!.rawNotesText)
-        assertEquals(18, restored.activeWorkoutDraft!!.cursorPosition)
-        assertEquals(295_000L, restored.activeWorkoutDraft!!.lastPersistedDurationMillis)
+        val restoredDraft = restored.activeWorkoutDraft
+        assertNotNull(restoredDraft)
+        assertEquals("uuid-sprint-05-test", restoredDraft!!.sessionUuid)
+        assertEquals("Dominadas 10kg 8 8\nRemo 60kg 10 10", restoredDraft.rawNotesText)
+        assertEquals(18, restoredDraft.cursorPosition)
+        assertEquals(295_000L, restoredDraft.lastPersistedDurationMillis)
+    }
+
+    @Test
+    fun `18 - audit race conditions - delayed autosave never overwrites newer text nor resurrects a finalized draft`() = runBlocking {
+        val conn = DriverManager.getConnection("jdbc:sqlite::memory:")
+        val port = JdbcActiveWorkoutPort(conn)
+        val manager = ActiveWorkoutManager(port)
+
+        val draft1 = manager.startSession(
+            title = "Hombros",
+            initialNotesText = "Press militar 40kg 10",
+            nowWallMillis = 1_700_000_000_000L,
+            nowElapsedRealtimeMillis = 10_000L
+        )
+
+        // Newer edit saved at t = 1_700_000_200_000L
+        manager.autosaveNotes(
+            rawNotesText = "Press militar 40kg 10 10 8\nElevaciones laterales 10kg 12 12",
+            cursorPosition = 58,
+            expectedSessionUuid = draft1.sessionUuid,
+            nowWallMillis = 1_700_000_200_000L,
+            nowElapsedRealtimeMillis = 210_000L
+        )
+
+        // Delayed/out-of-order autosave arriving late with older timestamp (t = 1_700_000_100_000L)
+        val (afterStaleWrite, _) = manager.autosaveNotes(
+            rawNotesText = "Press militar 40kg 10 (texto viejo)",
+            cursorPosition = 10,
+            expectedSessionUuid = draft1.sessionUuid,
+            nowWallMillis = 1_700_000_100_000L,
+            nowElapsedRealtimeMillis = 110_000L
+        )
+        assertNotNull(afterStaleWrite)
+        assertTrue(
+            "Stale autosave must not overwrite newer text",
+            afterStaleWrite!!.rawNotesText.contains("Elevaciones laterales 10kg 12 12")
+        )
+        assertEquals(58, afterStaleWrite.cursorPosition)
+
+        // Finalize and commit session #1
+        val commitRes = manager.confirmAndCommitSession(
+            nowWallMillis = 1_700_000_300_000L,
+            nowElapsedRealtimeMillis = 310_000L
+        )
+        assertTrue(commitRes is FinalizationResult.Success)
+        assertNull(port.getCurrentDraft())
+
+        // Delayed autosave from session #1 arriving AFTER finalization must NOT resurrect the draft
+        manager.autosaveNotes(
+            rawNotesText = "Intento de resurrección tras finalizar",
+            cursorPosition = 5,
+            expectedSessionUuid = draft1.sessionUuid,
+            nowWallMillis = 1_700_000_350_000L,
+            nowElapsedRealtimeMillis = 360_000L
+        )
+        assertNull("Delayed autosave after commit must not resurrect draft", port.getCurrentDraft())
+
+        // Start a brand-new session #2; delayed autosave carrying session #1's UUID must not overwrite session #2
+        val draft2 = manager.startSession(
+            title = "Brazos",
+            initialNotesText = "Curl con barra 30kg 10 10",
+            nowWallMillis = 1_700_000_500_000L,
+            nowElapsedRealtimeMillis = 510_000L
+        )
+        manager.autosaveNotes(
+            rawNotesText = "Texto de sesión 1 retrasado",
+            cursorPosition = 5,
+            expectedSessionUuid = draft1.sessionUuid,
+            nowWallMillis = 1_700_000_600_000L,
+            nowElapsedRealtimeMillis = 610_000L
+        )
+        val currentSession2 = port.getCurrentDraft()
+        assertNotNull(currentSession2)
+        assertEquals(draft2.sessionUuid, currentSession2!!.sessionUuid)
+        assertEquals("Curl con barra 30kg 10 10", currentSession2.rawNotesText)
+        conn.close()
     }
 }

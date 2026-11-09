@@ -11,7 +11,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -19,6 +18,7 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.syntra.app.data.ActiveWorkoutDraftEntity
 import com.syntra.app.data.AppDatabase
 import com.syntra.app.data.ExerciseAliasEntity
@@ -119,6 +119,7 @@ fun ActiveWorkoutScreen(
             rawNotesText = editorValue.text,
             cursorPosition = editorValue.selection.start,
             title = titleValue,
+            expectedSessionUuid = currentDraft.sessionUuid,
             nowWallMillis = nowWall,
             nowElapsedRealtimeMillis = nowElapsed
         )
@@ -141,6 +142,7 @@ fun ActiveWorkoutScreen(
                             rawNotesText = editorValue.text,
                             cursorPosition = editorValue.selection.start,
                             title = titleValue,
+                            expectedSessionUuid = activeDraft.sessionUuid,
                             nowWallMillis = nowWall,
                             nowElapsedRealtimeMillis = nowElapsed
                         )
@@ -511,6 +513,7 @@ fun ActiveWorkoutScreen(
                             rawNotesText = editorValue.text,
                             cursorPosition = editorValue.selection.start,
                             title = titleValue,
+                            expectedSessionUuid = activeDraft.sessionUuid,
                             nowWallMillis = nowWall,
                             nowElapsedRealtimeMillis = nowElapsed
                         )
