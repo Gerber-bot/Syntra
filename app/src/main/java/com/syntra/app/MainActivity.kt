@@ -45,10 +45,11 @@ import com.syntra.app.ui.irisx.IrisXConsoleDialog
 import com.syntra.app.ui.irisx.ManageNeuralModelDialog
 import com.syntra.app.ui.parser.EditExercisePreviewDialog
 import com.syntra.app.ui.routines.RoutinesScreen
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.ui.unit.sp
 import com.syntra.app.ui.week.WeekScreen
 import com.syntra.app.ui.workout.ActiveWorkoutScreen
-import com.syntra.app.ui.theme.SyntraTheme
-import com.syntra.app.ui.theme.SyntraColors
+import com.syntra.app.ui.theme.*
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.text.DateFormat
@@ -221,25 +222,26 @@ private fun TrainerApp(db: AppDatabase) {
     }
 
     Scaffold(
-        containerColor = Color.Black,
+        containerColor = SyntraColors.BackgroundBlack,
         contentWindowInsets = WindowInsets.safeDrawing,
         floatingActionButton = {
             if (!isEditingProfile) {
                 FloatingActionButton(
                     onClick = { showIrisXConsole = true },
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = Color.Black,
+                    containerColor = SyntraColors.DarkMint,
+                    contentColor = SyntraColors.NeonMint,
                     shape = CircleShape,
-                    modifier = Modifier.size(54.dp)
+                    modifier = Modifier.size(56.dp)
                 ) {
-                    Text("✦", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleLarge)
+                    IrisXOrb(size = 38.dp, glowing = true)
                 }
             }
         },
         bottomBar = {
             NavigationBar(
-                containerColor = Color(0xFF141414),
-                contentColor = Color.White
+                containerColor = SyntraColors.SurfaceDark,
+                contentColor = SyntraColors.TextPrimary,
+                tonalElevation = 6.dp
             ) {
                 BOTTOM_NAV_DESTINATIONS.forEach { destination ->
                     NavigationBarItem(
@@ -255,18 +257,25 @@ private fun TrainerApp(db: AppDatabase) {
                                     "Historial" -> "📋"
                                     "Semana" -> "📅"
                                     "Peso" -> "⚖"
-                                    else -> "⚙"
+                                    else -> "👤"
                                 },
-                                fontWeight = FontWeight.Bold
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 16.sp
                             )
                         },
-                        label = { Text(destination) },
+                        label = {
+                            Text(
+                                text = destination,
+                                fontSize = 11.sp,
+                                fontWeight = if (page == destination) FontWeight.Bold else FontWeight.Medium
+                            )
+                        },
                         colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = Color.Black,
-                            selectedTextColor = MaterialTheme.colorScheme.primary,
-                            indicatorColor = MaterialTheme.colorScheme.primary,
-                            unselectedIconColor = Color.Gray,
-                            unselectedTextColor = Color.Gray
+                            selectedIconColor = Color(0xFF05100E),
+                            selectedTextColor = SyntraColors.NeonMint,
+                            indicatorColor = SyntraColors.NeonMint,
+                            unselectedIconColor = SyntraColors.TextMuted,
+                            unselectedTextColor = SyntraColors.TextMuted
                         )
                     )
                 }
@@ -1261,12 +1270,12 @@ private fun HomeScreen(
                 manualStepInput = ""
                 showSequenceConfigDialog = false
             },
-            containerColor = Color(0xFF1E1E1E),
+            containerColor = SyntraColors.SurfaceCardElevated,
             title = {
                 Text(
                     text = "Configurar secuencia de entrenamiento",
                     fontWeight = FontWeight.Bold,
-                    color = Color.White
+                    color = SyntraColors.TextPrimary
                 )
             },
             text = {
@@ -1275,7 +1284,7 @@ private fun HomeScreen(
                         text = "1. Secuencia rotativa persistente (separada por comas):",
                         style = MaterialTheme.typography.bodySmall,
                         fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.primary
+                        color = SyntraColors.NeonMint
                     )
                     OutlinedTextField(
                         value = sequenceInputText,
@@ -1290,13 +1299,14 @@ private fun HomeScreen(
                         text = "2. Selección manual de próxima sesión:",
                         style = MaterialTheme.typography.bodySmall,
                         fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.primary
+                        color = SyntraColors.NeonMint
                     )
 
                     if (nextSessionPlan.manualOverrideActive && nextSessionPlan.nextCategoryName != null) {
                         Surface(
-                            color = Color(0xFF241C14),
-                            shape = RoundedCornerShape(8.dp),
+                            color = SyntraColors.DarkMint.copy(alpha = 0.5f),
+                            shape = RoundedCornerShape(10.dp),
+                            border = BorderStroke(1.dp, SyntraColors.NeonMint.copy(alpha = 0.3f)),
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Row(
@@ -1305,8 +1315,8 @@ private fun HomeScreen(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Column(Modifier.weight(1f)) {
-                                    Text("Turno manual activo:", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
-                                    Text(nextSessionPlan.nextCategoryName.orEmpty(), fontWeight = FontWeight.Bold, color = Color(0xFFFFB74D))
+                                    Text("Turno manual activo:", style = MaterialTheme.typography.labelSmall, color = SyntraColors.TextMuted)
+                                    Text(nextSessionPlan.nextCategoryName.orEmpty(), fontWeight = FontWeight.Bold, color = SyntraColors.NeonMint)
                                 }
                                 TextButton(
                                     onClick = {
@@ -1322,7 +1332,7 @@ private fun HomeScreen(
                                         }
                                     }
                                 ) {
-                                    Text("Quitar", color = MaterialTheme.colorScheme.error)
+                                    Text("Quitar", color = SyntraColors.Error)
                                 }
                             }
                         }
@@ -1339,7 +1349,8 @@ private fun HomeScreen(
                 }
             },
             confirmButton = {
-                Button(
+                SyntraButton(
+                    text = "Guardar cambios",
                     onClick = {
                         scope.launch {
                             val now = System.currentTimeMillis()
@@ -1388,22 +1399,17 @@ private fun HomeScreen(
                             manualStepInput = ""
                             showSequenceConfigDialog = false
                         }
-                    },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.primary,
-                        contentColor = Color.Black
-                    )
-                ) {
-                    Text("Guardar cambios", fontWeight = FontWeight.Bold)
-                }
+                    }
+                )
             },
             dismissButton = {
-                OutlinedButton(onClick = {
-                    manualStepInput = ""
-                    showSequenceConfigDialog = false
-                }) {
-                    Text("Cancelar", color = Color.White)
-                }
+                SyntraSecondaryButton(
+                    text = "Cancelar",
+                    onClick = {
+                        manualStepInput = ""
+                        showSequenceConfigDialog = false
+                    }
+                )
             }
         )
     }
@@ -1412,9 +1418,9 @@ private fun HomeScreen(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
+        verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // 1. Saludo personalizado
+        // 1. Saludo personalizado con versión dinámica
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -1422,35 +1428,35 @@ private fun HomeScreen(
         ) {
             Column {
                 Text(
-                    text = "Hola, ${profile.preferredName}",
+                    text = "Hola, ${profile.preferredName} 👋",
                     style = MaterialTheme.typography.headlineMedium,
                     fontWeight = FontWeight.Bold,
-                    color = Color.White
+                    color = SyntraColors.TextPrimary
                 )
                 Text(
-                    text = "Syntra v$appVersionName • Asistente IrisX",
+                    text = "Syntra v$appVersionName • Listo para entrenar hoy?",
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.primary
+                    color = SyntraColors.SoftMint
                 )
             }
             Surface(
-                color = Color(0xFF161616),
-                shape = RoundedCornerShape(10.dp)
+                color = SyntraColors.SurfaceCardElevated,
+                shape = CircleShape,
+                border = BorderStroke(1.dp, SyntraColors.BorderSubtle)
             ) {
                 Text(
                     text = history.firstOrNull()?.let { "⚖ ${displayKg(it.weightGrams)} kg" } ?: "⚖ Sin peso",
                     style = MaterialTheme.typography.labelMedium,
-                    color = Color.LightGray,
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                    color = SyntraColors.TextSecondary,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
                 )
             }
         }
 
-        // 2. Tarjeta de última sesión (Categoría, Fecha, Cantidad de ejercicios, Cantidad de series)
-        Card(
+        // 2. Tarjeta de última sesión (Sin redundancia de título, estilo Neural)
+        SyntraCard(
             modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = Color(0xFF141414)),
-            shape = RoundedCornerShape(12.dp)
+            onClick = { if (sessions.isNotEmpty()) onNavigate("Historial") }
         ) {
             if (sessions.isNotEmpty()) {
                 val latest = sessions.first()
@@ -1468,132 +1474,175 @@ private fun HomeScreen(
                 val dateStr = DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT)
                     .format(Date(latest.startedAtMillis))
 
+                val cleanTitle = if (latest.title.trim().equals(latestCategory.displayName.trim(), ignoreCase = true) ||
+                    latest.title.trim().contains(latestCategory.displayName.trim(), ignoreCase = true)) {
+                    latest.title.trim()
+                } else {
+                    "${latestCategory.displayName} — ${latest.title.trim()}"
+                }
+
                 Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(14.dp),
+                    modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column(
-                        modifier = Modifier.weight(1f),
-                        verticalArrangement = Arrangement.spacedBy(3.dp)
+                    Text(
+                        text = "ÚLTIMA SESIÓN",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = SyntraColors.TextMuted
+                    )
+                    SyntraBadge(
+                        text = "Ver historial ›",
+                        containerColor = SyntraColors.SurfaceHighlight,
+                        contentColor = SyntraColors.NeonMint
+                    )
+                }
+
+                Spacer(Modifier.height(8.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(46.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(SyntraColors.SurfaceHighlight),
+                        contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            text = "ÚLTIMA SESIÓN",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = Color.Gray
+                            text = latestCategory.icon.ifBlank { "🏋" },
+                            fontSize = 22.sp
                         )
+                    }
+
+                    Spacer(Modifier.width(12.dp))
+
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
                         Text(
-                            text = "${latestCategory.icon} ${latestCategory.displayName} — ${latest.title}",
+                            text = cleanTitle,
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
-                            color = Color.White
+                            color = SyntraColors.TextPrimary
                         )
                         Text(
                             text = dateStr,
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.primary
+                            color = SyntraColors.SoftMint
                         )
                         Text(
                             text = "$latestExerciseCount ejercicios • ${latestSets.size} series",
                             style = MaterialTheme.typography.bodySmall,
-                            color = Color.LightGray
+                            color = SyntraColors.TextSecondary
                         )
                     }
-                    Button(
-                        onClick = { onNavigate("Historial") },
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF222222))
+
+                    Box(
+                        modifier = Modifier
+                            .size(28.dp)
+                            .clip(CircleShape)
+                            .background(SyntraColors.NeonMint.copy(alpha = 0.2f)),
+                        contentAlignment = Alignment.Center
                     ) {
-                        Text("Historial", color = Color.White, style = MaterialTheme.typography.bodySmall)
+                        Text("✓", color = SyntraColors.NeonMint, fontWeight = FontWeight.Bold, fontSize = 14.sp)
                     }
                 }
             } else {
-                Column(
-                    modifier = Modifier.padding(14.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    Text("ÚLTIMA SESIÓN", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        text = "ÚLTIMA SESIÓN",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = SyntraColors.TextMuted
+                    )
                     Text(
                         text = "Aún no registraste sesiones completadas",
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold,
-                        color = Color.White
+                        color = SyntraColors.TextPrimary
                     )
                     Text(
                         text = "Iniciá tu primer entrenamiento activo para ver acá tu categoría, ejercicios y series.",
                         style = MaterialTheme.typography.bodySmall,
-                        color = Color.Gray
+                        color = SyntraColors.TextSecondary
                     )
                 }
             }
         }
 
         // 3. Tarjeta de próxima sesión (Secuencia configurable)
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = Color(0xFF161C1A)),
-            shape = RoundedCornerShape(12.dp)
-        ) {
-            Column(
-                modifier = Modifier.padding(14.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
+        SyntraCard(modifier = Modifier.fillMaxWidth()) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            text = "PRÓXIMA SESIÓN PLANIFICADA",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                        Text(
-                            text = if (nextSessionPlan.nextCategoryName != null) {
-                                "Próxima sesión: ${nextSessionPlan.nextCategoryName}"
-                            } else {
-                                "Próxima sesión: Sin secuencia definida"
-                            },
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = Color.White
-                        )
-                    }
-                    OutlinedButton(
+                    Text(
+                        text = "PRÓXIMA SESIÓN",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = SyntraColors.NeonMint
+                    )
+                    TextButton(
                         onClick = { showSequenceConfigDialog = true },
-                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
                     ) {
                         Text(
                             text = if (nextSessionPlan.isConfigured) "⚙ Secuencia" else "Configurar",
                             style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary
+                            color = SyntraColors.SoftMint
                         )
                     }
                 }
-                Text(
-                    text = nextSessionPlan.reason,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Color.LightGray
-                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(46.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(SyntraColors.SurfaceHighlight),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text("📅", fontSize = 22.sp)
+                    }
+
+                    Spacer(Modifier.width(12.dp))
+
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = nextSessionPlan.nextCategoryName ?: "Sin secuencia definida",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = SyntraColors.TextPrimary
+                        )
+                        Text(
+                            text = nextSessionPlan.reason,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = SyntraColors.TextSecondary
+                        )
+                    }
+                }
+
                 if (nextSessionPlan.manualOverrideActive) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Surface(
-                            color = Color(0xFF261D12),
-                            shape = RoundedCornerShape(4.dp)
-                        ) {
-                            Text(
-                                text = "★ Selección manual activa",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = Color(0xFFFFB74D),
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                            )
-                        }
+                        SyntraBadge(
+                            text = "★ Selección manual activa",
+                            containerColor = SyntraColors.DarkMint,
+                            contentColor = SyntraColors.NeonMint
+                        )
                         TextButton(
                             onClick = {
                                 scope.launch {
@@ -1608,21 +1657,22 @@ private fun HomeScreen(
                             },
                             contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
                         ) {
-                            Text("Volver a rotación ↺", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                            Text("Volver a rotación ↺", style = MaterialTheme.typography.labelSmall, color = SyntraColors.SoftMint)
                         }
                     }
                 }
+
                 if (nextSessionPlan.suggestedRoutine != null) {
                     Text(
                         text = "🗂 Rutina vinculada: ${nextSessionPlan.suggestedRoutine.routine.name} (${nextSessionPlan.suggestedRoutine.exercises.size} ejercicios)",
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary
+                        color = SyntraColors.SoftMint
                     )
                 }
             }
         }
 
-        // 4. Botón principal destacado: ▶ Iniciar entrenamiento (o Continuar si hay borrador activo)
+        // 4. Botón principal destacado: ▶ Iniciar entrenamiento
         val hasRecoverableDraft = activeDraft != null &&
             WorkoutSessionState.fromString(activeDraft.state) in setOf(
                 WorkoutSessionState.ACTIVE,
@@ -1630,86 +1680,82 @@ private fun HomeScreen(
                 WorkoutSessionState.ERROR
             )
 
-        Button(
-            onClick = { onNavigate("EntrenamientoActivo") },
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(56.dp),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = MaterialTheme.colorScheme.primary,
-                contentColor = Color.Black
-            ),
-            shape = RoundedCornerShape(12.dp)
-        ) {
-            val btnLabel = if (hasRecoverableDraft) {
-                val draftTitle = activeDraft.title.takeIf { it.isNotBlank() }
-                    ?: activeDraft.plannedCategory
-                    ?: "en curso"
-                "▶ Continuar entrenamiento ($draftTitle)"
-            } else {
-                "▶ Iniciar entrenamiento"
-            }
-            Text(
-                text = btnLabel,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold
-            )
+        val btnLabel = if (hasRecoverableDraft) {
+            val draftTitle = activeDraft.title.takeIf { it.isNotBlank() }
+                ?: activeDraft.plannedCategory
+                ?: "en curso"
+            "▶ Continuar ($draftTitle)"
+        } else {
+            "▶ Iniciar entrenamiento"
         }
 
-        // 5. Tarjeta IrisX + accesos limpios a Estadísticas y Rutinas
-        Card(
-            onClick = onOpenIrisX,
+        SyntraButton(
+            text = btnLabel,
+            onClick = { onNavigate("EntrenamientoActivo") },
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        // 5. Tarjeta IrisX con resplandor neón menta y orbe bioluminiscente
+        SyntraCard(
             modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = Color(0xFF121A18)),
-            shape = RoundedCornerShape(12.dp)
+            glowingBorder = true,
+            onClick = onOpenIrisX
         ) {
-            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IrisXOrb(size = 46.dp, glowing = true)
+                Spacer(modifier = Modifier.width(14.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = "IrisX",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = SyntraColors.TextPrimary
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        SyntraBadge(
+                            text = "Copiloto IA",
+                            containerColor = SyntraColors.DarkMint,
+                            contentColor = SyntraColors.NeonMint
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(2.dp))
                     Text(
-                        text = "✦ IrisX — Copiloto deportivo offline",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    Text(
-                        text = "Abrir consola →",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary
+                        text = "Tu asistente de entrenamiento con IA",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = SyntraColors.TextSecondary
                     )
                 }
                 Text(
-                    text = "Consultá cargas previas, alternativas de ejercicios, progresión por grupo muscular o recomendaciones de IrisX Coach en cualquier momento.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    text = "›",
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = SyntraColors.NeonMint,
+                    fontWeight = FontWeight.Light
                 )
             }
         }
 
+        // 6. Accesos secundarios limpios a Estadísticas y Rutinas
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            OutlinedButton(
+            SyntraSecondaryButton(
+                text = "📊 Estadísticas & Coach",
                 onClick = { onNavigate("Estadísticas") },
-                modifier = Modifier.weight(1f).height(44.dp),
-                shape = RoundedCornerShape(8.dp)
-            ) {
-                Text("📊 Estadísticas & Coach", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodySmall)
-            }
-            OutlinedButton(
+                modifier = Modifier.weight(1f)
+            )
+            SyntraSecondaryButton(
+                text = "🗂 Rutinas",
                 onClick = { onNavigate("Rutinas") },
-                modifier = Modifier.weight(1f).height(44.dp),
-                shape = RoundedCornerShape(8.dp)
-            ) {
-                Text("🗂 Rutinas", color = Color.White, style = MaterialTheme.typography.bodySmall)
-            }
+                modifier = Modifier.weight(1f)
+            )
         }
 
-        Spacer(Modifier.height(56.dp))
+        Spacer(Modifier.height(48.dp))
     }
 }
 
