@@ -82,6 +82,13 @@ object NextSessionPlanner {
         learnedAliases: Map<String, String> = emptyMap(),
         muscleOverrides: Map<String, String> = emptyMap()
     ): WorkoutCategoryKey {
+        if (session.category.isNotBlank()) {
+            val normCat = normalize(session.category)
+            val matched = WorkoutCategoryKey.values().firstOrNull { normalize(it.displayName) == normCat }
+            if (matched != null && matched != WorkoutCategoryKey.SIN_CLASIFICAR && matched != WorkoutCategoryKey.TODAS) {
+                return matched
+            }
+        }
         val orderedSets = sessionSets.sortedWith(compareBy<WorkoutSetEntity> { it.executionOrder }.thenBy { it.id })
         val exerciseNames = orderedSets.mapNotNull { exercisesById[it.exerciseId]?.displayName }.distinct()
         val exerciseMuscles = orderedSets.mapNotNull { exercisesById[it.exerciseId]?.muscleGroup }
@@ -108,12 +115,15 @@ object NextSessionPlanner {
     fun stepMatchesSession(
         stepName: String,
         sessionTitle: String,
-        classifiedCategory: WorkoutCategoryKey
+        classifiedCategory: WorkoutCategoryKey,
+        sessionCategory: String = ""
     ): Boolean {
         val normStep = normalize(stepName)
         val normTitle = normalize(sessionTitle)
         val normCat = normalize(classifiedCategory.displayName)
+        val normSessionCat = normalize(sessionCategory)
         if (normStep.isEmpty()) return false
+        if (normSessionCat.isNotEmpty() && (normSessionCat == normStep || normSessionCat.contains(normStep) || normStep.contains(normSessionCat))) return true
         if (normStep == normCat || normCat.contains(normStep) || normStep.contains(normCat)) return true
         if (normTitle == normStep || normTitle.contains(normStep)) return true
         val stepCategory = WorkoutCategoryClassifier.classify(title = stepName)
@@ -195,7 +205,7 @@ object NextSessionPlanner {
                 learnedAliases = learnedAliases,
                 muscleOverrides = muscleOverrides
             )
-            val idx = steps.indexOfFirst { step -> stepMatchesSession(step, session.title, cat) }
+            val idx = steps.indexOfFirst { step -> stepMatchesSession(step, session.title, cat, session.category) }
             if (idx >= 0) {
                 matchedStepIndex = idx
                 matchedSession = session

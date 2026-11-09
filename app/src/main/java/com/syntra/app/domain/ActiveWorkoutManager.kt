@@ -214,9 +214,17 @@ class RoomActiveWorkoutPersistencePort(
         finishedAtMillis: Long
     ): Long {
         return db.withTransaction {
+            val resolvedCategory = WorkoutCategoryClassifier.resolveSessionCategory(
+                explicitCategory = draft.plannedCategory,
+                routineCategory = draft.sourceRoutineId?.let { db.routineDao().getRoutineById(it)?.targetCategory },
+                title = finalTitle,
+                exerciseNames = finalExercises.map { it.name },
+                learnedAliases = db.irisxMemoryDao().findByType("ALIAS").associate { it.sourceKey to it.targetValue }
+            )
             val sId = db.workoutSessionDao().insert(
                 WorkoutSessionEntity(
                     title = finalTitle,
+                    category = resolvedCategory,
                     startedAtMillis = startedAtMillis,
                     finishedAtMillis = finishedAtMillis,
                     notes = draft.rawNotesText
@@ -469,7 +477,8 @@ class ActiveWorkoutManager(
         val preview = WorkoutTextParser.parse(
             raw = reviewDraft.rawNotesText,
             aliases = aliases,
-            knownExercises = knownNames
+            knownExercises = knownNames,
+            contextCategory = reviewDraft.plannedCategory ?: reviewDraft.title.takeIf { it.isNotBlank() }
         )
         val effectiveTitle = preview.sessionTitle
             ?: reviewDraft.title.takeIf { it.isNotBlank() }

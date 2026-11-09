@@ -1,5 +1,6 @@
 package com.syntra.app.domain
 
+import com.syntra.app.data.CategoryEntity
 import com.syntra.app.data.WorkoutSessionEntity
 import java.text.Normalizer
 import java.util.Locale
@@ -21,6 +22,14 @@ data class CategorySummary(
     val icon: String,
     val sessionCount: Int,
     val latestSessionMillis: Long?
+)
+
+data class DynamicCategorySummary(
+    val categoryName: String,
+    val icon: String,
+    val sessionCount: Int,
+    val latestSessionMillis: Long?,
+    val isAll: Boolean = false
 )
 
 object WorkoutCategoryClassifier {
@@ -168,5 +177,141 @@ object WorkoutCategoryClassifier {
                 )
             }
         }
+    }
+
+    /**
+     * Resolves the session category by priority:
+     * 1) Explicit confirmed category on session
+     * 2) Routine targetCategory
+     * 3) IrisX classification (based on session title, exercises, learned aliases)
+     * 4) Unclassified / empty
+     */
+    fun resolveSessionCategory(
+        explicitCategory: String?,
+        routineCategory: String? = null,
+        title: String,
+        exerciseNames: List<String> = emptyList(),
+        learnedAliases: Map<String, String> = emptyMap()
+    ): String {
+        val explicitClean = explicitCategory?.trim().orEmpty()
+        if (explicitClean.isNotBlank() &&
+            !explicitClean.equals("Sin clasificar", ignoreCase = true) &&
+            !explicitClean.equals("Otras / Sin clasificar", ignoreCase = true) &&
+            !explicitClean.equals("General", ignoreCase = true)
+        ) {
+            return explicitClean
+        }
+
+        val routineClean = routineCategory?.trim().orEmpty()
+        if (routineClean.isNotBlank() &&
+            !routineClean.equals("General", ignoreCase = true) &&
+            !routineClean.equals("Sin clasificar", ignoreCase = true)
+        ) {
+            return routineClean
+        }
+
+        val irisClass = classify(
+            title = title,
+            exerciseNames = exerciseNames,
+            learnedAliases = learnedAliases
+        )
+        if (irisClass != WorkoutCategoryKey.SIN_CLASIFICAR && irisClass != WorkoutCategoryKey.TODAS) {
+            return irisClass.displayName
+        }
+
+        val normTitle = normalize(title)
+        if (piernaKeywords.any { normTitle.contains(it) }) return "Piernas"
+        if (pechoKeywords.any { normTitle.contains(it) }) return "Pecho"
+        if (espaldaKeywords.any { normTitle.contains(it) }) return "Espalda"
+        if (hombroKeywords.any { normTitle.contains(it) }) return "Hombros"
+        if (brazoKeywords.any { normTitle.contains(it) }) return "Brazos"
+        if (fullBodyKeywords.any { normTitle.contains(it) }) return "Full Body"
+
+        return ""
+    }
+
+    fun buildDynamicSummaries(
+        sessions: List<WorkoutSessionEntity>,
+        configuredCategories: List<CategoryEntity> = emptyList(),
+        sessionCategoryMap: Map<Long, String> = emptyMap()
+    ): List<DynamicCategorySummary> {
+        val totalSessions = sessions.size
+        val latestTotal = sessions.maxOfOrNull { it.startedAtMillis }
+
+        val result = mutableListOf<DynamicCategorySummary>()
+
+        // 1. "Todas" (complete chronological overview)
+        result.add(
+            DynamicCategorySummary(
+                categoryName = "Todas",
+                icon = "★",
+                sessionCount = totalSessions,
+                latestSessionMillis = latestTotal,
+                isAll = true
+            )
+        )
+
+        val grouped = sessions.groupBy { s ->
+            val cat = sessionCategoryMap[s.id]?.trim().orEmpty()
+            if (cat.isEmpty() || cat.equals("Sin clasificar", ignoreCase = true) || cat.equals("Otras / Sin clasificar", ignoreCase = true)) {
+                ""
+            } else {
+                cat
+            }
+        }
+
+        val handledCategories = mutableSetOf<String>()
+
+        // 2. Configured categories in user-defined order
+        configuredCategories.filter { !it.isHidden }.forEach { catEntity ->
+            val matching = grouped[catEntity.name].orEmpty()
+            result.add(
+                DynamicCategorySummary(
+                    categoryName = catEntity.name,
+                    icon = catEntity.icon,
+                    sessionCount = matching.size,
+                    latestSessionMillis = matching.maxOfOrNull { it.startedAtMillis }
+                )
+            )
+            handledCategories.add(catEntity.name.lowercase(Locale.ROOT))
+        }
+
+        // 3. Any additional categories found in sessions but not in configuredCategories
+        grouped.keys.filter { it.isNotBlank() && !handledCategories.contains(it.lowercase(Locale.ROOT)) }.sorted().forEach { extraCat ->
+            val matching = grouped[extraCat].orEmpty()
+            val icon = when {
+                extraCat.contains("pecho", ignoreCase = true) -> "🛡️"
+                extraCat.contains("espalda", ignoreCase = true) -> "🏹"
+                extraCat.contains("pierna", ignoreCase = true) -> "🦵"
+                extraCat.contains("hombro", ignoreCase = true) -> "🏋️"
+                extraCat.contains("brazo", ignoreCase = true) || extraCat.contains("bicep", ignoreCase = true) || extraCat.contains("tricep", ignoreCase = true) -> "💪"
+                extraCat.contains("full", ignoreCase = true) -> "⚡"
+                extraCat.contains("push", ignoreCase = true) -> "↗️"
+                extraCat.contains("pull", ignoreCase = true) -> "↙️"
+                extraCat.contains("torso", ignoreCase = true) -> "🏛️"
+                else -> "📁"
+            }
+            result.add(
+                DynamicCategorySummary(
+                    categoryName = extraCat,
+                    icon = icon,
+                    sessionCount = matching.size,
+                    latestSessionMillis = matching.maxOfOrNull { it.startedAtMillis }
+                )
+            )
+        }
+
+        // 4. "Otras / Sin clasificar"
+        val unclassified = grouped[""].orEmpty()
+        result.add(
+            DynamicCategorySummary(
+                categoryName = "Otras / Sin clasificar",
+                icon = "📁",
+                sessionCount = unclassified.size,
+                latestSessionMillis = unclassified.maxOfOrNull { it.startedAtMillis }
+            )
+        )
+
+        return result
     }
 }

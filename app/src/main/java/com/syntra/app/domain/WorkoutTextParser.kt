@@ -51,9 +51,11 @@ object WorkoutTextParser {
     fun parse(
         raw: String,
         aliases: Map<String, String> = emptyMap(),
-        knownExercises: Set<String> = emptySet()
+        knownExercises: Set<String> = emptySet(),
+        contextCategory: String? = null
     ): ParsePreview {
-        var sessionTitle: String? = null
+        var explicitTitleDetected = false
+        var sessionTitle: String? = contextCategory?.trim()?.takeIf { it.isNotEmpty() }
         val exercises = mutableListOf<ParsedExercise>()
         val warnings = mutableListOf<String>()
         val assistantCommands = mutableListOf<IrisXDirective>()
@@ -77,11 +79,12 @@ object WorkoutTextParser {
             // 2. Detect session titles (exact match or starts with a known session title token when line has no kg)
             val cleanHeaderCandidate = normalize(line.removeSuffix(":"))
             val isTitleCandidate = cleanHeaderCandidate in knownTitles ||
-                (sessionTitle == null && kgRegex.find(line) == null && knownTitles.any {
+                (!explicitTitleDetected && kgRegex.find(line) == null && knownTitles.any {
                     cleanHeaderCandidate.startsWith("$it ") || cleanHeaderCandidate.startsWith("rutina ")
                 })
-            if (isTitleCandidate && sessionTitle == null) {
+            if (isTitleCandidate && !explicitTitleDetected) {
                 sessionTitle = line.removeSuffix(":")
+                explicitTitleDetected = true
                 return@forEachIndexed
             }
 
