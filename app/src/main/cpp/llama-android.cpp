@@ -116,7 +116,7 @@ Java_android_llama_cpp_LLamaAndroid_new_1context(JNIEnv *env, jobject, jlong jmo
         return 0;
     }
 
-    int n_threads = std::max(1, std::min(8, (int) sysconf(_SC_NPROCESSORS_ONLN) - 2));
+    int n_threads = std::max(1, std::min(4, (int) sysconf(_SC_NPROCESSORS_ONLN) - 2));
     LOGi("Using %d threads", n_threads);
 
     llama_context_params ctx_params = llama_context_default_params();
@@ -125,12 +125,12 @@ Java_android_llama_cpp_LLamaAndroid_new_1context(JNIEnv *env, jobject, jlong jmo
     ctx_params.n_threads       = n_threads;
     ctx_params.n_threads_batch = n_threads;
 
-    llama_context * context = llama_new_context_with_model(model, ctx_params);
+    llama_context * context = llama_init_from_model(model, ctx_params);
 
     if (!context) {
-        LOGe("llama_new_context_with_model() returned null)");
+        LOGe("llama_init_from_model() returned null)");
         env->ThrowNew(env->FindClass("java/lang/IllegalStateException"),
-                      "llama_new_context_with_model() returned null)");
+                      "llama_init_from_model() returned null)");
         return 0;
     }
 
@@ -272,41 +272,16 @@ Java_android_llama_cpp_LLamaAndroid_bench_1model(
 extern "C"
 JNIEXPORT jlong JNICALL
 Java_android_llama_cpp_LLamaAndroid_new_1batch(JNIEnv *, jobject, jint n_tokens, jint embd, jint n_seq_max) {
-
-    // Source: Copy of llama.cpp:llama_batch_init but heap-allocated.
-
-    llama_batch *batch = new llama_batch {
-        0,
-        nullptr,
-        nullptr,
-        nullptr,
-        nullptr,
-        nullptr,
-        nullptr,
-    };
-
-    if (embd) {
-        batch->embd = (float *) malloc(sizeof(float) * n_tokens * embd);
-    } else {
-        batch->token = (llama_token *) malloc(sizeof(llama_token) * n_tokens);
-    }
-
-    batch->pos      = (llama_pos *)     malloc(sizeof(llama_pos)      * n_tokens);
-    batch->n_seq_id = (int32_t *)       malloc(sizeof(int32_t)        * n_tokens);
-    batch->seq_id   = (llama_seq_id **) malloc(sizeof(llama_seq_id *) * n_tokens);
-    for (int i = 0; i < n_tokens; ++i) {
-        batch->seq_id[i] = (llama_seq_id *) malloc(sizeof(llama_seq_id) * n_seq_max);
-    }
-    batch->logits   = (int8_t *)        malloc(sizeof(int8_t)         * n_tokens);
-
+    auto batch = new llama_batch(llama_batch_init(n_tokens, embd, n_seq_max));
     return reinterpret_cast<jlong>(batch);
 }
 
 extern "C"
 JNIEXPORT void JNICALL
 Java_android_llama_cpp_LLamaAndroid_free_1batch(JNIEnv *, jobject, jlong batch_pointer) {
-    //llama_batch_free(*reinterpret_cast<llama_batch *>(batch_pointer));
-    const auto batch = reinterpret_cast<llama_batch *>(batch_pointer);
+    if (!batch_pointer) return;
+    auto batch = reinterpret_cast<llama_batch *>(batch_pointer);
+    llama_batch_free(*batch);
     delete batch;
 }
 
@@ -363,7 +338,7 @@ Java_android_llama_cpp_LLamaAndroid_completion_1init(
     auto n_ctx = llama_n_ctx(context);
     auto n_kv_req = tokens_list.size() + n_len;
 
-    LOGi("n_len = %d, n_ctx = %d, n_kv_req = %d", n_len, n_ctx, n_kv_req);
+    LOGi("n_len = %d, n_ctx = %u, n_kv_req = %zu", n_len, n_ctx, n_kv_req);
 
     if (n_kv_req > n_ctx) {
         LOGe("error: n_kv_req > n_ctx, the required KV cache size is not big enough");

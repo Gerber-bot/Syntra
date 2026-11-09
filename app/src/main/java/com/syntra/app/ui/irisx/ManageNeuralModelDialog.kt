@@ -229,10 +229,11 @@ private fun ModelItemCard(
                     fontWeight = FontWeight.Bold,
                     color = Color.White
                 )
+                val isQwen3 = model.fileName.contains("qwen3", ignoreCase = true)
                 Text(
-                    text = "${String.format("%.1f", model.sizeBytes / (1024.0 * 1024.0))} MB • GGUF v${model.ggufVersion}",
+                    text = "${String.format("%.1f", model.sizeBytes / (1024.0 * 1024.0))} MB • GGUF v${model.ggufVersion}${if (isQwen3) " • ✦ Qwen3" else ""}",
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color.Gray
+                    color = if (isQwen3) MaterialTheme.colorScheme.primary else Color.Gray
                 )
             }
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {

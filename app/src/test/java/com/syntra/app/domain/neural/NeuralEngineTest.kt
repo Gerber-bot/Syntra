@@ -124,4 +124,45 @@ class NeuralEngineTest {
         assertTrue(result.isFailure)
         assertFalse(engine.isModelLoaded())
     }
+
+    @Test
+    fun `llamaCpp engine unloads model and resets state cleanly`() = runBlocking {
+        val engine = LlamaCppInferenceEngine()
+        val validFile = tempFolder.newFile("Qwen3-0.6B-Instruct-Q4_K_M.gguf")
+        FileOutputStream(validFile).use { out ->
+            val buffer = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN)
+            buffer.putInt(0x46554747)
+            buffer.putInt(3)
+            out.write(buffer.array())
+        }
+
+        val loadResult = engine.loadModel(validFile)
+        assertTrue(loadResult.isSuccess)
+        assertTrue(engine.isModelLoaded())
+        assertEquals(EngineState.READY, engine.state)
+        assertEquals("Qwen3-0.6B-Instruct-Q4_K_M.gguf", engine.currentModelFile?.name)
+
+        engine.unloadModel()
+        assertFalse(engine.isModelLoaded())
+        assertEquals(EngineState.UNINITIALIZED, engine.state)
+        assertNull(engine.currentModelFile)
+    }
+
+    @Test
+    fun `qwen3 unsloth gguf header validation and model identification`() {
+        val qwenFile = tempFolder.newFile("unsloth_qwen3_0.6b_q4_k_m.gguf")
+        FileOutputStream(qwenFile).use { out ->
+            val buffer = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN)
+            buffer.putInt(0x46554747) // GGUF
+            buffer.putInt(3)          // v3
+            out.write(buffer.array())
+            out.write(ByteArray(1024))
+        }
+
+        val validation = ModelManager.validateGgufFile(qwenFile)
+        assertTrue(validation.isSuccess)
+        assertEquals(3, validation.getOrNull())
+        assertTrue(qwenFile.name.contains("qwen3", ignoreCase = true))
+        assertTrue(qwenFile.name.contains("0.6b", ignoreCase = true))
+    }
 }
