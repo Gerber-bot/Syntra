@@ -17,6 +17,7 @@ import androidx.compose.ui.unit.dp
 import androidx.room.withTransaction
 import com.syntra.app.data.*
 import com.syntra.app.domain.*
+import com.syntra.app.ui.theme.*
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
@@ -261,55 +262,44 @@ fun RoutinesScreen(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                OutlinedButton(
+                SyntraSecondaryButton(
+                    text = "← Inicio",
                     onClick = onBack,
-                    shape = RoundedCornerShape(8.dp),
-                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
-                ) {
-                    Text("← Inicio", style = MaterialTheme.typography.bodySmall, color = Color.White)
-                }
+                    modifier = Modifier.height(38.dp)
+                )
                 Column {
                     Text(
                         text = "Gestión de Rutinas",
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.Bold,
-                        color = Color.White
+                        color = SyntraColors.TextPrimary
                     )
                     Text(
-                        text = "Planificación separada de ejecución • Integrado con IrisX Coach",
+                        text = "Planificación separada • IrisX Coach",
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary
+                        color = SyntraColors.SoftMint
                     )
                 }
             }
-            Button(
+            SyntraButton(
+                text = "+ Nueva",
                 onClick = { isCreatingNew = true },
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = Color.Black
-                ),
-                shape = RoundedCornerShape(8.dp)
-            ) {
-                Text("+ Nueva", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall)
-            }
+                modifier = Modifier.height(38.dp)
+            )
         }
 
         if (statusMessage != null) {
             Text(
                 text = statusMessage!!,
-                color = Color(0xFF81C784),
+                color = SyntraColors.NeonMint,
                 style = MaterialTheme.typography.bodySmall
             )
         }
 
         if (routinesWithExercises.isEmpty()) {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF161616)),
-                shape = RoundedCornerShape(12.dp)
-            ) {
+            SyntraCard(modifier = Modifier.fillMaxWidth()) {
                 Column(
-                    modifier = Modifier.padding(18.dp),
+                    modifier = Modifier.padding(12.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
@@ -317,22 +307,17 @@ fun RoutinesScreen(
                         text = "Todavía no tenés rutinas planificadas",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
-                        color = Color.White
+                        color = SyntraColors.TextPrimary
                     )
                     Text(
                         text = "Creá tus rutinas con series objetivo, rangos de repeticiones y cargas sugeridas. Podrás aplicarlas en el Analizador o como sesiones nuevas sin sobrescribir tu historial.",
                         style = MaterialTheme.typography.bodySmall,
-                        color = Color.Gray
+                        color = SyntraColors.TextSecondary
                     )
-                    Button(
-                        onClick = { isCreatingNew = true },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.primary,
-                            contentColor = Color.Black
-                        )
-                    ) {
-                        Text("Crear primera rutina", fontWeight = FontWeight.Bold)
-                    }
+                    SyntraButton(
+                        text = "+ Crear primera rutina",
+                        onClick = { isCreatingNew = true }
+                    )
                 }
             }
         } else {

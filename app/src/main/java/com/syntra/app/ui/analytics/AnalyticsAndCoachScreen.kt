@@ -25,6 +25,7 @@ import com.syntra.app.domain.SportsMetricsCalculator
 import com.syntra.app.domain.irisx.ChartDataPoint
 import com.syntra.app.domain.irisx.IrisXAnalytics
 import com.syntra.app.domain.irisx.IrisXCoach
+import com.syntra.app.ui.theme.*
 import java.util.Locale
 
 @Composable
@@ -79,24 +80,22 @@ fun AnalyticsAndCoachScreen(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                OutlinedButton(
+                SyntraSecondaryButton(
+                    text = "← Inicio",
                     onClick = onBack,
-                    shape = RoundedCornerShape(8.dp),
-                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
-                ) {
-                    Text("← Inicio", style = MaterialTheme.typography.bodySmall, color = Color.White)
-                }
+                    modifier = Modifier.height(38.dp)
+                )
                 Column {
                     Text(
                         text = "IrisX Analytics & Coach",
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.Bold,
-                        color = Color.White
+                        color = SyntraColors.TextPrimary
                     )
                     Text(
-                        text = "Análisis determinista • Sin estimaciones arbitrarias",
+                        text = "Análisis determinista • Métricas deportivas reales",
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary
+                        color = SyntraColors.SoftMint
                     )
                 }
             }
@@ -109,22 +108,12 @@ fun AnalyticsAndCoachScreen(
         ) {
             listOf("Progresión", "Tendencias", "IrisX Coach").forEachIndexed { index, title ->
                 val selected = activeTab == index
-                Button(
+                SyntraFilterChip(
+                    selected = selected,
                     onClick = { activeTab = index },
-                    modifier = Modifier.weight(1f).height(40.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = if (selected) MaterialTheme.colorScheme.primary else Color(0xFF1C1E20),
-                        contentColor = if (selected) Color.Black else Color.White
-                    ),
-                    shape = RoundedCornerShape(8.dp),
-                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp)
-                ) {
-                    Text(
-                        text = title,
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
+                    label = title,
+                    modifier = Modifier.weight(1f)
+                )
             }
         }
 

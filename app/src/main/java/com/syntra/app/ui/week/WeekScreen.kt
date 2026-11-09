@@ -15,6 +15,7 @@ import com.syntra.app.data.AppDatabase
 import com.syntra.app.data.IrisxMemoryEntity
 import com.syntra.app.data.WorkoutSessionEntity
 import com.syntra.app.domain.NextSessionPlan
+import com.syntra.app.ui.theme.*
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -189,15 +190,8 @@ fun WeekScreen(
         }
 
         // Summary Card: Goal & Time
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = Color(0xFF141414)),
-            shape = RoundedCornerShape(12.dp)
-        ) {
-            Column(
-                modifier = Modifier.padding(14.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
+        SyntraCard(modifier = Modifier.fillMaxWidth()) {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -208,25 +202,27 @@ fun WeekScreen(
                             text = "Progreso semanal",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
-                            color = Color.White
+                            color = SyntraColors.TextPrimary
                         )
                         Text(
                             text = "${weekSessions.size} de $weeklyGoal sesiones completadas",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.primary
+                            color = SyntraColors.NeonMint
                         )
                     }
-                    TextButton(onClick = { showGoalDialog = true }) {
-                        Text("Meta: $weeklyGoal ⚙", style = MaterialTheme.typography.labelSmall)
-                    }
+                    SyntraBadge(
+                        text = "Meta: $weeklyGoal ⚙",
+                        containerColor = SyntraColors.SurfaceHighlight,
+                        contentColor = SyntraColors.SoftMint
+                    )
                 }
 
                 val progress = if (weeklyGoal > 0) (weekSessions.size.toFloat() / weeklyGoal.toFloat()).coerceIn(0f, 1f) else 0f
                 LinearProgressIndicator(
                     progress = { progress },
                     modifier = Modifier.fillMaxWidth().height(8.dp),
-                    color = MaterialTheme.colorScheme.primary,
-                    trackColor = Color(0xFF262626)
+                    color = SyntraColors.NeonMint,
+                    trackColor = SyntraColors.SurfaceHighlight
                 )
 
                 Row(
@@ -234,21 +230,21 @@ fun WeekScreen(
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Column {
-                        Text("Tiempo entrenado", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                        Text("Tiempo entrenado", style = MaterialTheme.typography.labelSmall, color = SyntraColors.TextMuted)
                         Text(
                             text = formatDuration(totalDurationMillis),
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.Bold,
-                            color = Color.White
+                            color = SyntraColors.TextPrimary
                         )
                     }
                     Column(horizontalAlignment = Alignment.End) {
-                        Text("Categorías", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                        Text("Categorías", style = MaterialTheme.typography.labelSmall, color = SyntraColors.TextMuted)
                         Text(
                             text = if (categoriesTrained.isEmpty()) "Ninguna aún" else categoriesTrained.joinToString(", "),
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.primary
+                            color = SyntraColors.NeonMint
                         )
                     }
                 }

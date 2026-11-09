@@ -1772,42 +1772,35 @@ private fun WeightScreen(db: AppDatabase, error: String?, save: (String) -> Unit
             text = "Seguimiento de peso",
             style = MaterialTheme.typography.headlineSmall,
             fontWeight = FontWeight.Bold,
-            color = Color.White
+            color = SyntraColors.TextPrimary
         )
 
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = Color(0xFF161616)),
-            shape = RoundedCornerShape(12.dp)
-        ) {
-            Column(
-                modifier = Modifier.padding(14.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
+        SyntraCard(modifier = Modifier.fillMaxWidth()) {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 OutlinedTextField(
                     value = weightInput,
                     onValueChange = { weightInput = it },
                     label = { Text("Nuevo pesaje (kg)") },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = SyntraColors.NeonMint,
+                        unfocusedBorderColor = SyntraColors.BorderSubtle,
+                        focusedTextColor = SyntraColors.TextPrimary,
+                        unfocusedTextColor = SyntraColors.TextPrimary
+                    )
                 )
-                Button(
+                SyntraButton(
+                    text = "Registrar pesaje",
                     onClick = {
                         save(weightInput)
                         if (weightGrams(weightInput) != null) weightInput = ""
                     },
-                    modifier = Modifier.fillMaxWidth().height(46.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.primary,
-                        contentColor = Color.Black
-                    ),
-                    shape = RoundedCornerShape(8.dp)
-                ) {
-                    Text("Registrar pesaje", fontWeight = FontWeight.Bold)
-                }
+                    modifier = Modifier.fillMaxWidth()
+                )
                 if (error != null) {
-                    Text(text = error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                    Text(text = error, color = SyntraColors.Error, style = MaterialTheme.typography.bodySmall)
                 }
             }
         }
@@ -1816,7 +1809,7 @@ private fun WeightScreen(db: AppDatabase, error: String?, save: (String) -> Unit
             text = "Historial (${history.size})",
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.SemiBold,
-            color = Color.White
+            color = SyntraColors.TextPrimary
         )
 
         LazyColumn(
@@ -1824,13 +1817,9 @@ private fun WeightScreen(db: AppDatabase, error: String?, save: (String) -> Unit
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             items(history, key = { it.id }) { item ->
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFF141414)),
-                    shape = RoundedCornerShape(10.dp)
-                ) {
+                SyntraCard(modifier = Modifier.fillMaxWidth()) {
                     Row(
-                        modifier = Modifier.fillMaxWidth().padding(14.dp),
+                        modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
@@ -1839,16 +1828,16 @@ private fun WeightScreen(db: AppDatabase, error: String?, save: (String) -> Unit
                                 text = "${displayKg(item.weightGrams)} kg",
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.primary
+                                color = SyntraColors.NeonMint
                             )
                             if (item.note.isNotBlank()) {
-                                Text(item.note, style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                                Text(item.note, style = MaterialTheme.typography.bodySmall, color = SyntraColors.TextMuted)
                             }
                         }
                         Text(
                             text = DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(item.measuredAtMillis)),
                             style = MaterialTheme.typography.bodySmall,
-                            color = Color.Gray
+                            color = SyntraColors.TextMuted
                         )
                     }
                 }
