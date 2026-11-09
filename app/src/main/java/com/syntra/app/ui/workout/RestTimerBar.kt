@@ -30,7 +30,7 @@ fun RestTimerBar(
     var targetEndTimeWallMillis by remember { mutableStateOf<Long?>(null) }
     var pausedRemainingSeconds by remember { mutableStateOf<Int?>(null) }
     var isRunning by remember { mutableStateOf(false) }
-    var isExpanded by remember { mutableStateOf(false) }
+    var isExpanded by remember { mutableStateOf(true) }
     var showCompletedFlash by remember { mutableStateOf(false) }
 
     fun triggerVibration() {
@@ -68,6 +68,7 @@ fun RestTimerBar(
                 targetEndTimeWallMillis = null
                 pausedRemainingSeconds = null
                 showCompletedFlash = true
+                RestTimerAlarmScheduler.cancelAlarm(context)
                 triggerVibration()
                 break
             } else {
@@ -88,10 +89,12 @@ fun RestTimerBar(
         totalSeconds = durationSec
         secondsLeft = durationSec
         pausedRemainingSeconds = null
-        targetEndTimeWallMillis = System.currentTimeMillis() + (durationSec * 1000L)
+        val target = System.currentTimeMillis() + (durationSec * 1000L)
+        targetEndTimeWallMillis = target
         isRunning = true
         showCompletedFlash = false
-        isExpanded = true
+        isExpanded = false // Collapse presets when running to preserve screen space
+        RestTimerAlarmScheduler.scheduleAlarm(context, target)
     }
 
     fun pauseTimer() {
@@ -102,15 +105,18 @@ fun RestTimerBar(
             secondsLeft = rem
             isRunning = false
             targetEndTimeWallMillis = null
+            RestTimerAlarmScheduler.cancelAlarm(context)
         }
     }
 
     fun resumeTimer() {
         val rem = pausedRemainingSeconds ?: secondsLeft
         if (rem > 0) {
-            targetEndTimeWallMillis = System.currentTimeMillis() + (rem * 1000L)
+            val target = System.currentTimeMillis() + (rem * 1000L)
+            targetEndTimeWallMillis = target
             pausedRemainingSeconds = null
             isRunning = true
+            RestTimerAlarmScheduler.scheduleAlarm(context, target)
         }
     }
 
@@ -120,12 +126,16 @@ fun RestTimerBar(
         pausedRemainingSeconds = null
         secondsLeft = 0
         showCompletedFlash = false
+        isExpanded = true
+        RestTimerAlarmScheduler.cancelAlarm(context)
     }
 
     fun addTime(extraSeconds: Int) {
         if (isRunning && targetEndTimeWallMillis != null) {
-            targetEndTimeWallMillis = targetEndTimeWallMillis!! + (extraSeconds * 1000L)
+            val updated = targetEndTimeWallMillis!! + (extraSeconds * 1000L)
+            targetEndTimeWallMillis = updated
             totalSeconds += extraSeconds
+            RestTimerAlarmScheduler.scheduleAlarm(context, updated)
         } else if (pausedRemainingSeconds != null) {
             pausedRemainingSeconds = (pausedRemainingSeconds!! + extraSeconds).coerceAtLeast(0)
             secondsLeft = pausedRemainingSeconds!!
@@ -260,7 +270,7 @@ fun RestTimerBar(
             }
 
             // Quick Preset Buttons
-            if (isExpanded || (!isRunning && pausedRemainingSeconds == null)) {
+            if (isExpanded) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),

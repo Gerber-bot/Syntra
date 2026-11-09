@@ -1,5 +1,6 @@
 package com.syntra.app
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -24,6 +25,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -81,9 +83,9 @@ private fun displayKg(grams: Int): String = InputValidators.formatWeightKg(grams
 private fun getAppVersionName(context: android.content.Context): String {
     return try {
         val pInfo = context.packageManager.getPackageInfo(context.packageName, 0)
-        pInfo.versionName ?: "0.7.0-alpha2"
+        pInfo.versionName ?: "0.7.0-alpha3"
     } catch (_: Exception) {
-        "0.7.0-alpha2"
+        "0.7.0-alpha3"
     }
 }
 
@@ -251,16 +253,17 @@ private fun TrainerApp(db: AppDatabase) {
                             if (destination != "Perfil") isEditingProfile = false
                         },
                         icon = {
-                            Text(
-                                text = when(destination) {
-                                    "Inicio" -> "⌂"
-                                    "Historial" -> "📋"
-                                    "Semana" -> "📅"
-                                    "Peso" -> "⚖"
-                                    else -> "👤"
-                                },
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 16.sp
+                            val iconRes = when (destination) {
+                                "Inicio" -> R.drawable.ic_nav_home
+                                "Historial" -> R.drawable.ic_nav_history
+                                "Semana" -> R.drawable.ic_nav_week
+                                "Peso" -> R.drawable.ic_nav_weight
+                                else -> R.drawable.ic_nav_profile
+                            }
+                            Icon(
+                                painter = painterResource(id = iconRes),
+                                contentDescription = destination,
+                                modifier = Modifier.size(20.dp)
                             )
                         },
                         label = {
@@ -286,7 +289,6 @@ private fun TrainerApp(db: AppDatabase) {
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .imePadding()
                 .padding(horizontal = 16.dp, vertical = 8.dp)
         ) {
             when(page) {
@@ -485,6 +487,25 @@ private fun ProfileViewScreen(
                     errorMessage = "Archivo no válido: ${validation.message}"
                     statusMessage = null
                 }
+            }
+        }
+    }
+
+    val apkLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            try {
+                val intent = Intent(Intent.ACTION_VIEW).apply {
+                    setDataAndType(uri, "application/vnd.android.package-archive")
+                    flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK
+                }
+                context.startActivity(intent)
+                statusMessage = "Abriendo instalador del sistema..."
+                errorMessage = null
+            } catch (e: Exception) {
+                errorMessage = "No se pudo iniciar la instalación del APK: ${e.message}"
+                statusMessage = null
             }
         }
     }
@@ -828,6 +849,46 @@ private fun ProfileViewScreen(
                         style = MaterialTheme.typography.bodySmall
                     )
                 }
+            }
+        }
+
+        // Card: Centro de Actualizaciones Locales (Inalámbrico y APK local)
+        SyntraCard(modifier = Modifier.fillMaxWidth()) {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Centro de actualizaciones locales",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = SyntraColors.NeonMint
+                    )
+                    SyntraBadge(
+                        text = "Offline-first",
+                        containerColor = SyntraColors.DarkMint,
+                        contentColor = SyntraColors.NeonMint
+                    )
+                }
+                Text(
+                    text = "Syntra es privada y no requiere servidores externos. Podés actualizar de forma inalámbrica mediante ADB Wi-Fi desde tu PC o seleccionando un APK compilado que hayas transferido a tu teléfono.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = SyntraColors.TextSecondary
+                )
+                Text(
+                    text = "⚠️ Conservación de datos: Al actualizar, nunca desinstales la aplicación previamente para no borrar la base de datos interna SQLite.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = SyntraColors.SoftMint
+                )
+                SyntraButton(
+                    text = "📦 Seleccionar APK local para actualizar",
+                    onClick = {
+                        apkLauncher.launch(arrayOf("application/vnd.android.package-archive", "application/octet-stream", "*/*"))
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
         }
 
@@ -1691,7 +1752,27 @@ private fun HomeScreen(
 
         SyntraButton(
             text = btnLabel,
-            onClick = { onNavigate("EntrenamientoActivo") },
+            onClick = {
+                if (!hasRecoverableDraft) {
+                    scope.launch {
+                        val nowWall = System.currentTimeMillis()
+                        val nowElapsed = android.os.SystemClock.elapsedRealtime()
+                        val port = RoomActiveWorkoutPersistencePort(db)
+                        val manager = ActiveWorkoutManager(port)
+                        manager.startSession(
+                            title = "",
+                            initialNotesText = "",
+                            plannedCategory = nextSessionPlan.nextCategoryName,
+                            forceReplaceExisting = false,
+                            nowWallMillis = nowWall,
+                            nowElapsedRealtimeMillis = nowElapsed
+                        )
+                        onNavigate("EntrenamientoActivo")
+                    }
+                } else {
+                    onNavigate("EntrenamientoActivo")
+                }
+            },
             modifier = Modifier.fillMaxWidth()
         )
 

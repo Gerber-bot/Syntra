@@ -78,9 +78,14 @@ fun IrisXConsoleDialog(
             )
         } else {
             stored.forEach { m ->
+                val cleanContent = if (m.senderRole == "USER") {
+                    IrisXContextBuilder.extractUserMessage(m.content)
+                } else {
+                    IrisXContextBuilder.stripChatMlTokens(m.content)
+                }
                 messages.add(
                     ChatMessage(
-                        text = m.content,
+                        text = cleanContent,
                         isUser = m.senderRole == "USER",
                         timestampMillis = m.createdAtMillis
                     )
@@ -97,7 +102,19 @@ fun IrisXConsoleDialog(
         inputText = ""
 
         if (effectiveNeuralEngine.isModelLoaded()) {
-            // Neural Engine Path
+            // Neural Engine Path: Persist clean human turn to SQLite
+            scope.launch {
+                val conv = repo.getOrCreateActiveConversation()
+                repo.appendMessage(
+                    com.syntra.app.data.IrisxMessageEntity(
+                        conversationId = conv.id,
+                        senderRole = "USER",
+                        content = trimmed,
+                        createdAtMillis = System.currentTimeMillis()
+                    )
+                )
+            }
+
             val guardian = IrisXGuardian.evaluateResources(context, effectiveNeuralEngine.currentModelFile?.length() ?: 0L)
             if (!guardian.canProceed) {
                 messages.add(
@@ -131,9 +148,6 @@ fun IrisXConsoleDialog(
                     if (chunk.errorMessage != null) {
                         responseBuilder.append("\n[Error: ${chunk.errorMessage}]")
                     } else {
-                        if (responseBuilder.isEmpty() && chunk.text.isNotBlank()) {
-                            // First token received
-                        }
                         responseBuilder.append(chunk.text)
                     }
 
@@ -146,10 +160,22 @@ fun IrisXConsoleDialog(
                     }
                 }
 
-                // Add metrics footer
+                // Clean final response and persist to SQLite
+                val cleanFinal = IrisXContextBuilder.stripChatMlTokens(responseBuilder.toString())
+                val conv = repo.getOrCreateActiveConversation()
+                repo.appendMessage(
+                    com.syntra.app.data.IrisxMessageEntity(
+                        conversationId = conv.id,
+                        senderRole = "IRISX",
+                        content = cleanFinal,
+                        createdAtMillis = System.currentTimeMillis()
+                    )
+                )
+
+                // Add metrics footer for UI display
                 val m = effectiveNeuralEngine.metrics
                 if (m.tokensPerSecond > 0.0) {
-                    val finalMsg = "${responseBuilder.toString().trim()}\n\n───\n⚡ ${String.format("%.1f", m.tokensPerSecond)} t/s • ${m.lastInferenceDurationMillis} ms • ${effectiveNeuralEngine.currentModelFile?.name}"
+                    val finalMsg = "${cleanFinal.trim()}\n\n───\n⚡ ${String.format("%.1f", m.tokensPerSecond)} t/s • ${m.lastInferenceDurationMillis} ms • ${effectiveNeuralEngine.currentModelFile?.name}"
                     if (botMessageIndex < messages.size) {
                         messages[botMessageIndex] = ChatMessage(text = finalMsg, isUser = false)
                     }
@@ -196,7 +222,8 @@ fun IrisXConsoleDialog(
         Surface(
             modifier = Modifier
                 .fillMaxWidth(0.95f)
-                .fillMaxHeight(0.88f),
+                .fillMaxHeight(0.88f)
+                .imePadding(),
             shape = RoundedCornerShape(20.dp),
             color = SyntraColors.SurfaceDark,
             border = androidx.compose.foundation.BorderStroke(1.dp, SyntraColors.BorderSubtle)

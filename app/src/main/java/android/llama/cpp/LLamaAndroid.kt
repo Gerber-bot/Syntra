@@ -16,6 +16,8 @@ class LLamaAndroid {
     private val threadLocalState: ThreadLocal<State> = ThreadLocal.withInitial { State.Idle }
 
     private var isLibraryLoaded = false
+    @Volatile
+    private var isModelLoaded = false
 
     private val runLoop: CoroutineDispatcher = Executors.newSingleThreadExecutor {
         thread(start = false, name = "Llm-RunLoop") {
@@ -39,6 +41,8 @@ class LLamaAndroid {
     }.asCoroutineDispatcher()
 
     fun isNativeLibraryLoaded(): Boolean = isLibraryLoaded
+
+    fun hasModelLoaded(): Boolean = isModelLoaded
 
     var nlen: Int = 256
 
@@ -116,6 +120,7 @@ class LLamaAndroid {
 
                     Log.i(tag, "Loaded model $pathToModel")
                     threadLocalState.set(State.Loaded(model, context, batch, sampler))
+                    isModelLoaded = true
                 }
                 is State.Loaded -> throw IllegalStateException("Model already loaded")
             }
@@ -153,8 +158,11 @@ class LLamaAndroid {
                     free_sampler(state.sampler)
 
                     threadLocalState.set(State.Idle)
+                    isModelLoaded = false
                 }
-                is State.Idle -> {}
+                is State.Idle -> {
+                    isModelLoaded = false
+                }
             }
         }
     }

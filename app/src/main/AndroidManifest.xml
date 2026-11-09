@@ -1,11 +1,15 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <!-- Syntra: Aplicación privada, offline-first. Sin permisos de red, archivos globales ni sensores intrusivos. -->
+    <!-- Syntra: Aplicación privada, offline-first. Sin permisos de red externa, archivos globales ni telemetría. -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
     <application
         android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:label="Syntra"
-        android:theme="@android:style/Theme.Material.Light.NoActionBar"
+        android:theme="@style/Theme.Syntra"
         android:supportsRtl="true">
         <activity
             android:name=".MainActivity"
@@ -15,5 +19,9 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <receiver
+            android:name=".ui.workout.RestTimerReceiver"
+            android:exported="false" />
     </application>
 </manifest>

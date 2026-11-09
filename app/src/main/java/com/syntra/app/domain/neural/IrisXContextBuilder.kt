@@ -100,4 +100,43 @@ object IrisXContextBuilder {
 
         sb.toString()
     }
+
+    /**
+     * Extracts the clean human query from a prompt or raw stored message that might contain ChatML markers.
+     * Prevents internal instructions or system prompts from polluting SQLite or user-facing chat.
+     */
+    fun extractUserMessage(rawText: String): String {
+        if (!rawText.contains("<|im_start|>")) return rawText.trim()
+        val userSection = rawText.substringAfter("<|im_start|>user", "")
+            .substringBefore("<|im_end|>", "")
+            .trim()
+        if (userSection.isNotBlank()) return userSection
+
+        return rawText.lines()
+            .filterNot { line ->
+                val trimmed = line.trim()
+                trimmed.startsWith("<|") ||
+                    trimmed.startsWith("Sos IrisX") ||
+                    trimmed.startsWith("DATOS DEPORTIVOS") ||
+                    trimmed.startsWith("Reglas de respuesta") ||
+                    trimmed.startsWith("1. ") ||
+                    trimmed.startsWith("2. ") ||
+                    trimmed.startsWith("3. ") ||
+                    trimmed.startsWith("- ")
+            }
+            .joinToString(" ")
+            .trim()
+            .ifEmpty { stripChatMlTokens(rawText) }
+    }
+
+    /**
+     * Strips all ChatML tags (<|im_start|>, <|im_end|>, etc.) from generated text.
+     */
+    fun stripChatMlTokens(text: String): String {
+        return text.replace("<|im_start|>", "")
+            .replace("<|im_end|>", "")
+            .replace("<|endoftext|>", "")
+            .replace(Regex("<\\|.*?\\|>"), "")
+            .trim()
+    }
 }

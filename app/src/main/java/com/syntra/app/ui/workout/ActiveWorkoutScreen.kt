@@ -81,6 +81,7 @@ fun ActiveWorkoutScreen(
     var commitErrorMessage by remember { mutableStateOf<String?>(null) }
     var isCommitting by remember { mutableStateOf(false) }
     var showCancelConfirmDialog by remember { mutableStateOf(false) }
+    var showRoutinePicker by remember { mutableStateOf(false) }
 
     val currentDraftState = persistedDraft?.let { WorkoutSessionState.fromString(it.state) } ?: WorkoutSessionState.IDLE
 
@@ -232,6 +233,42 @@ fun ActiveWorkoutScreen(
         )
     }
 
+    // Routine Picker Dialog for pasting into active notepad
+    if (showRoutinePicker) {
+        AlertDialog(
+            onDismissRequest = { showRoutinePicker = false },
+            containerColor = SyntraColors.SurfaceCardElevated,
+            title = {
+                Text("Cargar rutina a notas", color = SyntraColors.TextPrimary, fontWeight = FontWeight.Bold)
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    routinesWithExercises.forEach { rw ->
+                        SyntraCard(
+                            modifier = Modifier.fillMaxWidth(),
+                            onClick = {
+                                val routineNotes = RoutineManager.toParserTextTemplate(rw)
+                                val currentText = editorValue.text
+                                val updatedText = if (currentText.isBlank()) routineNotes else "${currentText.trim()}\n\n$routineNotes"
+                                editorValue = TextFieldValue(updatedText, TextRange(updatedText.length))
+                                showRoutinePicker = false
+                            }
+                        ) {
+                            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                Text(rw.routine.name, fontWeight = FontWeight.Bold, color = SyntraColors.TextPrimary)
+                                Text("${rw.routine.targetCategory} • ${rw.exercises.size} ejercicios", style = MaterialTheme.typography.labelSmall, color = SyntraColors.SoftMint)
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                SyntraSecondaryButton(text = "Cerrar", onClick = { showRoutinePicker = false })
+            }
+        )
+    }
+
     // Exercise preview edit dialog during REVIEW_PENDING
     if (exerciseToEdit != null) {
         EditExercisePreviewDialog(
@@ -272,39 +309,25 @@ fun ActiveWorkoutScreen(
 
     val activeDraft = persistedDraft
     if (activeDraft == null) {
-        // IDLE state: Start Session Launcher
-        StartWorkoutLauncherView(
-            suggestedNextPlan = suggestedNextPlan,
-            routinesWithExercises = routinesWithExercises,
-            onStartBlank = { initialTitle, category ->
-                scope.launch {
-                    val nowWall = System.currentTimeMillis()
-                    val nowElapsed = SystemClock.elapsedRealtime()
-                    val starterText = if (!initialTitle.isNullOrBlank()) "$initialTitle\n" else ""
-                    manager.startSession(
-                        title = initialTitle.orEmpty(),
-                        initialNotesText = starterText,
-                        plannedCategory = category,
-                        forceReplaceExisting = true,
-                        nowWallMillis = nowWall,
-                        nowElapsedRealtimeMillis = nowElapsed
-                    )
-                }
-            },
-            onStartFromRoutine = { routineWithEx ->
-                scope.launch {
-                    val nowWall = System.currentTimeMillis()
-                    val nowElapsed = SystemClock.elapsedRealtime()
-                    manager.startFromRoutine(
-                        routineWithExercises = routineWithEx,
-                        forceReplaceExisting = true,
-                        nowWallMillis = nowWall,
-                        nowElapsedRealtimeMillis = nowElapsed
-                    )
-                }
-            },
-            onBack = onBackToHome
-        )
+        // Direct Entry: Auto-initialize active draft immediately with suggested category
+        LaunchedEffect(Unit) {
+            val nowWall = System.currentTimeMillis()
+            val nowElapsed = SystemClock.elapsedRealtime()
+            manager.startSession(
+                title = "",
+                initialNotesText = "",
+                plannedCategory = suggestedNextPlan.nextCategoryName,
+                forceReplaceExisting = false,
+                nowWallMillis = nowWall,
+                nowElapsedRealtimeMillis = nowElapsed
+            )
+        }
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center
+        ) {
+            CircularProgressIndicator(color = SyntraColors.NeonMint)
+        }
         return
     }
 
@@ -432,11 +455,24 @@ fun ActiveWorkoutScreen(
                         color = if (isTimerPaused) SyntraColors.TextSecondary else SyntraColors.TextPrimary
                     )
                 }
-                SyntraBadge(
-                    text = "🎯 $displayCategory",
-                    containerColor = SyntraColors.DarkMint,
-                    contentColor = SyntraColors.NeonMint
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    SyntraBadge(
+                        text = "🎯 $displayCategory",
+                        containerColor = SyntraColors.DarkMint,
+                        contentColor = SyntraColors.NeonMint
+                    )
+                    if (routinesWithExercises.isNotEmpty()) {
+                        TextButton(
+                            onClick = { showRoutinePicker = true },
+                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
+                        ) {
+                            Text("🗂 Rutina", style = MaterialTheme.typography.labelSmall, color = SyntraColors.SoftMint)
+                        }
+                    }
+                }
             }
         }
 

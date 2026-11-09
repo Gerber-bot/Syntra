@@ -165,4 +165,38 @@ class NeuralEngineTest {
         assertTrue(qwenFile.name.contains("qwen3", ignoreCase = true))
         assertTrue(qwenFile.name.contains("0.6b", ignoreCase = true))
     }
+
+    @Test
+    fun `extractUserMessage strips chatml delimiters and isolates human input`() {
+        val chatMl = """
+            <|im_start|>system
+            Sos IrisX, la entrenadora deportiva...
+            <|im_end|>
+            <|im_start|>user
+            ¿Cuál es mi récord en press militar?
+            <|im_end|>
+            <|im_start|>assistant
+        """.trimIndent()
+
+        val extracted = IrisXContextBuilder.extractUserMessage(chatMl)
+        assertEquals("¿Cuál es mi récord en press militar?", extracted)
+    }
+
+    @Test
+    fun `stripChatMlTokens removes special markers cleanly`() {
+        val raw = "<|im_start|>assistant\n¡Excelente progreso!<|im_end|><|endoftext|>"
+        val clean = IrisXContextBuilder.stripChatMlTokens(raw)
+        assertEquals("assistant\n¡Excelente progreso!", clean)
+    }
+
+    @Test
+    fun `deterministic engine sanitizes chatml formatted prompts gracefully`() = runBlocking {
+        val engine = DeterministicInferenceEngine(db = null)
+        val promptWithChatMl = "<|im_start|>system\nSos IrisX\n<|im_end|>\n<|im_start|>user\n¿Cómo descansé?\n<|im_end|>\n<|im_start|>assistant"
+        val chunks = engine.generate(promptWithChatMl).toList()
+
+        assertTrue(chunks.isNotEmpty())
+        assertTrue(chunks.last().isComplete)
+        assertFalse(chunks.any { it.text.contains("<|im_start|>") })
+    }
 }

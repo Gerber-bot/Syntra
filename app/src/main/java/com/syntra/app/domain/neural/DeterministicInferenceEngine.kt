@@ -48,11 +48,12 @@ class DeterministicInferenceEngine(
         state = EngineState.GENERATING
         val startTime = System.currentTimeMillis()
 
-        // 1. Evaluate prompt via IrisXCore
+        // 1. Evaluate prompt via IrisXCore using clean user query (strip any ChatML template wrappers)
+        val cleanQuery = IrisXContextBuilder.extractUserMessage(prompt)
         val responseText = if (db != null) {
             try {
                 val core = IrisXCore(RoomIrisXRepository(db))
-                val eval = core.ask(prompt)
+                val eval = core.ask(cleanQuery)
                 when (eval) {
                     is IrisXResponse.Success -> eval.message
                     is IrisXResponse.RequiresConfirmation -> "${eval.question}\nConfirmar con: ${eval.confirmCommand}"

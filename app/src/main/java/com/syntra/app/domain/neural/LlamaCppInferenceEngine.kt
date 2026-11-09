@@ -94,7 +94,12 @@ class LlamaCppInferenceEngine(
     }
 
     override fun isModelLoaded(): Boolean {
-        return state == EngineState.READY && currentModelFile != null
+        val ready = state == EngineState.READY && currentModelFile != null
+        return if (isNativeAvailable()) {
+            ready && LLamaAndroid.instance().hasModelLoaded()
+        } else {
+            ready
+        }
     }
 
     override fun generate(prompt: String, params: InferenceParams): Flow<GenerationChunk> = flow {
@@ -102,7 +107,8 @@ class LlamaCppInferenceEngine(
 
         if (state != EngineState.READY) {
             if (fallbackEngine != null) {
-                fallbackEngine.generate(prompt, params).collect { emit(it) }
+                val clean = IrisXContextBuilder.extractUserMessage(prompt)
+                fallbackEngine.generate(clean, params).collect { emit(it) }
                 return@flow
             }
             emit(GenerationChunk(text = "", isComplete = true, errorMessage = "El motor neuronal no está listo (modelo no cargado)."))
@@ -112,10 +118,11 @@ class LlamaCppInferenceEngine(
         if (!isNativeAvailable()) {
             // Fallback for JVM unit tests without native binary
             if (fallbackEngine != null) {
-                fallbackEngine.generate(prompt, params).collect { emit(it) }
+                val clean = IrisXContextBuilder.extractUserMessage(prompt)
+                fallbackEngine.generate(clean, params).collect { emit(it) }
                 return@flow
             }
-            emit(GenerationChunk(text = "IrisX: [Simulación JVM host — Biblioteca nativa no compilada]. Consulta: $prompt", isComplete = true))
+            emit(GenerationChunk(text = "IrisX: [Simulación JVM host — Biblioteca nativa no compilada]. Consulta: ${IrisXContextBuilder.extractUserMessage(prompt)}", isComplete = true))
             return@flow
         }
 
@@ -132,7 +139,7 @@ class LlamaCppInferenceEngine(
                     return@collect
                 }
 
-                val cleanPiece = piece.replace("<|im_end|>", "").replace("<|endoftext|>", "")
+                val cleanPiece = IrisXContextBuilder.stripChatMlTokens(piece)
                 if (cleanPiece.isNotEmpty()) {
                     tokenCount++
                     val elapsed = System.currentTimeMillis() - startTime
