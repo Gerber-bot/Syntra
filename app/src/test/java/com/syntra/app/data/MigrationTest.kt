@@ -628,6 +628,35 @@ class MigrationTest {
             assertEquals(9, rs.getInt(1))
         }
 
+        // 8. Apply MIGRATION_5_6 (v5 -> v6: multi-unit loads and failure sets)
+        stmt.execute("ALTER TABLE workout_sets ADD COLUMN loadUnit TEXT NOT NULL DEFAULT 'KG'")
+        stmt.execute("ALTER TABLE workout_sets ADD COLUMN isToFailure INTEGER NOT NULL DEFAULT 0")
+
+        // Verify pre-existing v5 set (id = 100) now has default loadUnit="KG" and isToFailure=0
+        stmt.executeQuery("SELECT loadGrams, repetitions, loadUnit, isToFailure FROM workout_sets WHERE id = 100").use { rs ->
+            assertTrue(rs.next())
+            assertEquals(75000, rs.getInt("loadGrams"))
+            assertEquals(8, rs.getInt("repetitions"))
+            assertEquals("KG", rs.getString("loadUnit"))
+            assertEquals(0, rs.getInt("isToFailure"))
+        }
+
+        // Insert new v6 sets with different units (BLOQUES, PLACAS) and toFailure=1
+        stmt.execute("""
+            INSERT INTO workout_sets (
+                sessionId, exerciseId, orderInExercise, executionOrder, loadGrams, repetitions, rir, note, plannedTarget, loadUnit, isToFailure
+            ) VALUES (10, 1, 1, 1, 13000, 9, 0, '[FALLO]', '3 series de 10-12 reps', 'BLOQUES', 1)
+        """.trimIndent())
+
+        stmt.executeQuery("SELECT loadGrams, repetitions, loadUnit, isToFailure, note FROM workout_sets WHERE loadUnit = 'BLOQUES'").use { rs ->
+            assertTrue(rs.next())
+            assertEquals(13000, rs.getInt("loadGrams"))
+            assertEquals(9, rs.getInt("repetitions"))
+            assertEquals("BLOQUES", rs.getString("loadUnit"))
+            assertEquals(1, rs.getInt("isToFailure"))
+            assertEquals("[FALLO]", rs.getString("note"))
+        }
+
         stmt.close()
         connection.close()
     }

@@ -142,6 +142,20 @@ object WorkoutTextParser {
                     }
                 }
 
+                // Detect exercise lines with reps and failure notation but missing load (e.g. 'Femoral parado 13 fallo')
+                val failureMatch = Regex("^(.*?)[\\s:]+(\\d{1,2})\\s*(?:f|al fallo|fallo)$", RegexOption.IGNORE_CASE).find(line)
+                if (failureMatch != null) {
+                    val candidateName = failureMatch.groups[1]?.value?.trim(' ', ':', '-', '–', ',').orEmpty()
+                    val reps = failureMatch.groups[2]?.value?.toIntOrNull()
+                    if (candidateName.isNotBlank() && reps != null && reps in 1..99) {
+                        val resolvedName = aliasIndex[normalize(candidateName)] ?: candidateName
+                        val reason = "Se identificó '$resolvedName' con $reps repeticiones al fallo, pero falta la carga (ej. kg, bloques). Podés asignarla en la revisión."
+                        unrecognizedLines += UnrecognizedLine(lineNumber + 1, line, reason)
+                        warnings += "Línea ${lineNumber + 1}: '$resolvedName' tiene $reps reps al fallo pero falta definir la carga."
+                        return@forEachIndexed
+                    }
+                }
+
                 val normalizedLine = normalize(line)
                 val isBuenosDias = normalizedLine == "buenos dias"
                 val reason = if (isBuenosDias) {

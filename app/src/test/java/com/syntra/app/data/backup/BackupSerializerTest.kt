@@ -267,4 +267,100 @@ class BackupSerializerTest {
         assertEquals(1, restored.routineExercises.size)
         assertEquals(80000, restored.routineExercises[0].suggestedLoadGrams)
     }
+
+    @Test
+    fun `deserializing older backup JSON without loadUnit and isToFailure applies safe defaults`() {
+        val legacyJson = """
+            {
+              "formatVersion": 1,
+              "appVersion": "0.6.0",
+              "exportedAtMillis": 1715000000000,
+              "profile": null,
+              "weighIns": [],
+              "exercises": [
+                {
+                  "id": 1,
+                  "displayName": "Sentadilla",
+                  "normalizedName": "sentadilla",
+                  "muscleGroup": "Piernas",
+                  "createdAtMillis": 1715000000000
+                }
+              ],
+              "exerciseAliases": [],
+              "workoutSessions": [
+                {
+                  "id": 10,
+                  "title": "Piernas",
+                  "startedAtMillis": 1715000000000,
+                  "finishedAtMillis": 1715003600000,
+                  "notes": ""
+                }
+              ],
+              "workoutSets": [
+                {
+                  "id": 101,
+                  "sessionId": 10,
+                  "exerciseId": 1,
+                  "orderInExercise": 1,
+                  "executionOrder": 1,
+                  "loadGrams": 80000,
+                  "repetitions": 8,
+                  "rir": 1,
+                  "isAssisted": false,
+                  "isDumbbell": false,
+                  "note": ""
+                }
+              ],
+              "irisxMemories": []
+            }
+        """.trimIndent()
+
+        val result = BackupSerializer.deserializeAndValidate(legacyJson)
+        assertTrue(result is BackupValidationResult.Success)
+        val payload = (result as BackupValidationResult.Success).payload
+
+        assertEquals(1, payload.workoutSets.size)
+        val set = payload.workoutSets.first()
+        assertEquals(80000, set.loadGrams)
+        assertEquals(8, set.repetitions)
+        assertEquals("KG", set.loadUnit)
+        assertEquals(false, set.isToFailure)
+    }
+
+    @Test
+    fun `roundtrip preserves multi-unit loads and failure sets accurately`() {
+        val setDto = WorkoutSetBackupDto(
+            id = 200,
+            sessionId = 10,
+            exerciseId = 1,
+            orderInExercise = 1,
+            executionOrder = 1,
+            loadGrams = 13000,
+            repetitions = 9,
+            rir = 0,
+            loadUnit = "BLOQUES",
+            isToFailure = true,
+            note = "[FALLO]"
+        )
+
+        val payload = SyntraBackupPayload(
+            formatVersion = 2,
+            appVersion = "0.7.0-alpha4",
+            exportedAtMillis = 1716000000000L,
+            profile = null,
+            workoutSets = listOf(setDto)
+        )
+
+        val json = BackupSerializer.serialize(payload)
+        val result = BackupSerializer.deserializeAndValidate(json)
+        assertTrue(result is BackupValidationResult.Success)
+        val restored = (result as BackupValidationResult.Success).payload
+
+        assertEquals(1, restored.workoutSets.size)
+        val restoredSet = restored.workoutSets.first()
+        assertEquals("BLOQUES", restoredSet.loadUnit)
+        assertEquals(true, restoredSet.isToFailure)
+        assertEquals(13000, restoredSet.loadGrams)
+        assertEquals(9, restoredSet.repetitions)
+    }
 }

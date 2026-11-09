@@ -74,8 +74,11 @@ fun IrisXConsoleDialog(
                 installed.firstOrNull()?.file
             }
             if (modelToLoad != null && modelToLoad.exists()) {
-                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                    effectiveNeuralEngine.loadModel(modelToLoad, threads = 4)
+                val guardian = IrisXGuardian.evaluateResources(context, modelToLoad.length())
+                if (guardian.canProceed) {
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        effectiveNeuralEngine.loadModel(modelToLoad, threads = 4)
+                    }
                 }
             }
         }

@@ -43,6 +43,14 @@ class LlamaCppInferenceEngine(
             return@withContext Result.failure(IllegalArgumentException("El archivo de modelo no existe: ${modelFile.absolutePath}"))
         }
 
+        // Avoid duplicate loading if the same file is already in memory
+        if (isModelLoaded() && currentModelFile?.absolutePath == modelFile.absolutePath) {
+            return@withContext Result.success(Unit)
+        }
+        if (isModelLoaded()) {
+            unloadModel()
+        }
+
         // Validate GGUF format
         val validation = ModelManager.validateGgufFile(modelFile)
         if (validation.isFailure) {

@@ -153,6 +153,22 @@ class WorkoutTextParserTest {
     }
 
     @Test
+    fun parsesFemoralParadoWithRepsAndFailureWithoutInventingLoad() {
+        val input = "Piernas\nFemoral parado 13 fallo"
+        val preview = WorkoutTextParser.parse(input)
+
+        // Does NOT invent an arbitrary load or fake set into exercises
+        assertTrue(preview.exercises.isEmpty())
+        assertEquals(1, preview.unrecognizedLines.size)
+        val line = preview.unrecognizedLines.first()
+        assertEquals("Femoral parado 13 fallo", line.rawText)
+        assertTrue(line.reason.contains("Femoral parado"))
+        assertTrue(line.reason.contains("13"))
+        assertTrue(line.reason.contains("fallo"))
+        assertTrue(preview.warnings.any { it.contains("13 reps al fallo") })
+    }
+
+    @Test
     fun parsesMultiUnitsPlacasLbsAndBodyweight() {
         val input = """
             Jalón al pecho 10 placas 12 10

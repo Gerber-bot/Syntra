@@ -399,18 +399,36 @@ fun ActiveWorkoutScreen(
                 editedExercises = editedExercises.filterNot { it.name == targetEx.name }
             },
             onAssignLine = { line ->
-                exerciseToEdit = ParsedExercise(
-                    name = line.rawText.take(40),
-                    sets = listOf(
-                        ParsedSet(
-                            weightGrams = 20000,
-                            rawLoadValue = 20.0,
-                            loadUnit = "KG",
-                            repetitions = 10,
-                            isToFailure = false
+                val failureMatch = Regex("^(.*?)[\\s:]+(\\d{1,2})\\s*(?:f|al fallo|fallo)$", RegexOption.IGNORE_CASE).find(line.rawText)
+                if (failureMatch != null) {
+                    val exName = failureMatch.groups[1]?.value?.trim(' ', ':', '-', '–', ',').orEmpty()
+                    val reps = failureMatch.groups[2]?.value?.toIntOrNull() ?: 10
+                    exerciseToEdit = ParsedExercise(
+                        name = exName.ifBlank { line.rawText.take(40) },
+                        sets = listOf(
+                            ParsedSet(
+                                weightGrams = 0,
+                                rawLoadValue = 0.0,
+                                loadUnit = "KG",
+                                repetitions = reps,
+                                isToFailure = true
+                            )
                         )
                     )
-                )
+                } else {
+                    exerciseToEdit = ParsedExercise(
+                        name = line.rawText.take(40),
+                        sets = listOf(
+                            ParsedSet(
+                                weightGrams = 20000,
+                                rawLoadValue = 20.0,
+                                loadUnit = "KG",
+                                repetitions = 10,
+                                isToFailure = false
+                            )
+                        )
+                    )
+                }
             },
             onDiscardLine = { line ->
                 unrecognizedLines = unrecognizedLines.filterNot { it.lineNumber == line.lineNumber && it.rawText == line.rawText }

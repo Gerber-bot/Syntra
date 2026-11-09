@@ -100,24 +100,6 @@ private fun TrainerApp(db: AppDatabase) {
     val neuralEngine = remember(fallbackEngine) { LlamaCppInferenceEngine(fallbackEngine) }
     var showManageNeuralModelDialog by remember { mutableStateOf(false) }
 
-    val context = androidx.compose.ui.platform.LocalContext.current
-    LaunchedEffect(Unit) {
-        if (!neuralEngine.isModelLoaded()) {
-            val prefModelName = ModelManager.getActiveModelPreference(context)
-            val installed = ModelManager.listInstalledModels(context)
-            val modelToLoad = if (!prefModelName.isNullOrBlank()) {
-                installed.firstOrNull { it.fileName == prefModelName }?.file
-            } else {
-                installed.firstOrNull()?.file
-            }
-            if (modelToLoad != null && modelToLoad.exists()) {
-                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                    neuralEngine.loadModel(modelToLoad, threads = 4)
-                }
-            }
-        }
-    }
-
     val profileFlow = remember(db) { db.profileDao().observe() }
     val profile by profileFlow.collectAsState(initial = null)
     val activeDraftFlow = remember(db) { db.activeWorkoutDraftDao().observeCurrentDraft() }
