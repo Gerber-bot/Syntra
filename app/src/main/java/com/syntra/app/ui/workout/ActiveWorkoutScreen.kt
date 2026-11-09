@@ -29,6 +29,7 @@ import com.syntra.app.data.ExerciseAliasEntity
 import com.syntra.app.data.IrisxMemoryEntity
 import com.syntra.app.domain.*
 import com.syntra.app.ui.parser.EditExercisePreviewDialog
+import com.syntra.app.ui.theme.*
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -377,36 +378,28 @@ fun ActiveWorkoutScreen(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            OutlinedButton(
+            SyntraSecondaryButton(
+                text = "← Inicio",
                 onClick = onBackToHome,
-                shape = RoundedCornerShape(8.dp),
-                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
-            ) {
-                Text("← Inicio", style = MaterialTheme.typography.labelSmall, color = Color.White)
-            }
+                modifier = Modifier.height(38.dp)
+            )
 
             // Discrete save status badge
-            Surface(
-                color = Color(0xFF1A2220),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                val statusText = when (saveStatus) {
-                    DraftSaveStatus.SAVING -> "● Guardando..."
-                    DraftSaveStatus.ERROR -> "⚠ Error de guardado"
-                    DraftSaveStatus.SAVED -> lastSavedTimeFormatted?.let { "✓ Guardado $it" } ?: "✓ Autoguardado activo"
-                }
-                val statusColor = when (saveStatus) {
-                    DraftSaveStatus.SAVING -> Color(0xFFFFD54F)
-                    DraftSaveStatus.ERROR -> MaterialTheme.colorScheme.error
-                    DraftSaveStatus.SAVED -> MaterialTheme.colorScheme.primary
-                }
-                Text(
-                    text = statusText,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = statusColor,
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-                )
+            val statusText = when (saveStatus) {
+                DraftSaveStatus.SAVING -> "● Guardando..."
+                DraftSaveStatus.ERROR -> "⚠ Error de guardado"
+                DraftSaveStatus.SAVED -> lastSavedTimeFormatted?.let { "✓ Guardado $it" } ?: "✓ Autoguardado activo"
             }
+            val statusColor = when (saveStatus) {
+                DraftSaveStatus.SAVING -> Color(0xFFFFD54F)
+                DraftSaveStatus.ERROR -> SyntraColors.Error
+                DraftSaveStatus.SAVED -> SyntraColors.NeonMint
+            }
+            SyntraBadge(
+                text = statusText,
+                containerColor = SyntraColors.SurfaceCardElevated,
+                contentColor = statusColor
+            )
         }
 
         val displayCategory = activeDraft.plannedCategory?.takeIf { it.isNotBlank() }
@@ -414,45 +407,36 @@ fun ActiveWorkoutScreen(
             ?: "General"
 
         // Persistent Chronometer Card (HH:MM:SS) with unified Header
-        Card(
+        SyntraCard(
             modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = Color(0xFF121A18)),
-            shape = RoundedCornerShape(14.dp)
+            glowingBorder = !isTimerPaused
         ) {
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column {
                     Text(
-                        text = if (isTimerPaused) "TIEMPO EN PAUSA • $displayCategory" else "ENTRENAMIENTO ACTIVO — $displayCategory",
+                        text = if (isTimerPaused) "TIEMPO EN PAUSA" else "ENTRENAMIENTO ACTIVO",
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary
+                        color = if (isTimerPaused) SyntraColors.TextMuted else SyntraColors.NeonMint
                     )
+                    Spacer(Modifier.height(2.dp))
                     Text(
                         text = timerFormatted,
                         style = MaterialTheme.typography.headlineLarge,
                         fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Bold,
-                        color = Color.White
+                        color = if (isTimerPaused) SyntraColors.TextSecondary else SyntraColors.TextPrimary
                     )
                 }
-                Surface(
-                    color = Color(0xFF1E2A26),
-                    shape = RoundedCornerShape(8.dp)
-                ) {
-                    Text(
-                        text = "🎯 $displayCategory",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-                    )
-                }
+                SyntraBadge(
+                    text = "🎯 $displayCategory",
+                    containerColor = SyntraColors.DarkMint,
+                    contentColor = SyntraColors.NeonMint
+                )
             }
         }
 
@@ -460,15 +444,8 @@ fun ActiveWorkoutScreen(
         RestTimerBar()
 
         // Integrated Free-Text Notepad with Cursor & Line-break preservation
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = Color(0xFF161616)),
-            shape = RoundedCornerShape(12.dp)
-        ) {
-            Column(
-                modifier = Modifier.padding(12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
+        SyntraCard(modifier = Modifier.fillMaxWidth()) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -478,12 +455,12 @@ fun ActiveWorkoutScreen(
                         text = "Bloc de notas de entrenamiento",
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary
+                        color = SyntraColors.NeonMint
                     )
                     Text(
-                        text = "Texto libre • Persistencia SQLite",
+                        text = "Persistencia SQLite",
                         style = MaterialTheme.typography.labelSmall,
-                        color = Color.Gray
+                        color = SyntraColors.TextMuted
                     )
                 }
 
@@ -497,17 +474,17 @@ fun ActiveWorkoutScreen(
                         Text(
                             "Ejemplo:\nPress de banca 3 de 8 a 10: 70kg 10 9 8\nAperturas con mancuernas 14kg 12 12 10\nFondos en paralelas -15kg asistidas 10 10",
                             style = MaterialTheme.typography.bodySmall,
-                            color = Color.DarkGray
+                            color = SyntraColors.TextMuted
                         )
                     },
                     modifier = Modifier
                         .fillMaxWidth()
                         .heightIn(min = 220.dp),
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = MaterialTheme.colorScheme.primary,
-                        unfocusedBorderColor = Color(0xFF2C2C2C),
-                        focusedTextColor = Color.White,
-                        unfocusedTextColor = Color.White
+                        focusedBorderColor = SyntraColors.NeonMint,
+                        unfocusedBorderColor = SyntraColors.BorderSubtle,
+                        focusedTextColor = SyntraColors.TextPrimary,
+                        unfocusedTextColor = SyntraColors.TextPrimary
                     )
                 )
             }
@@ -515,14 +492,15 @@ fun ActiveWorkoutScreen(
 
         val displayedError = commitErrorMessage ?: activeDraft.lastErrorMessage
         if (!displayedError.isNullOrBlank()) {
-            Card(
+            Surface(
                 modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF2A1414)),
-                shape = RoundedCornerShape(10.dp)
+                color = SyntraColors.Error.copy(alpha = 0.15f),
+                shape = RoundedCornerShape(12.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, SyntraColors.Error)
             ) {
                 Text(
                     text = "⚠ $displayedError",
-                    color = MaterialTheme.colorScheme.error,
+                    color = SyntraColors.Error,
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.padding(12.dp)
                 )
@@ -536,7 +514,8 @@ fun ActiveWorkoutScreen(
                 .padding(bottom = 64.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Button(
+            SyntraButton(
+                text = "⏹ Finalizar",
                 onClick = {
                     scope.launch {
                         val nowWall = System.currentTimeMillis()
@@ -559,30 +538,14 @@ fun ActiveWorkoutScreen(
                         }
                     }
                 },
-                modifier = Modifier
-                    .weight(1f)
-                    .height(52.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = Color.Black
-                ),
-                shape = RoundedCornerShape(10.dp)
-            ) {
-                Text(
-                    text = "⏹ Finalizar y revisar",
-                    fontWeight = FontWeight.Bold,
-                    style = MaterialTheme.typography.bodyMedium,
-                    maxLines = 1
-                )
-            }
+                modifier = Modifier.weight(1.4f)
+            )
 
-            OutlinedButton(
+            SyntraSecondaryButton(
+                text = "Descartar",
                 onClick = { showCancelConfirmDialog = true },
-                modifier = Modifier.height(52.dp),
-                shape = RoundedCornerShape(10.dp)
-            ) {
-                Text("Descartar", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-            }
+                modifier = Modifier.weight(1f)
+            )
         }
 
         Spacer(Modifier.height(72.dp))
@@ -985,34 +948,19 @@ private fun ActiveWorkoutReviewView(
                 .padding(end = 68.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            OutlinedButton(
+            SyntraSecondaryButton(
+                text = "← Volver a notas",
                 onClick = onCancelReview,
                 enabled = !isCommitting,
-                modifier = Modifier
-                    .weight(1f)
-                    .height(50.dp),
-                shape = RoundedCornerShape(10.dp)
-            ) {
-                Text("← Volver a notas", color = Color.White, fontWeight = FontWeight.SemiBold)
-            }
+                modifier = Modifier.weight(1f)
+            )
 
-            Button(
+            SyntraButton(
+                text = if (isCommitting) "Guardando..." else "✓ Confirmar y guardar",
                 onClick = onConfirmCommit,
                 enabled = !isCommitting && compactExercises.isNotEmpty(),
-                modifier = Modifier
-                    .weight(1.2f)
-                    .height(50.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = Color(0xFF4CAF50),
-                    contentColor = Color.White
-                ),
-                shape = RoundedCornerShape(10.dp)
-            ) {
-                Text(
-                    text = if (isCommitting) "Guardando..." else "✓ Confirmar y guardar",
-                    fontWeight = FontWeight.Bold
-                )
-            }
+                modifier = Modifier.weight(1.3f)
+            )
         }
 
         Spacer(Modifier.height(72.dp))

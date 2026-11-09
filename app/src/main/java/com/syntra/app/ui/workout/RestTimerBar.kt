@@ -16,6 +16,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.syntra.app.ui.theme.*
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 
@@ -133,16 +135,12 @@ fun RestTimerBar(
         }
     }
 
-    Card(
+    SyntraCard(
         modifier = modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = if (showCompletedFlash) Color(0xFF1B382B) else Color(0xFF161616)
-        ),
-        shape = RoundedCornerShape(12.dp)
+        glowingBorder = isRunning
     ) {
         Column(
-            modifier = Modifier.padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -157,20 +155,14 @@ fun RestTimerBar(
                         text = "⏱ Temporizador de descanso",
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold,
-                        color = if (showCompletedFlash) MaterialTheme.colorScheme.primary else Color.White
+                        color = if (showCompletedFlash) SyntraColors.NeonMint else SyntraColors.TextPrimary
                     )
                     if (isRunning) {
-                        Surface(
-                            color = Color(0xFF1F352E),
-                            shape = RoundedCornerShape(6.dp)
-                        ) {
-                            Text(
-                                text = "En curso",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                            )
-                        }
+                        SyntraBadge(
+                            text = "En curso",
+                            containerColor = SyntraColors.DarkMint,
+                            contentColor = SyntraColors.NeonMint
+                        )
                     }
                 }
 
@@ -181,23 +173,23 @@ fun RestTimerBar(
                     Text(
                         text = if (isExpanded) "Ocultar ▲" else "Presets ▼",
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary
+                        color = SyntraColors.SoftMint
                     )
                 }
             }
 
             if (showCompletedFlash) {
                 Surface(
-                    color = Color(0xFF0F261E),
-                    shape = RoundedCornerShape(8.dp),
+                    color = SyntraColors.DarkMint.copy(alpha = 0.5f),
+                    shape = RoundedCornerShape(10.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(
                         text = "🔔 ¡Tiempo de descanso completado! A darle con la siguiente serie.",
                         style = MaterialTheme.typography.bodySmall,
                         fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.padding(8.dp)
+                        color = SyntraColors.NeonMint,
+                        modifier = Modifier.padding(10.dp)
                     )
                 }
             }
@@ -212,8 +204,8 @@ fun RestTimerBar(
                 LinearProgressIndicator(
                     progress = { progress },
                     modifier = Modifier.fillMaxWidth().height(6.dp),
-                    color = MaterialTheme.colorScheme.primary,
-                    trackColor = Color(0xFF262626)
+                    color = SyntraColors.NeonMint,
+                    trackColor = SyntraColors.SurfaceHighlight
                 )
 
                 Row(
@@ -226,21 +218,21 @@ fun RestTimerBar(
                         style = MaterialTheme.typography.headlineMedium,
                         fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Bold,
-                        color = if (secondsLeft <= 10) Color(0xFFFF7043) else MaterialTheme.colorScheme.primary
+                        color = if (secondsLeft <= 10) SyntraColors.Error else SyntraColors.NeonMint
                     )
 
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         Button(
                             onClick = { if (isRunning) pauseTimer() else resumeTimer() },
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = if (isRunning) Color(0xFF2E2E2E) else MaterialTheme.colorScheme.primary
+                                containerColor = if (isRunning) SyntraColors.SurfaceHighlight else SyntraColors.NeonMint,
+                                contentColor = if (isRunning) SyntraColors.TextPrimary else Color(0xFF05100E)
                             ),
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                            shape = RoundedCornerShape(8.dp)
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                            shape = RoundedCornerShape(50)
                         ) {
                             Text(
                                 text = if (isRunning) "Pausa" else "Reanudar",
-                                color = if (isRunning) Color.White else Color.Black,
                                 style = MaterialTheme.typography.labelSmall,
                                 fontWeight = FontWeight.Bold
                             )
@@ -249,17 +241,19 @@ fun RestTimerBar(
                         OutlinedButton(
                             onClick = { addTime(15) },
                             contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
-                            shape = RoundedCornerShape(8.dp)
+                            shape = RoundedCornerShape(50),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, SyntraColors.BorderSubtle)
                         ) {
-                            Text("+15s", style = MaterialTheme.typography.labelSmall, color = Color.White)
+                            Text("+15s", style = MaterialTheme.typography.labelSmall, color = SyntraColors.TextPrimary)
                         }
 
                         OutlinedButton(
                             onClick = { resetTimer() },
                             contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
-                            shape = RoundedCornerShape(8.dp)
+                            shape = RoundedCornerShape(50),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, SyntraColors.BorderSubtle)
                         ) {
-                            Text("✕", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
+                            Text("✕", style = MaterialTheme.typography.labelSmall, color = SyntraColors.Error)
                         }
                     }
                 }
@@ -276,26 +270,28 @@ fun RestTimerBar(
                         OutlinedButton(
                             onClick = { startTimer(sec) },
                             modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(8.dp),
+                            shape = RoundedCornerShape(50),
                             contentPadding = PaddingValues(vertical = 4.dp),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, if (totalSeconds == sec && (isRunning || pausedRemainingSeconds != null)) SyntraColors.NeonMint else SyntraColors.BorderSubtle),
                             colors = ButtonDefaults.outlinedButtonColors(
-                                containerColor = if (totalSeconds == sec && (isRunning || pausedRemainingSeconds != null)) Color(0xFF1B2E28) else Color.Transparent
+                                containerColor = if (totalSeconds == sec && (isRunning || pausedRemainingSeconds != null)) SyntraColors.DarkMint else SyntraColors.SurfaceCardElevated
                             )
                         ) {
                             Text(
                                 text = "${sec}s",
                                 style = MaterialTheme.typography.bodySmall,
                                 fontWeight = FontWeight.Bold,
-                                color = Color.White
+                                color = if (totalSeconds == sec && (isRunning || pausedRemainingSeconds != null)) SyntraColors.NeonMint else SyntraColors.TextPrimary
                             )
                         }
                     }
                     OutlinedButton(
                         onClick = { addTime(30) },
-                        shape = RoundedCornerShape(8.dp),
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                        shape = RoundedCornerShape(50),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, SyntraColors.BorderSubtle),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
                     ) {
-                        Text("+", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                        Text("+", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold, color = SyntraColors.NeonMint)
                     }
                 }
             }
