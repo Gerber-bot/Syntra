@@ -152,9 +152,33 @@ class BackupManager(private val db: AppDatabase) {
             )
         }
 
+        val activeDraft = db.activeWorkoutDraftDao().getCurrentDraft()?.let { d ->
+            ActiveWorkoutDraftBackupDto(
+                slotId = d.slotId,
+                sessionUuid = d.sessionUuid,
+                state = d.state,
+                title = d.title,
+                rawNotesText = d.rawNotesText,
+                cursorPosition = d.cursorPosition,
+                sourceRoutineId = d.sourceRoutineId,
+                plannedCategory = d.plannedCategory,
+                startedAtWallMillis = d.startedAtWallMillis,
+                startedAtElapsedRealtimeMillis = d.startedAtElapsedRealtimeMillis,
+                accumulatedPausedMillis = d.accumulatedPausedMillis,
+                reviewStartedAtWallMillis = d.reviewStartedAtWallMillis,
+                reviewStartedAtElapsedMillis = d.reviewStartedAtElapsedMillis,
+                finalizedAtWallMillis = d.finalizedAtWallMillis,
+                lastSavedAtWallMillis = d.lastSavedAtWallMillis,
+                lastKnownElapsedRealtimeMillis = d.lastKnownElapsedRealtimeMillis,
+                lastPersistedDurationMillis = d.lastPersistedDurationMillis,
+                committedSessionId = d.committedSessionId,
+                lastErrorMessage = d.lastErrorMessage
+            )
+        }
+
         return SyntraBackupPayload(
             formatVersion = BackupSerializer.CURRENT_FORMAT_VERSION,
-            appVersion = "0.4.0",
+            appVersion = "0.5.0",
             exportedAtMillis = System.currentTimeMillis(),
             profile = profileDto,
             weighIns = weighIns,
@@ -166,7 +190,8 @@ class BackupManager(private val db: AppDatabase) {
             irisxConversations = conversations,
             irisxMessages = messages,
             routines = routines,
-            routineExercises = routineExercises
+            routineExercises = routineExercises,
+            activeWorkoutDraft = activeDraft
         )
     }
 
@@ -385,6 +410,34 @@ class BackupManager(private val db: AppDatabase) {
                             notes = re.notes
                         )
                     }
+                )
+            }
+
+            db.activeWorkoutDraftDao().deleteAllDrafts()
+            if (payload.activeWorkoutDraft != null) {
+                val d = payload.activeWorkoutDraft
+                db.activeWorkoutDraftDao().saveDraft(
+                    ActiveWorkoutDraftEntity(
+                        slotId = d.slotId,
+                        sessionUuid = d.sessionUuid,
+                        state = d.state,
+                        title = d.title,
+                        rawNotesText = d.rawNotesText,
+                        cursorPosition = d.cursorPosition,
+                        sourceRoutineId = d.sourceRoutineId,
+                        plannedCategory = d.plannedCategory,
+                        startedAtWallMillis = d.startedAtWallMillis,
+                        startedAtElapsedRealtimeMillis = d.startedAtElapsedRealtimeMillis,
+                        accumulatedPausedMillis = d.accumulatedPausedMillis,
+                        reviewStartedAtWallMillis = d.reviewStartedAtWallMillis,
+                        reviewStartedAtElapsedMillis = d.reviewStartedAtElapsedMillis,
+                        finalizedAtWallMillis = d.finalizedAtWallMillis,
+                        lastSavedAtWallMillis = d.lastSavedAtWallMillis,
+                        lastKnownElapsedRealtimeMillis = d.lastKnownElapsedRealtimeMillis,
+                        lastPersistedDurationMillis = d.lastPersistedDurationMillis,
+                        committedSessionId = d.committedSessionId,
+                        lastErrorMessage = d.lastErrorMessage
+                    )
                 )
             }
         }

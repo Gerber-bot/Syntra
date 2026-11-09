@@ -117,9 +117,31 @@ data class RoutineExerciseBackupDto(
     val notes: String = ""
 )
 
+data class ActiveWorkoutDraftBackupDto(
+    val slotId: Int = 1,
+    val sessionUuid: String,
+    val state: String,
+    val title: String,
+    val rawNotesText: String,
+    val cursorPosition: Int = 0,
+    val sourceRoutineId: Long? = null,
+    val plannedCategory: String? = null,
+    val startedAtWallMillis: Long,
+    val startedAtElapsedRealtimeMillis: Long,
+    val accumulatedPausedMillis: Long = 0,
+    val reviewStartedAtWallMillis: Long? = null,
+    val reviewStartedAtElapsedMillis: Long? = null,
+    val finalizedAtWallMillis: Long? = null,
+    val lastSavedAtWallMillis: Long,
+    val lastKnownElapsedRealtimeMillis: Long,
+    val lastPersistedDurationMillis: Long = 0,
+    val committedSessionId: Long? = null,
+    val lastErrorMessage: String? = null
+)
+
 data class SyntraBackupPayload(
     val formatVersion: Int = 2,
-    val appVersion: String = "0.4.0",
+    val appVersion: String = "0.5.0",
     val exportedAtMillis: Long,
     val profile: ProfileBackupDto?,
     val weighIns: List<WeighInBackupDto> = emptyList(),
@@ -131,7 +153,8 @@ data class SyntraBackupPayload(
     val irisxConversations: List<IrisxConversationBackupDto> = emptyList(),
     val irisxMessages: List<IrisxMessageBackupDto> = emptyList(),
     val routines: List<RoutineBackupDto> = emptyList(),
-    val routineExercises: List<RoutineExerciseBackupDto> = emptyList()
+    val routineExercises: List<RoutineExerciseBackupDto> = emptyList(),
+    val activeWorkoutDraft: ActiveWorkoutDraftBackupDto? = null
 )
 
 sealed class BackupValidationResult {

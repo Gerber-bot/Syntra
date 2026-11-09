@@ -178,6 +178,33 @@ object BackupSerializer {
         }
         root.put("routineExercises", routineExArr)
 
+        if (payload.activeWorkoutDraft != null) {
+            val d = payload.activeWorkoutDraft
+            root.put("activeWorkoutDraft", JSONObject().apply {
+                put("slotId", d.slotId)
+                put("sessionUuid", d.sessionUuid)
+                put("state", d.state)
+                put("title", d.title)
+                put("rawNotesText", d.rawNotesText)
+                put("cursorPosition", d.cursorPosition)
+                put("sourceRoutineId", d.sourceRoutineId ?: JSONObject.NULL)
+                put("plannedCategory", d.plannedCategory ?: JSONObject.NULL)
+                put("startedAtWallMillis", d.startedAtWallMillis)
+                put("startedAtElapsedRealtimeMillis", d.startedAtElapsedRealtimeMillis)
+                put("accumulatedPausedMillis", d.accumulatedPausedMillis)
+                put("reviewStartedAtWallMillis", d.reviewStartedAtWallMillis ?: JSONObject.NULL)
+                put("reviewStartedAtElapsedMillis", d.reviewStartedAtElapsedMillis ?: JSONObject.NULL)
+                put("finalizedAtWallMillis", d.finalizedAtWallMillis ?: JSONObject.NULL)
+                put("lastSavedAtWallMillis", d.lastSavedAtWallMillis)
+                put("lastKnownElapsedRealtimeMillis", d.lastKnownElapsedRealtimeMillis)
+                put("lastPersistedDurationMillis", d.lastPersistedDurationMillis)
+                put("committedSessionId", d.committedSessionId ?: JSONObject.NULL)
+                put("lastErrorMessage", d.lastErrorMessage ?: JSONObject.NULL)
+            })
+        } else {
+            root.put("activeWorkoutDraft", JSONObject.NULL)
+        }
+
         return root.toString(2)
     }
 
@@ -499,6 +526,40 @@ object BackupSerializer {
             }
         }
 
+        // Active Workout Draft validation (optional for backward compatibility)
+        val activeDraftDto = if (root.has("activeWorkoutDraft") && !root.isNull("activeWorkoutDraft")) {
+            val dObj = root.optJSONObject("activeWorkoutDraft")
+                ?: return BackupValidationResult.Error("El campo 'activeWorkoutDraft' debe ser un objeto.")
+            val uuid = dObj.optString("sessionUuid", "").trim()
+            val startedWall = dObj.optLong("startedAtWallMillis", 0L)
+            if (uuid.isEmpty() || startedWall <= 0L) {
+                return BackupValidationResult.Error("El borrador de entrenamiento activo tiene UUID o fecha inválida.")
+            }
+            ActiveWorkoutDraftBackupDto(
+                slotId = dObj.optInt("slotId", 1),
+                sessionUuid = uuid,
+                state = dObj.optString("state", "ACTIVE"),
+                title = dObj.optString("title", ""),
+                rawNotesText = dObj.optString("rawNotesText", ""),
+                cursorPosition = dObj.optInt("cursorPosition", 0),
+                sourceRoutineId = if (dObj.isNull("sourceRoutineId")) null else dObj.optLong("sourceRoutineId"),
+                plannedCategory = if (dObj.isNull("plannedCategory")) null else dObj.optString("plannedCategory"),
+                startedAtWallMillis = startedWall,
+                startedAtElapsedRealtimeMillis = dObj.optLong("startedAtElapsedRealtimeMillis", startedWall),
+                accumulatedPausedMillis = dObj.optLong("accumulatedPausedMillis", 0L),
+                reviewStartedAtWallMillis = if (dObj.isNull("reviewStartedAtWallMillis")) null else dObj.optLong("reviewStartedAtWallMillis"),
+                reviewStartedAtElapsedMillis = if (dObj.isNull("reviewStartedAtElapsedMillis")) null else dObj.optLong("reviewStartedAtElapsedMillis"),
+                finalizedAtWallMillis = if (dObj.isNull("finalizedAtWallMillis")) null else dObj.optLong("finalizedAtWallMillis"),
+                lastSavedAtWallMillis = dObj.optLong("lastSavedAtWallMillis", startedWall),
+                lastKnownElapsedRealtimeMillis = dObj.optLong("lastKnownElapsedRealtimeMillis", startedWall),
+                lastPersistedDurationMillis = dObj.optLong("lastPersistedDurationMillis", 0L),
+                committedSessionId = if (dObj.isNull("committedSessionId")) null else dObj.optLong("committedSessionId"),
+                lastErrorMessage = if (dObj.isNull("lastErrorMessage")) null else dObj.optString("lastErrorMessage")
+            )
+        } else {
+            null
+        }
+
         return BackupValidationResult.Success(
             SyntraBackupPayload(
                 formatVersion = formatVersion,
@@ -514,7 +575,8 @@ object BackupSerializer {
                 irisxConversations = conversationsList,
                 irisxMessages = messagesList,
                 routines = routinesList,
-                routineExercises = routineExercisesList
+                routineExercises = routineExercisesList,
+                activeWorkoutDraft = activeDraftDto
             )
         )
     }
