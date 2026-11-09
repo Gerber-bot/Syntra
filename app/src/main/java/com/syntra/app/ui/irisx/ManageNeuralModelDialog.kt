@@ -20,6 +20,7 @@ import com.syntra.app.domain.neural.GgufModelInfo
 import com.syntra.app.domain.neural.ModelImportResult
 import com.syntra.app.domain.neural.ModelManager
 import com.syntra.app.domain.neural.NeuralInferenceEngine
+import com.syntra.app.ui.theme.*
 import kotlinx.coroutines.launch
 
 @Composable
@@ -63,9 +64,9 @@ fun ManageNeuralModelDialog(
             modifier = Modifier
                 .fillMaxWidth(0.95f)
                 .wrapContentHeight(),
-            shape = RoundedCornerShape(16.dp),
-            color = Color(0xFF141618),
-            tonalElevation = 8.dp
+            shape = RoundedCornerShape(20.dp),
+            color = SyntraColors.SurfaceCardElevated,
+            border = androidx.compose.foundation.BorderStroke(1.dp, SyntraColors.BorderSubtle)
         ) {
             Column(
                 modifier = Modifier
@@ -83,59 +84,52 @@ fun ManageNeuralModelDialog(
                             text = "Modelos Neuronales GGUF",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
-                            color = Color.White
+                            color = SyntraColors.TextPrimary
                         )
                         Text(
                             text = "Snapdragon 685 • llama.cpp ARM64 offline",
                             style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary
+                            color = SyntraColors.SoftMint
                         )
                     }
                     IconButton(onClick = onDismiss) {
-                        Text("✕", color = Color.Gray, fontWeight = FontWeight.Bold)
+                        Text("✕", color = SyntraColors.TextMuted, fontWeight = FontWeight.Bold)
                     }
                 }
 
-                HorizontalDivider(color = Color(0xFF2A2A2A))
+                HorizontalDivider(color = SyntraColors.BorderSubtle)
 
                 // Active engine status card
-                Surface(
-                    color = Color(0xFF0F1A17),
-                    shape = RoundedCornerShape(10.dp),
-                    modifier = Modifier.fillMaxWidth()
+                SyntraCard(
+                    modifier = Modifier.fillMaxWidth(),
+                    glowingBorder = engine.isModelLoaded()
                 ) {
-                    Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Text(
                             text = if (engine.isModelLoaded()) "● Motor activo: ${engine.currentModelFile?.name}" else "○ Motor determinista (sin red neuronal cargada)",
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.Bold,
-                            color = if (engine.isModelLoaded()) MaterialTheme.colorScheme.primary else Color.Gray
+                            color = if (engine.isModelLoaded()) SyntraColors.NeonMint else SyntraColors.TextMuted
                         )
                         if (engine.isModelLoaded()) {
                             Text(
                                 text = "Tamaño: ${String.format("%.1f", (engine.currentModelFile?.length() ?: 0) / (1024.0 * 1024.0))} MB • TPS previo: ${String.format("%.1f", engine.metrics.tokensPerSecond)}",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = Color.LightGray
+                                color = SyntraColors.TextSecondary
                             )
                         }
                     }
                 }
 
                 // Import button
-                Button(
+                SyntraButton(
+                    text = if (isImporting) "Importando archivo..." else "📁 Importar modelo (.gguf)",
                     onClick = {
                         safLauncher.launch(arrayOf("*/*"))
                     },
                     modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
                     enabled = !isImporting && !isLoadingModel
-                ) {
-                    Text(
-                        text = if (isImporting) "Importando archivo..." else "📁 Importar modelo (.gguf)",
-                        color = Color.Black,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
+                )
 
                 if (importStatusMessage != null) {
                     Text(
@@ -213,12 +207,13 @@ private fun ModelItemCard(
     onDelete: () -> Unit
 ) {
     Surface(
-        color = Color(0xFF1B1D20),
-        shape = RoundedCornerShape(8.dp),
+        color = SyntraColors.SurfaceCardElevated,
+        shape = RoundedCornerShape(12.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, if (isLoaded) SyntraColors.NeonMint else SyntraColors.BorderSubtle),
         modifier = Modifier.fillMaxWidth()
     ) {
         Row(
-            modifier = Modifier.padding(10.dp),
+            modifier = Modifier.padding(12.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -227,31 +222,32 @@ private fun ModelItemCard(
                     text = model.fileName,
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.Bold,
-                    color = Color.White
+                    color = SyntraColors.TextPrimary
                 )
                 val isQwen3 = model.fileName.contains("qwen3", ignoreCase = true)
                 Text(
                     text = "${String.format("%.1f", model.sizeBytes / (1024.0 * 1024.0))} MB • GGUF v${model.ggufVersion}${if (isQwen3) " • ✦ Qwen3" else ""}",
                     style = MaterialTheme.typography.bodySmall,
-                    color = if (isQwen3) MaterialTheme.colorScheme.primary else Color.Gray
+                    color = if (isQwen3) SyntraColors.NeonMint else SyntraColors.TextMuted
                 )
             }
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 if (isLoaded) {
-                    OutlinedButton(onClick = onUnload) {
-                        Text("Descargar", style = MaterialTheme.typography.labelSmall, color = Color(0xFFFFB74D))
-                    }
+                    SyntraSecondaryButton(
+                        text = "Descargar",
+                        onClick = onUnload,
+                        modifier = Modifier.height(36.dp)
+                    )
                 } else {
-                    Button(
+                    SyntraButton(
+                        text = "Cargar",
                         onClick = onLoad,
                         enabled = !isLoading,
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
-                    ) {
-                        Text("Cargar", style = MaterialTheme.typography.labelSmall, color = Color.Black, fontWeight = FontWeight.Bold)
-                    }
+                        modifier = Modifier.height(36.dp)
+                    )
                 }
                 IconButton(onClick = onDelete) {
-                    Text("🗑", color = Color.Gray)
+                    Text("🗑", color = SyntraColors.Error)
                 }
             }
         }

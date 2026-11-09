@@ -24,6 +24,7 @@ import com.syntra.app.domain.irisx.IrisXCore
 import com.syntra.app.domain.irisx.IrisXResponse
 import com.syntra.app.domain.irisx.RoomIrisXRepository
 import com.syntra.app.domain.neural.*
+import com.syntra.app.ui.theme.*
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
@@ -196,9 +197,9 @@ fun IrisXConsoleDialog(
             modifier = Modifier
                 .fillMaxWidth(0.95f)
                 .fillMaxHeight(0.88f),
-            shape = RoundedCornerShape(16.dp),
-            color = Color(0xFF141618),
-            tonalElevation = 8.dp
+            shape = RoundedCornerShape(20.dp),
+            color = SyntraColors.SurfaceDark,
+            border = androidx.compose.foundation.BorderStroke(1.dp, SyntraColors.BorderSubtle)
         ) {
             Column(
                 modifier = Modifier
@@ -215,22 +216,15 @@ fun IrisXConsoleDialog(
                     Row(
                         modifier = Modifier.weight(1f),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .size(32.dp)
-                                .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(8.dp)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text("✦", color = Color.Black, fontWeight = FontWeight.Bold)
-                        }
+                        IrisXOrb(size = 36.dp, glowing = true)
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 text = "IrisX Neural Console",
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold,
-                                color = Color.White
+                                color = SyntraColors.TextPrimary
                             )
                             Text(
                                 text = if (effectiveNeuralEngine.isModelLoaded())
@@ -240,41 +234,31 @@ fun IrisXConsoleDialog(
                                 style = MaterialTheme.typography.labelSmall,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
-                                color = if (effectiveNeuralEngine.isModelLoaded()) MaterialTheme.colorScheme.primary else Color.Gray
+                                color = if (effectiveNeuralEngine.isModelLoaded()) SyntraColors.NeonMint else SyntraColors.TextMuted
                             )
                         }
                     }
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        FilledTonalButton(
+                        SyntraSecondaryButton(
+                            text = "🧠 Modelos",
                             onClick = { showModelManagerDialog = true },
-                            colors = ButtonDefaults.filledTonalButtonColors(
-                                containerColor = Color(0xFF262A30),
-                                contentColor = MaterialTheme.colorScheme.primary
-                            ),
-                            shape = RoundedCornerShape(8.dp),
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
-                        ) {
-                            Text("🧠 Modelos", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
-                        }
+                            modifier = Modifier.height(36.dp)
+                        )
                         IconButton(onClick = onDismiss) {
-                            Text("✕", color = Color.Gray, fontWeight = FontWeight.Bold)
+                            Text("✕", color = SyntraColors.TextMuted, fontWeight = FontWeight.Bold)
                         }
                     }
                 }
 
-                HorizontalDivider(color = Color(0xFF2A2A2A))
+                HorizontalDivider(color = SyntraColors.BorderSubtle)
 
                 if (!effectiveNeuralEngine.isModelLoaded()) {
-                    Surface(
-                        color = Color(0xFF1E222A),
-                        shape = RoundedCornerShape(8.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
+                    SyntraCard(modifier = Modifier.fillMaxWidth()) {
                         Row(
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                            modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
@@ -283,22 +267,19 @@ fun IrisXConsoleDialog(
                                     text = "Motor determinista (offline)",
                                     style = MaterialTheme.typography.bodySmall,
                                     fontWeight = FontWeight.Bold,
-                                    color = Color.White
+                                    color = SyntraColors.TextPrimary
                                 )
                                 Text(
                                     text = "Cargá Qwen3-0.6B para inferencia neuronal.",
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = Color.Gray
+                                    color = SyntraColors.TextMuted
                                 )
                             }
-                            Button(
+                            SyntraButton(
+                                text = "Cargar GGUF",
                                 onClick = { showModelManagerDialog = true },
-                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
-                                shape = RoundedCornerShape(6.dp),
-                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp)
-                            ) {
-                                Text("Cargar GGUF", color = Color.Black, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
-                            }
+                                modifier = Modifier.height(34.dp)
+                            )
                         }
                     }
                 }
@@ -330,14 +311,10 @@ fun IrisXConsoleDialog(
                         )
                     }
                     suggestions.forEach { chipText ->
-                        SuggestionChip(
+                        SyntraFilterChip(
+                            selected = false,
                             onClick = { sendMessage(chipText) },
-                            label = { Text(chipText, style = MaterialTheme.typography.labelSmall) },
-                            colors = SuggestionChipDefaults.suggestionChipColors(
-                                containerColor = Color(0xFF1E2224),
-                                labelColor = MaterialTheme.colorScheme.primary
-                            ),
-                            border = null
+                            label = chipText
                         )
                     }
                 }
@@ -348,28 +325,34 @@ fun IrisXConsoleDialog(
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     items(messages) { msg ->
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = if (msg.isUser) Arrangement.End else Arrangement.Start
+                            horizontalArrangement = if (msg.isUser) Arrangement.End else Arrangement.Start,
+                            verticalAlignment = Alignment.Top
                         ) {
+                            if (!msg.isUser) {
+                                IrisXOrb(size = 28.dp, glowing = false)
+                                Spacer(Modifier.width(8.dp))
+                            }
                             Surface(
                                 shape = RoundedCornerShape(
-                                    topStart = 12.dp,
-                                    topEnd = 12.dp,
-                                    bottomStart = if (msg.isUser) 12.dp else 2.dp,
-                                    bottomEnd = if (msg.isUser) 2.dp else 12.dp
+                                    topStart = 16.dp,
+                                    topEnd = 16.dp,
+                                    bottomStart = if (msg.isUser) 16.dp else 4.dp,
+                                    bottomEnd = if (msg.isUser) 4.dp else 16.dp
                                 ),
-                                color = if (msg.isUser) MaterialTheme.colorScheme.primary else Color(0xFF202428),
-                                modifier = Modifier.widthIn(max = 310.dp)
+                                color = if (msg.isUser) SyntraColors.DarkMint else SyntraColors.SurfaceCardElevated,
+                                border = if (msg.isUser) null else androidx.compose.foundation.BorderStroke(1.dp, SyntraColors.BorderSubtle),
+                                modifier = Modifier.widthIn(max = 300.dp)
                             ) {
                                 Text(
                                     text = msg.text,
-                                    color = if (msg.isUser) Color.Black else Color.White,
+                                    color = SyntraColors.TextPrimary,
                                     style = MaterialTheme.typography.bodyMedium,
-                                    modifier = Modifier.padding(12.dp)
+                                    modifier = Modifier.padding(14.dp)
                                 )
                             }
                         }
@@ -386,14 +369,15 @@ fun IrisXConsoleDialog(
                         value = inputText,
                         onValueChange = { inputText = it },
                         modifier = Modifier.weight(1f),
-                        placeholder = { Text("Preguntá a IrisX...", style = MaterialTheme.typography.bodySmall) },
+                        placeholder = { Text("Escribe a IrisX...", style = MaterialTheme.typography.bodySmall, color = SyntraColors.TextMuted) },
                         maxLines = 3,
                         enabled = !isGenerating,
+                        shape = RoundedCornerShape(24.dp),
                         colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = MaterialTheme.colorScheme.primary,
-                            unfocusedBorderColor = Color(0xFF333333),
-                            focusedTextColor = Color.White,
-                            unfocusedTextColor = Color.White
+                            focusedBorderColor = SyntraColors.NeonMint,
+                            unfocusedBorderColor = SyntraColors.BorderSubtle,
+                            focusedTextColor = SyntraColors.TextPrimary,
+                            unfocusedTextColor = SyntraColors.TextPrimary
                         )
                     )
 
@@ -404,19 +388,18 @@ fun IrisXConsoleDialog(
                                 currentGenerationJob?.cancel()
                                 isGenerating = false
                             },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE57373)),
-                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp)
+                            shape = RoundedCornerShape(24.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = SyntraColors.Error),
+                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
                         ) {
-                            Text("⏹ Detener", color = Color.Black, fontWeight = FontWeight.Bold)
+                            Text("⏹ Detener", color = Color.White, fontWeight = FontWeight.Bold)
                         }
                     } else {
-                        Button(
+                        SyntraButton(
+                            text = "➤",
                             onClick = { sendMessage(inputText) },
-                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
-                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp)
-                        ) {
-                            Text("Enviar", color = Color.Black, fontWeight = FontWeight.Bold)
-                        }
+                            modifier = Modifier.height(48.dp)
+                        )
                     }
                 }
             }
