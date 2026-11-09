@@ -2466,25 +2466,20 @@ private fun HistoryScreen(
                     Text(
                         text = "Categorías • ${sessions.size} sesiones en total",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.primary
+                        color = SyntraColors.SoftMint
                     )
                 }
-                OutlinedButton(
+                SyntraSecondaryButton(
+                    text = "✎ Nueva",
                     onClick = onNavigateToAnalyze,
-                    shape = RoundedCornerShape(8.dp)
-                ) {
-                    Text("✎ Nueva sesión", style = MaterialTheme.typography.bodySmall, color = Color.White)
-                }
+                    modifier = Modifier.height(38.dp)
+                )
             }
 
             if (sessions.isEmpty()) {
-                Card(
-                    modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFF161616)),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
+                SyntraCard(modifier = Modifier.fillMaxWidth().padding(top = 16.dp)) {
                     Column(
-                        modifier = Modifier.padding(20.dp),
+                        modifier = Modifier.padding(12.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
@@ -2492,19 +2487,17 @@ private fun HistoryScreen(
                             text = "Aún no tenés entrenamientos guardados",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
-                            color = Color.White
+                            color = SyntraColors.TextPrimary
                         )
                         Text(
                             text = "Escribí o pegá tus ejercicios en el Analizador para guardar tu primera sesión con orden de ejecución y cargas.",
                             style = MaterialTheme.typography.bodySmall,
-                            color = Color.Gray
+                            color = SyntraColors.TextSecondary
                         )
-                        Button(
-                            onClick = onNavigateToAnalyze,
-                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
-                        ) {
-                            Text("Ir a Analizar sesión", color = Color.Black, fontWeight = FontWeight.Bold)
-                        }
+                        SyntraButton(
+                            text = "Ir a Analizar sesión",
+                            onClick = onNavigateToAnalyze
+                        )
                     }
                 }
             } else {
@@ -2513,14 +2506,12 @@ private fun HistoryScreen(
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     items(dynamicSummaries, key = { it.categoryName }) { summary ->
-                        Card(
+                        SyntraCard(
                             onClick = { selectedCategorySummary = summary },
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = CardDefaults.cardColors(containerColor = Color(0xFF161616)),
-                            shape = RoundedCornerShape(12.dp)
+                            modifier = Modifier.fillMaxWidth()
                         ) {
                             Row(
-                                modifier = Modifier.fillMaxWidth().padding(14.dp),
+                                modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
@@ -2530,23 +2521,24 @@ private fun HistoryScreen(
                                 ) {
                                     Box(
                                         modifier = Modifier
-                                            .size(40.dp)
-                                            .background(Color(0xFF222222), RoundedCornerShape(8.dp)),
+                                            .size(42.dp)
+                                            .clip(RoundedCornerShape(12.dp))
+                                            .background(SyntraColors.SurfaceHighlight),
                                         contentAlignment = Alignment.Center
                                     ) {
-                                        Text(text = summary.icon, style = MaterialTheme.typography.titleMedium)
+                                        Text(text = summary.icon, fontSize = 20.sp)
                                     }
                                     Column {
                                         Text(
                                             text = summary.categoryName,
                                             style = MaterialTheme.typography.titleMedium,
                                             fontWeight = FontWeight.Bold,
-                                            color = Color.White
+                                            color = SyntraColors.TextPrimary
                                         )
                                         Text(
                                             text = if (summary.sessionCount > 0) "${summary.sessionCount} sesiones" else "Sin registros",
                                             style = MaterialTheme.typography.bodySmall,
-                                            color = if (summary.sessionCount > 0) MaterialTheme.colorScheme.primary else Color.Gray
+                                            color = if (summary.sessionCount > 0) SyntraColors.NeonMint else SyntraColors.TextMuted
                                         )
                                     }
                                 }
@@ -2555,10 +2547,10 @@ private fun HistoryScreen(
                                         Text(
                                             text = DateFormat.getDateInstance(DateFormat.SHORT).format(Date(summary.latestSessionMillis)),
                                             style = MaterialTheme.typography.labelSmall,
-                                            color = Color.Gray
+                                            color = SyntraColors.TextMuted
                                         )
                                     }
-                                    Text("→", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+                                    Text("›", color = SyntraColors.NeonMint, fontSize = 20.sp, fontWeight = FontWeight.Bold)
                                 }
                             }
                         }
@@ -2692,12 +2684,8 @@ private fun SessionHistoryCard(
         titleNorm == catNorm || titleNorm == "entrenamiento" || titleNorm == "rutina" || titleNorm.isBlank()
     }
 
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF141414)),
-        shape = RoundedCornerShape(12.dp)
-    ) {
-        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    SyntraCard(modifier = Modifier.fillMaxWidth()) {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -2709,45 +2697,39 @@ private fun SessionHistoryCard(
                             text = dateStr,
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
-                            color = Color.White
+                            color = SyntraColors.TextPrimary
                         )
                     } else {
                         Text(
                             text = session.title,
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
-                            color = Color.White
+                            color = SyntraColors.TextPrimary
                         )
                         Text(
                             text = dateStr,
                             style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary
+                            color = SyntraColors.SoftMint
                         )
                     }
                     if (session.category.isNotBlank()) {
-                        Spacer(Modifier.height(2.dp))
-                        Surface(
-                            color = Color(0xFF222222),
-                            shape = RoundedCornerShape(4.dp)
-                        ) {
-                            Text(
-                                text = session.category,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                            )
-                        }
+                        Spacer(Modifier.height(4.dp))
+                        SyntraBadge(
+                            text = session.category,
+                            containerColor = SyntraColors.DarkMint,
+                            contentColor = SyntraColors.NeonMint
+                        )
                     }
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     IconButton(onClick = onEdit) {
-                        Text("✎", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+                        Text("✎", color = SyntraColors.NeonMint, fontWeight = FontWeight.Bold)
                     }
                     TextButton(onClick = { expanded = !expanded }) {
-                        Text(if (expanded) "Ocultar ▲" else "Ver detalle ▼", style = MaterialTheme.typography.labelSmall)
+                        Text(if (expanded) "Ocultar ▲" else "Ver detalle ▼", style = MaterialTheme.typography.labelSmall, color = SyntraColors.SoftMint)
                     }
                     IconButton(onClick = onDelete) {
-                        Text("🗑", color = MaterialTheme.colorScheme.error)
+                        Text("🗑", color = SyntraColors.Error)
                     }
                 }
             }
@@ -2755,7 +2737,7 @@ private fun SessionHistoryCard(
             Text(
                 text = "${sets.size} series registradas",
                 style = MaterialTheme.typography.bodySmall,
-                color = Color.Gray
+                color = SyntraColors.TextSecondary
             )
 
             if (expanded) {

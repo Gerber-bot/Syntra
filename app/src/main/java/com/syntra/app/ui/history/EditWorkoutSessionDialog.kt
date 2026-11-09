@@ -17,6 +17,7 @@ import androidx.room.withTransaction
 import com.syntra.app.data.AppDatabase
 import com.syntra.app.data.WorkoutSessionEntity
 import com.syntra.app.data.WorkoutSetEntity
+import com.syntra.app.ui.theme.*
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -61,8 +62,9 @@ fun EditWorkoutSessionDialog(
             modifier = Modifier
                 .fillMaxWidth(0.95f)
                 .fillMaxHeight(0.92f),
-            shape = RoundedCornerShape(16.dp),
-            color = Color(0xFF141414)
+            shape = RoundedCornerShape(20.dp),
+            color = SyntraColors.SurfaceCardElevated,
+            border = androidx.compose.foundation.BorderStroke(1.dp, SyntraColors.BorderSubtle)
         ) {
             Column(
                 modifier = Modifier
@@ -201,11 +203,13 @@ fun EditWorkoutSessionDialog(
                     horizontalArrangement = Arrangement.End,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    OutlinedButton(onClick = onDismiss) {
-                        Text("Cancelar", color = Color.White)
-                    }
+                    SyntraSecondaryButton(
+                        text = "Cancelar",
+                        onClick = onDismiss
+                    )
                     Spacer(Modifier.width(10.dp))
-                    Button(
+                    SyntraButton(
+                        text = "Guardar cambios",
                         onClick = {
                             scope.launch {
                                 db.withTransaction {
@@ -226,11 +230,8 @@ fun EditWorkoutSessionDialog(
                                 }
                                 onDismiss()
                             }
-                        },
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
-                    ) {
-                        Text("Guardar cambios", color = Color.Black, fontWeight = FontWeight.Bold)
-                    }
+                        }
+                    )
                 }
             }
         }
