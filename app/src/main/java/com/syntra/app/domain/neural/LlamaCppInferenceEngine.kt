@@ -125,23 +125,26 @@ class LlamaCppInferenceEngine(
 
         try {
             LLamaAndroid.instance().nlen = params.maxTokens.coerceIn(16, 512)
-            LLamaAndroid.instance().send(prompt, formatChat = false).collect { piece ->
+            LLamaAndroid.instance().send(prompt, formatChat = true).collect { piece ->
                 if (isCancelled) {
                     emit(GenerationChunk(text = "", isComplete = true, errorMessage = "Inferencia cancelada por el usuario."))
                     state = EngineState.READY
                     return@collect
                 }
 
-                tokenCount++
-                val elapsed = System.currentTimeMillis() - startTime
-                emit(
-                    GenerationChunk(
-                        text = piece,
-                        isComplete = false,
-                        tokensGenerated = tokenCount,
-                        elapsedMillis = elapsed
+                val cleanPiece = piece.replace("<|im_end|>", "").replace("<|endoftext|>", "")
+                if (cleanPiece.isNotEmpty()) {
+                    tokenCount++
+                    val elapsed = System.currentTimeMillis() - startTime
+                    emit(
+                        GenerationChunk(
+                            text = cleanPiece,
+                            isComplete = false,
+                            tokensGenerated = tokenCount,
+                            elapsedMillis = elapsed
+                        )
                     )
-                )
+                }
             }
 
             val totalElapsed = (System.currentTimeMillis() - startTime).coerceAtLeast(1L)

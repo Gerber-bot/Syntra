@@ -332,7 +332,7 @@ Java_android_llama_cpp_LLamaAndroid_completion_1init(
     const auto context = reinterpret_cast<llama_context *>(context_pointer);
     const auto batch = reinterpret_cast<llama_batch *>(batch_pointer);
 
-    bool parse_special = (format_chat == JNI_TRUE);
+    bool parse_special = (format_chat == JNI_TRUE) || (text != nullptr && strstr(text, "<|im_start|>") != nullptr);
     const auto tokens_list = common_tokenize(context, text, true, parse_special);
 
     auto n_ctx = llama_n_ctx(context);
