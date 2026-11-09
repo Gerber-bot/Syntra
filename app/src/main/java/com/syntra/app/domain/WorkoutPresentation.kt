@@ -15,24 +15,42 @@ data class CompactSetGroup(
     val restSeconds: Int? = null,
     val isAssisted: Boolean = false,
     val isDumbbell: Boolean = false,
-    val note: String = ""
+    val isToFailure: Boolean = false,
+    val loadUnit: String = "KG",
+    val rawLoadValue: Double = weightGrams / 1000.0,
+    val note: String = "",
+    val repNotations: List<String> = emptyList()
 ) {
     val setCount: Int get() = repetitions.size
 
     fun formattedWeight(): String {
-        val base = WorkoutPresentation.formatWeightKg(weightGrams)
+        val base = when (loadUnit.uppercase()) {
+            "BLOQUES" -> "${rawLoadValue.toInt()} bloques"
+            "PLACAS" -> "${rawLoadValue.toInt()} placas"
+            "LBS", "LB" -> "${rawLoadValue.toInt()} lb"
+            "BW" -> "Peso corporal"
+            else -> WorkoutPresentation.formatWeightKg(weightGrams)
+        }
         return when {
             isAssisted -> "-$base (asistido)"
             isDumbbell && note.contains("[UNILATERAL]") -> "$base (mancuerna unilat.)"
             isDumbbell -> "$base (mancuerna)"
             note == "[LASTRE]" -> "+$base (lastre)"
             note == "[UNILATERAL]" -> "$base (unilateral)"
-            note.isNotBlank() -> "$base ($note)"
+            note.isNotBlank() && !note.startsWith("[FALLO") -> "$base ($note)"
             else -> base
         }
     }
 
-    fun formattedReps(): String = repetitions.joinToString(", ")
+    fun formattedReps(): String {
+        return if (repNotations.isNotEmpty() && repNotations.size == repetitions.size) {
+            repNotations.joinToString(", ")
+        } else if (isToFailure) {
+            repetitions.joinToString(", ") { "$it f" }
+        } else {
+            repetitions.joinToString(", ")
+        }
+    }
 }
 
 data class CompactExercise(
@@ -69,18 +87,26 @@ object WorkoutPresentation {
 
         val groups = mutableListOf<CompactSetGroup>()
         var currentWeight = sets[0].weightGrams
+        var currentUnit = sets[0].loadUnit
+        var currentRawLoad = sets[0].rawLoadValue
         var currentAssisted = sets[0].isAssisted
         var currentDumbbell = sets[0].isDumbbell
         var currentNote = sets[0].note
         var currentReps = mutableListOf(sets[0].repetitions)
+        var currentRepNotations = mutableListOf(if (sets[0].isToFailure) "${sets[0].repetitions}f" else "${sets[0].repetitions}")
+
+        fun baseNote(n: String) = n.replace("[FALLO]", "").trim()
 
         for (i in 1 until sets.size) {
             val set = sets[i]
+            val notation = if (set.isToFailure) "${set.repetitions}f" else "${set.repetitions}"
             if (set.weightGrams == currentWeight &&
+                set.loadUnit.equals(currentUnit, ignoreCase = true) &&
                 set.isAssisted == currentAssisted &&
                 set.isDumbbell == currentDumbbell &&
-                set.note == currentNote) {
+                baseNote(set.note) == baseNote(currentNote)) {
                 currentReps.add(set.repetitions)
+                currentRepNotations.add(notation)
             } else {
                 groups.add(
                     CompactSetGroup(
@@ -88,14 +114,21 @@ object WorkoutPresentation {
                         repetitions = currentReps.toList(),
                         isAssisted = currentAssisted,
                         isDumbbell = currentDumbbell,
-                        note = currentNote
+                        isToFailure = currentRepNotations.any { it.endsWith("f") },
+                        loadUnit = currentUnit,
+                        rawLoadValue = currentRawLoad,
+                        note = baseNote(currentNote),
+                        repNotations = currentRepNotations.toList()
                     )
                 )
                 currentWeight = set.weightGrams
+                currentUnit = set.loadUnit
+                currentRawLoad = set.rawLoadValue
                 currentAssisted = set.isAssisted
                 currentDumbbell = set.isDumbbell
                 currentNote = set.note
                 currentReps = mutableListOf(set.repetitions)
+                currentRepNotations = mutableListOf(notation)
             }
         }
         groups.add(
@@ -104,7 +137,11 @@ object WorkoutPresentation {
                 repetitions = currentReps.toList(),
                 isAssisted = currentAssisted,
                 isDumbbell = currentDumbbell,
-                note = currentNote
+                isToFailure = currentRepNotations.any { it.endsWith("f") },
+                loadUnit = currentUnit,
+                rawLoadValue = currentRawLoad,
+                note = baseNote(currentNote),
+                repNotations = currentRepNotations.toList()
             )
         )
         return groups

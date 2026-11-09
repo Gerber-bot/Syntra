@@ -10,7 +10,8 @@ enum class LoadModality(val displayName: String) {
     UNILATERAL("Ejercicio unilateral"),
     WEIGHTED_BODYWEIGHT("Lastre adicional"),
     ASSISTED_BODYWEIGHT("Ejercicio asistido"),
-    BODYWEIGHT("Peso corporal")
+    BODYWEIGHT("Peso corporal"),
+    MACHINE_BLOCKS("Carga por bloques/placas")
 }
 
 enum class MetricDataQuality(val displayName: String) {
@@ -73,11 +74,15 @@ object SportsMetricsCalculator {
         val normEx = normalize(exerciseName)
         val normEq = equipment?.let { normalize(it) } ?: ""
 
+        if (set.loadUnit.equals("BLOQUES", ignoreCase = true) || set.loadUnit.equals("PLACAS", ignoreCase = true)) {
+            return LoadModality.MACHINE_BLOCKS
+        }
+
         if (set.isAssisted || normNote.contains("[asistido]")) {
             return LoadModality.ASSISTED_BODYWEIGHT
         }
 
-        if (set.loadGrams == 0) {
+        if (set.loadUnit.equals("BW", ignoreCase = true) || set.loadGrams == 0) {
             return LoadModality.BODYWEIGHT
         }
 
@@ -129,6 +134,7 @@ object SportsMetricsCalculator {
             LoadModality.WEIGHTED_BODYWEIGHT -> grams
             LoadModality.ASSISTED_BODYWEIGHT -> 0L
             LoadModality.BODYWEIGHT -> 0L
+            LoadModality.MACHINE_BLOCKS -> 0L
         }
     }
 
@@ -202,6 +208,10 @@ object SportsMetricsCalculator {
                 LoadModality.BILATERAL_EXTERNAL -> {
                     regularSets++
                     barbellMachineGrams += setGrams * reps
+                }
+                LoadModality.MACHINE_BLOCKS -> {
+                    // Machine blocks/plates: counted in completed sets without corrupting kg tonnage
+                    regularSets++
                 }
             }
         }

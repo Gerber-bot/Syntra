@@ -38,6 +38,7 @@ import com.syntra.app.data.backup.SyntraBackupPayload
 import com.syntra.app.domain.*
 import com.syntra.app.domain.neural.DeterministicInferenceEngine
 import com.syntra.app.domain.neural.LlamaCppInferenceEngine
+import com.syntra.app.domain.neural.ModelManager
 import com.syntra.app.domain.neural.NeuralInferenceEngine
 import com.syntra.app.ui.analytics.AnalyticsAndCoachScreen
 import com.syntra.app.ui.categories.ManageCategoriesDialog
@@ -98,6 +99,24 @@ private fun TrainerApp(db: AppDatabase) {
     val fallbackEngine = remember(db) { DeterministicInferenceEngine(db) }
     val neuralEngine = remember(fallbackEngine) { LlamaCppInferenceEngine(fallbackEngine) }
     var showManageNeuralModelDialog by remember { mutableStateOf(false) }
+
+    val context = androidx.compose.ui.platform.LocalContext.current
+    LaunchedEffect(Unit) {
+        if (!neuralEngine.isModelLoaded()) {
+            val prefModelName = ModelManager.getActiveModelPreference(context)
+            val installed = ModelManager.listInstalledModels(context)
+            val modelToLoad = if (!prefModelName.isNullOrBlank()) {
+                installed.firstOrNull { it.fileName == prefModelName }?.file
+            } else {
+                installed.firstOrNull()?.file
+            }
+            if (modelToLoad != null && modelToLoad.exists()) {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    neuralEngine.loadModel(modelToLoad, threads = 4)
+                }
+            }
+        }
+    }
 
     val profileFlow = remember(db) { db.profileDao().observe() }
     val profile by profileFlow.collectAsState(initial = null)
@@ -186,8 +205,7 @@ private fun TrainerApp(db: AppDatabase) {
                 error = error,
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(innerPadding)
-                    .imePadding(),
+                    .padding(innerPadding),
                 onCancel = {},
                 onSave = { name, preferred, height, grams, activity, goal ->
                     scope.launch {

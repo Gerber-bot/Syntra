@@ -167,6 +167,7 @@ fun ManageNeuralModelDialog(
                                         val res = engine.loadModel(model.file, threads = 4)
                                         isLoadingModel = false
                                         if (res.isSuccess) {
+                                            ModelManager.setActiveModelPreference(context, model.fileName)
                                             installedModels = ModelManager.listInstalledModels(context, model.fileName)
                                         } else {
                                             importStatusMessage = "Error al cargar: ${res.exceptionOrNull()?.message}"
@@ -176,6 +177,7 @@ fun ManageNeuralModelDialog(
                                 onUnload = {
                                     scope.launch {
                                         engine.unloadModel()
+                                        ModelManager.setActiveModelPreference(context, null)
                                         installedModels = ModelManager.listInstalledModels(context, null)
                                     }
                                 },
@@ -183,6 +185,7 @@ fun ManageNeuralModelDialog(
                                     scope.launch {
                                         if (engine.currentModelFile?.name == model.fileName) {
                                             engine.unloadModel()
+                                            ModelManager.setActiveModelPreference(context, null)
                                         }
                                         ModelManager.deleteModel(model.file)
                                         installedModels = ModelManager.listInstalledModels(context, engine.currentModelFile?.name)

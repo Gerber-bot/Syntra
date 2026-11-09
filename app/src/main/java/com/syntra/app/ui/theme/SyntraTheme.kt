@@ -65,6 +65,7 @@ object SyntraColors {
     val BorderGlow = Color(0x552FFFD0)
 
     val Error = Color(0xFFFF5252)
+    val Warning = Color(0xFFFFD54F)
     val Success = Color(0xFF2FFFD0)
 }
 

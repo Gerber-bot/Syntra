@@ -27,6 +27,24 @@ object ModelManager {
 
     // Magic number for GGUF format in little endian ('G' 'G' 'U' 'F' -> 0x46554747)
     private const val GGUF_MAGIC = 0x46554747
+    private const val PREFS_NAME = "syntra_preferences"
+    private const val KEY_ACTIVE_MODEL = "active_neural_model_file"
+
+    fun getActiveModelPreference(context: Context): String? {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        return prefs.getString(KEY_ACTIVE_MODEL, null)
+    }
+
+    fun setActiveModelPreference(context: Context, modelFileName: String?) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit().apply {
+            if (modelFileName != null) {
+                putString(KEY_ACTIVE_MODEL, modelFileName)
+            } else {
+                remove(KEY_ACTIVE_MODEL)
+            }
+        }.apply()
+    }
 
     fun getModelsDirectory(context: Context): File {
         val dir = File(context.filesDir, "models")

@@ -267,7 +267,9 @@ class RoomActiveWorkoutPersistencePort(
                             isAssisted = s.isAssisted,
                             isDumbbell = s.isDumbbell,
                             note = s.note,
-                            plannedTarget = ex.plannedTarget
+                            plannedTarget = ex.plannedTarget,
+                            loadUnit = s.loadUnit,
+                            isToFailure = s.isToFailure
                         )
                     )
                 }

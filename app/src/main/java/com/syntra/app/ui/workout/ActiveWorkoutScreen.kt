@@ -77,6 +77,7 @@ fun ActiveWorkoutScreen(
 
     var reviewBundle by remember { mutableStateOf<ActiveWorkoutReviewBundle?>(null) }
     var editedExercises by remember { mutableStateOf<List<ParsedExercise>>(emptyList()) }
+    var unrecognizedLines by remember { mutableStateOf<List<UnrecognizedLine>>(emptyList()) }
     var exerciseToEdit by remember { mutableStateOf<ParsedExercise?>(null) }
     var commitErrorMessage by remember { mutableStateOf<String?>(null) }
     var isCommitting by remember { mutableStateOf(false) }
@@ -123,6 +124,7 @@ fun ActiveWorkoutScreen(
             val bundle = manager.beginFinalizationReview(nowWall, nowElapsed)
             reviewBundle = bundle
             editedExercises = bundle?.parsePreview?.exercises.orEmpty()
+            unrecognizedLines = bundle?.parsePreview?.unrecognizedLines.orEmpty()
         }
     }
 
@@ -271,12 +273,25 @@ fun ActiveWorkoutScreen(
 
     // Exercise preview edit dialog during REVIEW_PENDING
     if (exerciseToEdit != null) {
+        val currentEx = exerciseToEdit!!
         EditExercisePreviewDialog(
-            exercise = exerciseToEdit!!,
+            exercise = currentEx,
             onDismiss = { exerciseToEdit = null },
             onSave = { updated, learnAlias, originalName ->
-                editedExercises = editedExercises.map { if (it.name == originalName) updated else it }
-                if (learnAlias) {
+                val exists = editedExercises.any { it.name.equals(originalName, ignoreCase = true) }
+                if (exists) {
+                    editedExercises = editedExercises.map {
+                        if (it.name.equals(originalName, ignoreCase = true)) updated else it
+                    }
+                } else {
+                    editedExercises = editedExercises + updated
+                }
+                // If it was assigned from an unrecognized line, remove that line
+                unrecognizedLines = unrecognizedLines.filterNot {
+                    it.rawText.contains(originalName, ignoreCase = true) || originalName.contains(it.rawText, ignoreCase = true)
+                }
+
+                if (learnAlias && originalName.isNotBlank()) {
                     scope.launch {
                         val normAlias = WorkoutTextParser.normalize(originalName)
                         val normCanonical = WorkoutTextParser.normalize(updated.name)
@@ -302,6 +317,10 @@ fun ActiveWorkoutScreen(
                         }
                     }
                 }
+                exerciseToEdit = null
+            },
+            onDelete = {
+                editedExercises = editedExercises.filterNot { it.name.equals(currentEx.name, ignoreCase = true) }
                 exerciseToEdit = null
             }
         )
@@ -341,10 +360,67 @@ fun ActiveWorkoutScreen(
             sessionTitle = titleValue.ifBlank { reviewBundle!!.parsePreview.sessionTitle ?: "Entrenamiento" },
             onTitleChange = { titleValue = it },
             exercises = editedExercises,
+            unrecognizedLines = unrecognizedLines,
             warnings = reviewBundle!!.parsePreview.warnings,
             commitError = commitErrorMessage ?: activeDraft.lastErrorMessage,
             isCommitting = isCommitting,
             onEditExercise = { ex -> exerciseToEdit = ex },
+            onAddManualExercise = {
+                exerciseToEdit = ParsedExercise(
+                    name = "",
+                    sets = listOf(
+                        ParsedSet(
+                            weightGrams = 20000,
+                            rawLoadValue = 20.0,
+                            loadUnit = "KG",
+                            repetitions = 10,
+                            isToFailure = false
+                        )
+                    )
+                )
+            },
+            onAddSetToExercise = { targetEx ->
+                editedExercises = editedExercises.map { ex ->
+                    if (ex.name == targetEx.name) {
+                        val lastSet = ex.sets.lastOrNull()
+                        val newSet = lastSet?.copy()
+                            ?: ParsedSet(
+                                weightGrams = 20000,
+                                rawLoadValue = 20.0,
+                                loadUnit = "KG",
+                                repetitions = 10,
+                                isToFailure = false
+                            )
+                        ex.copy(sets = ex.sets + newSet)
+                    } else ex
+                }
+            },
+            onDeleteExercise = { targetEx ->
+                editedExercises = editedExercises.filterNot { it.name == targetEx.name }
+            },
+            onAssignLine = { line ->
+                exerciseToEdit = ParsedExercise(
+                    name = line.rawText.take(40),
+                    sets = listOf(
+                        ParsedSet(
+                            weightGrams = 20000,
+                            rawLoadValue = 20.0,
+                            loadUnit = "KG",
+                            repetitions = 10,
+                            isToFailure = false
+                        )
+                    )
+                )
+            },
+            onDiscardLine = { line ->
+                unrecognizedLines = unrecognizedLines.filterNot { it.lineNumber == line.lineNumber && it.rawText == line.rawText }
+            },
+            onKeepLineAsNote = { line ->
+                unrecognizedLines = unrecognizedLines.filterNot { it.lineNumber == line.lineNumber && it.rawText == line.rawText }
+                if (!titleValue.contains(line.rawText)) {
+                    titleValue = if (titleValue.isBlank()) "Nota: ${line.rawText}" else "$titleValue (${line.rawText})"
+                }
+            },
             onCancelReview = {
                 scope.launch {
                     val nowWall = System.currentTimeMillis()
@@ -568,6 +644,7 @@ fun ActiveWorkoutScreen(
                         if (bundle != null) {
                             reviewBundle = bundle
                             editedExercises = bundle.parsePreview.exercises
+                            unrecognizedLines = bundle.parsePreview.unrecognizedLines
                             if (titleValue.isBlank() && !bundle.parsePreview.sessionTitle.isNullOrBlank()) {
                                 titleValue = bundle.parsePreview.sessionTitle
                             }
@@ -802,10 +879,17 @@ private fun ActiveWorkoutReviewView(
     sessionTitle: String,
     onTitleChange: (String) -> Unit,
     exercises: List<ParsedExercise>,
+    unrecognizedLines: List<UnrecognizedLine>,
     warnings: List<String>,
     commitError: String?,
     isCommitting: Boolean,
     onEditExercise: (ParsedExercise) -> Unit,
+    onAddManualExercise: () -> Unit,
+    onAddSetToExercise: (ParsedExercise) -> Unit,
+    onDeleteExercise: (ParsedExercise) -> Unit,
+    onAssignLine: (UnrecognizedLine) -> Unit,
+    onDiscardLine: (UnrecognizedLine) -> Unit,
+    onKeepLineAsNote: (UnrecognizedLine) -> Unit,
     onCancelReview: () -> Unit,
     onConfirmCommit: () -> Unit
 ) {
@@ -892,12 +976,104 @@ private fun ActiveWorkoutReviewView(
             }
         }
 
-        Text(
-            text = "${compactExercises.size} ejercicios detectados • $totalSets series totales",
-            style = MaterialTheme.typography.titleSmall,
-            fontWeight = FontWeight.Bold,
-            color = Color.White
-        )
+        // Unrecognized lines section
+        if (unrecognizedLines.isNotEmpty()) {
+            SyntraCard(
+                modifier = Modifier.fillMaxWidth(),
+                glowingBorder = true
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Líneas no interpretadas (${unrecognizedLines.size})",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = SyntraColors.Warning
+                        )
+                        SyntraBadge(
+                            text = "Sin perder datos",
+                            containerColor = SyntraColors.SurfaceCardElevated,
+                            contentColor = SyntraColors.Warning
+                        )
+                    }
+                    Text(
+                        text = "IrisX detectó texto que no pudo asociar a series. Podés asignarlo como ejercicio, guardarlo como nota o descartarlo.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = SyntraColors.TextSecondary
+                    )
+                    HorizontalDivider(color = SyntraColors.BorderSubtle)
+
+                    unrecognizedLines.forEach { line ->
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = SyntraColors.SurfaceCardElevated,
+                            border = androidx.compose.foundation.BorderStroke(1.dp, SyntraColors.BorderSubtle),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text(
+                                    text = "Línea ${line.lineNumber}: ${line.rawText}",
+                                    fontWeight = FontWeight.Bold,
+                                    fontFamily = FontFamily.Monospace,
+                                    color = SyntraColors.TextPrimary,
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                                Text(
+                                    text = "Motivo: ${line.reason}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = SyntraColors.TextMuted
+                                )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    OutlinedButton(
+                                        onClick = { onAssignLine(line) },
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                                    ) {
+                                        Text("Asignar ejercicio", style = MaterialTheme.typography.labelSmall, color = SyntraColors.NeonMint)
+                                    }
+                                    OutlinedButton(
+                                        onClick = { onKeepLineAsNote(line) },
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                                    ) {
+                                        Text("Guardar como nota", style = MaterialTheme.typography.labelSmall, color = SyntraColors.SoftMint)
+                                    }
+                                    TextButton(
+                                        onClick = { onDiscardLine(line) },
+                                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
+                                    ) {
+                                        Text("Descartar", style = MaterialTheme.typography.labelSmall, color = SyntraColors.Error)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "${compactExercises.size} ejercicios detectados • $totalSets series totales",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+                color = Color.White
+            )
+            SyntraButton(
+                text = "+ Ejercicio manual",
+                onClick = onAddManualExercise,
+                modifier = Modifier.height(36.dp)
+            )
+        }
 
         if (compactExercises.isEmpty()) {
             Card(
@@ -906,7 +1082,7 @@ private fun ActiveWorkoutReviewView(
                 shape = RoundedCornerShape(12.dp)
             ) {
                 Text(
-                    text = "No se detectaron ejercicios con peso en kg. Volvé al bloc de notas para ajustar el formato (ej. 'Sentadilla 70kg 10 10 8'). Tus notas originales están intactas.",
+                    text = "No se detectaron ejercicios estructurados con series. Podés agregar un ejercicio manualmente o volver al bloc de notas.",
                     style = MaterialTheme.typography.bodySmall,
                     color = Color.LightGray,
                     modifier = Modifier.padding(14.dp)
@@ -927,7 +1103,8 @@ private fun ActiveWorkoutReviewView(
                         ) {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier.weight(1f)
                             ) {
                                 Text(
                                     text = exercise.name,
@@ -943,13 +1120,34 @@ private fun ActiveWorkoutReviewView(
                                     )
                                 }
                             }
-                            OutlinedButton(
-                                onClick = {
-                                    exercises.find { it.name == exercise.name }?.let(onEditExercise)
-                                },
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
                             ) {
-                                Text("✎ Corregir", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                                OutlinedButton(
+                                    onClick = {
+                                        exercises.find { it.name == exercise.name }?.let(onAddSetToExercise)
+                                    },
+                                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
+                                ) {
+                                    Text("+ Serie", style = MaterialTheme.typography.labelSmall, color = SyntraColors.NeonMint)
+                                }
+                                OutlinedButton(
+                                    onClick = {
+                                        exercises.find { it.name == exercise.name }?.let(onEditExercise)
+                                    },
+                                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
+                                ) {
+                                    Text("✎ Editar", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                                }
+                                IconButton(
+                                    onClick = {
+                                        exercises.find { it.name == exercise.name }?.let(onDeleteExercise)
+                                    },
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Text("✕", color = SyntraColors.Error, fontWeight = FontWeight.Bold)
+                                }
                             }
                         }
 

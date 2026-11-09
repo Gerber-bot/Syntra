@@ -82,7 +82,9 @@ class BackupManager(private val db: AppDatabase) {
                 isAssisted = set.isAssisted,
                 isDumbbell = set.isDumbbell,
                 note = set.note,
-                plannedTarget = set.plannedTarget
+                plannedTarget = set.plannedTarget,
+                loadUnit = set.loadUnit,
+                isToFailure = set.isToFailure
             )
         }
 
@@ -331,7 +333,9 @@ class BackupManager(private val db: AppDatabase) {
                             isAssisted = set.isAssisted,
                             isDumbbell = set.isDumbbell,
                             note = set.note,
-                            plannedTarget = set.plannedTarget
+                            plannedTarget = set.plannedTarget,
+                            loadUnit = set.loadUnit,
+                            isToFailure = set.isToFailure
                         )
                     }
                 )

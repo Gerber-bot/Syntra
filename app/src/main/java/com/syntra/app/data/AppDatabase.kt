@@ -95,7 +95,9 @@ data class WorkoutSetEntity(
     val isAssisted: Boolean = false,
     val isDumbbell: Boolean = false,
     val note: String = "",
-    val plannedTarget: String? = null
+    val plannedTarget: String? = null,
+    val loadUnit: String = "KG",
+    val isToFailure: Boolean = false
 )
 
 @Entity(
@@ -544,7 +546,7 @@ interface ActiveWorkoutDraftDao {
         ActiveWorkoutDraftEntity::class,
         CategoryEntity::class
     ],
-    version = 5,
+    version = 6,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -728,10 +730,17 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE workout_sets ADD COLUMN loadUnit TEXT NOT NULL DEFAULT 'KG'")
+                db.execSQL("ALTER TABLE workout_sets ADD COLUMN isToFailure INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
         fun get(context: Context): AppDatabase = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(
                 context.applicationContext, AppDatabase::class.java, "syntra.db"
-            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
             .build().also { instance = it }
         }
     }

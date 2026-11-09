@@ -99,8 +99,106 @@ class WorkoutTextParserTest {
     fun doesNotInventDataForUnknownInput() {
         val preview = WorkoutTextParser.parse("Hoy entrené bien")
         assertTrue(preview.exercises.isEmpty())
-        assertTrue(preview.warnings.isNotEmpty())
-        assertTrue(preview.warnings.any { it.contains("no se reconoció un peso") })
+        assertTrue(preview.unrecognizedLines.isNotEmpty())
+        assertEquals("Hoy entrené bien", preview.unrecognizedLines.first().rawText)
+    }
+
+    @Test
+    fun parsesRealFailureAndBlocksCaseFromProduction() {
+        val input = "Piernas\nFemoral sentado 3 de 10 a 12: 13bloques 11, 9, 9f"
+        val preview = WorkoutTextParser.parse(input)
+
+        assertEquals("Piernas", preview.sessionTitle)
+        assertEquals(1, preview.exercises.size)
+        val ex = preview.exercises.first()
+        assertEquals("Femoral sentado", ex.name)
+        assertEquals("3 series de 10–12 repeticiones", ex.plannedTarget)
+        assertEquals(3, ex.sets.size)
+
+        assertEquals(11, ex.sets[0].repetitions)
+        assertEquals("BLOQUES", ex.sets[0].loadUnit)
+        assertEquals(13.0, ex.sets[0].rawLoadValue, 0.001)
+        assertFalse(ex.sets[0].isToFailure)
+
+        assertEquals(9, ex.sets[1].repetitions)
+        assertEquals("BLOQUES", ex.sets[1].loadUnit)
+        assertFalse(ex.sets[1].isToFailure)
+
+        assertEquals(9, ex.sets[2].repetitions)
+        assertEquals("BLOQUES", ex.sets[2].loadUnit)
+        assertTrue(ex.sets[2].isToFailure)
+
+        // Check presentation
+        val compact = WorkoutPresentation.toCompactList(preview.exercises).first()
+        assertEquals("13 bloques", compact.groups.first().formattedWeight())
+        assertEquals("11, 9, 9f", compact.groups.first().formattedReps())
+    }
+
+    @Test
+    fun parsesFailureExpressionsCorrectly() {
+        val input = "Press banca 80kg 10, 8 fallo, 6 al fallo"
+        val preview = WorkoutTextParser.parse(input)
+
+        assertEquals(1, preview.exercises.size)
+        val ex = preview.exercises.first()
+        assertEquals(3, ex.sets.size)
+        assertEquals(10, ex.sets[0].repetitions)
+        assertFalse(ex.sets[0].isToFailure)
+
+        assertEquals(8, ex.sets[1].repetitions)
+        assertTrue(ex.sets[1].isToFailure)
+
+        assertEquals(6, ex.sets[2].repetitions)
+        assertTrue(ex.sets[2].isToFailure)
+    }
+
+    @Test
+    fun parsesMultiUnitsPlacasLbsAndBodyweight() {
+        val input = """
+            Jalón al pecho 10 placas 12 10
+            Press militar 100 lbs 8 8
+            Dominadas peso corporal 10 8f
+        """.trimIndent()
+        val preview = WorkoutTextParser.parse(input)
+
+        assertEquals(3, preview.exercises.size)
+
+        val jalon = preview.exercises[0]
+        assertEquals("PLACAS", jalon.sets.first().loadUnit)
+        assertEquals(10.0, jalon.sets.first().rawLoadValue, 0.001)
+
+        val press = preview.exercises[1]
+        assertEquals("LBS", press.sets.first().loadUnit)
+        assertEquals(100.0, press.sets.first().rawLoadValue, 0.001)
+
+        val dominadas = preview.exercises[2]
+        assertEquals("BW", dominadas.sets.first().loadUnit)
+        assertEquals(0.0, dominadas.sets.first().rawLoadValue, 0.001)
+        assertTrue(dominadas.sets[1].isToFailure)
+    }
+
+    @Test
+    fun preservesPlanningOnlyLinesWithoutDropping() {
+        val input = "Piernas\nRemo con barra 3 de 10 a 12"
+        val preview = WorkoutTextParser.parse(input)
+
+        assertEquals(1, preview.exercises.size)
+        val ex = preview.exercises.first()
+        assertEquals("Remo con barra", ex.name)
+        assertEquals("3 series de 10–12 repeticiones", ex.plannedTarget)
+        assertTrue(ex.sets.isEmpty())
+        assertTrue(preview.warnings.any { it.contains("plan") })
+    }
+
+    @Test
+    fun preservesUnrecognizedLinesWithDetailedReasons() {
+        val input = "Piernas\nSentadilla 80kg 8 8\nNota random que no es ejercicio\nOtra línea suelta"
+        val preview = WorkoutTextParser.parse(input)
+
+        assertEquals(1, preview.exercises.size)
+        assertEquals(2, preview.unrecognizedLines.size)
+        assertEquals("Nota random que no es ejercicio", preview.unrecognizedLines[0].rawText)
+        assertEquals("Otra línea suelta", preview.unrecognizedLines[1].rawText)
     }
 
     @Test

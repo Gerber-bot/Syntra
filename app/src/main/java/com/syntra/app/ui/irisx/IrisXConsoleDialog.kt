@@ -64,6 +64,23 @@ fun IrisXConsoleDialog(
         activeTopicLabel = st.activeExerciseName ?: st.activeMuscleGroup
     }
 
+    LaunchedEffect(Unit) {
+        if (!effectiveNeuralEngine.isModelLoaded()) {
+            val prefModelName = ModelManager.getActiveModelPreference(context)
+            val installed = ModelManager.listInstalledModels(context)
+            val modelToLoad = if (!prefModelName.isNullOrBlank()) {
+                installed.firstOrNull { it.fileName == prefModelName }?.file
+            } else {
+                installed.firstOrNull()?.file
+            }
+            if (modelToLoad != null && modelToLoad.exists()) {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    effectiveNeuralEngine.loadModel(modelToLoad, threads = 4)
+                }
+            }
+        }
+    }
+
     LaunchedEffect(repo) {
         val conv = repo.getOrCreateActiveConversation()
         val stored = repo.getMessages(conv.id)

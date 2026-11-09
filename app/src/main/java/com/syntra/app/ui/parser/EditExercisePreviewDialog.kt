@@ -1,5 +1,6 @@
 package com.syntra.app.ui.parser
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -13,29 +14,60 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.syntra.app.domain.ParsedExercise
 import com.syntra.app.domain.ParsedSet
+import com.syntra.app.ui.theme.*
 import java.util.Locale
+
+class MutablePairSet(
+    weight: Double,
+    repetitions: Int,
+    unit: String = "KG",
+    toFailure: Boolean = false,
+    note: String = ""
+) {
+    var loadValue by mutableStateOf(weight)
+    var reps by mutableStateOf(repetitions)
+    var unit by mutableStateOf(unit)
+    var toFailure by mutableStateOf(toFailure)
+    var note by mutableStateOf(note)
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun EditExercisePreviewDialog(
     exercise: ParsedExercise,
     onDismiss: () -> Unit,
-    onSave: (updated: ParsedExercise, learnAlias: Boolean, originalName: String) -> Unit
+    onSave: (updated: ParsedExercise, learnAlias: Boolean, originalName: String) -> Unit,
+    onDelete: (() -> Unit)? = null
 ) {
     var name by remember { mutableStateOf(exercise.name) }
     var plannedTarget by remember { mutableStateOf(exercise.plannedTarget ?: "") }
     val sets = remember {
         mutableStateListOf<MutablePairSet>().apply {
-            addAll(exercise.sets.map { MutablePairSet(it.weightGrams / 1000.0, it.repetitions) })
+            if (exercise.sets.isEmpty()) {
+                add(MutablePairSet(20.0, 10, "KG", false))
+            } else {
+                addAll(exercise.sets.map {
+                    MutablePairSet(
+                        weight = it.rawLoadValue,
+                        repetitions = it.repetitions,
+                        unit = it.loadUnit,
+                        toFailure = it.isToFailure,
+                        note = it.note
+                    )
+                })
+            }
         }
     }
     var learnAlias by remember { mutableStateOf(true) }
 
     val nameChanged = name.trim().lowercase(Locale.ROOT) != exercise.name.trim().lowercase(Locale.ROOT)
+    val isCreatingNew = exercise.name.isBlank()
+    val availableUnits = listOf("KG", "BLOQUES", "PLACAS", "LBS", "BW")
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -44,10 +76,11 @@ fun EditExercisePreviewDialog(
         Surface(
             modifier = Modifier
                 .fillMaxWidth(0.95f)
-                .fillMaxHeight(0.85f),
-            shape = RoundedCornerShape(16.dp),
-            color = Color(0xFF161616),
-            tonalElevation = 8.dp
+                .fillMaxHeight(0.88f)
+                .imePadding(),
+            shape = RoundedCornerShape(20.dp),
+            color = SyntraColors.SurfaceDark,
+            border = BorderStroke(1.dp, SyntraColors.BorderSubtle)
         ) {
             Column(
                 modifier = Modifier
@@ -62,33 +95,35 @@ fun EditExercisePreviewDialog(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "Editar ejercicio",
+                        text = if (isCreatingNew) "Agregar ejercicio" else "Editar ejercicio",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
-                        color = Color.White
+                        color = SyntraColors.TextPrimary
                     )
                     IconButton(onClick = onDismiss) {
-                        Text("✕", color = Color.Gray, fontWeight = FontWeight.Bold)
+                        Text("✕", color = SyntraColors.TextMuted, fontWeight = FontWeight.Bold)
                     }
                 }
 
-                HorizontalDivider(color = Color(0xFF2A2A2A))
+                HorizontalDivider(color = SyntraColors.BorderSubtle)
 
                 // Exercise name field
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
-                    label = { Text("Nombre del ejercicio") },
+                    label = { Text("Nombre del ejercicio (ej. Femoral sentado)") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = MaterialTheme.colorScheme.primary,
-                        unfocusedBorderColor = Color(0xFF444444)
+                        focusedBorderColor = SyntraColors.NeonMint,
+                        unfocusedBorderColor = SyntraColors.BorderSubtle,
+                        focusedTextColor = SyntraColors.TextPrimary,
+                        unfocusedTextColor = SyntraColors.TextPrimary
                     )
                 )
 
-                // If name changed, offer IrisX alias learning
-                if (nameChanged && name.isNotBlank()) {
+                // If name changed on existing exercise, offer IrisX alias learning
+                if (!isCreatingNew && nameChanged && name.isNotBlank()) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
@@ -96,12 +131,13 @@ fun EditExercisePreviewDialog(
                     ) {
                         Checkbox(
                             checked = learnAlias,
-                            onCheckedChange = { learnAlias = it }
+                            onCheckedChange = { learnAlias = it },
+                            colors = CheckboxDefaults.colors(checkedColor = SyntraColors.NeonMint)
                         )
                         Text(
                             text = "Enseñar a IrisX que '${exercise.name}' equivale a '$name'",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.primary
+                            color = SyntraColors.SoftMint
                         )
                     }
                 }
@@ -110,12 +146,14 @@ fun EditExercisePreviewDialog(
                 OutlinedTextField(
                     value = plannedTarget,
                     onValueChange = { plannedTarget = it },
-                    label = { Text("Objetivo / Plan (ej. 4x10-12, RIR 2)") },
+                    label = { Text("Objetivo / Plan (ej. 3 de 10 a 12)") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = MaterialTheme.colorScheme.primary,
-                        unfocusedBorderColor = Color(0xFF444444)
+                        focusedBorderColor = SyntraColors.NeonMint,
+                        unfocusedBorderColor = SyntraColors.BorderSubtle,
+                        focusedTextColor = SyntraColors.TextPrimary,
+                        unfocusedTextColor = SyntraColors.TextPrimary
                     )
                 )
 
@@ -126,21 +164,21 @@ fun EditExercisePreviewDialog(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "Series (${sets.size})",
+                        text = "Series ejecutadas (${sets.size})",
                         fontWeight = FontWeight.Bold,
-                        color = Color.White,
+                        color = SyntraColors.TextPrimary,
                         style = MaterialTheme.typography.bodyMedium
                     )
-                    OutlinedButton(
+                    SyntraSecondaryButton(
+                        text = "+ Serie",
                         onClick = {
-                            val lastWeight = sets.lastOrNull()?.weightKg ?: 20.0
+                            val lastWeight = sets.lastOrNull()?.loadValue ?: 20.0
                             val lastReps = sets.lastOrNull()?.reps ?: 10
-                            sets.add(MutablePairSet(lastWeight, lastReps))
+                            val lastUnit = sets.lastOrNull()?.unit ?: "KG"
+                            sets.add(MutablePairSet(lastWeight, lastReps, lastUnit, false))
                         },
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
-                    ) {
-                        Text("+ Agregar serie", style = MaterialTheme.typography.labelSmall)
-                    }
+                        modifier = Modifier.height(34.dp)
+                    )
                 }
 
                 // Sets list
@@ -148,53 +186,114 @@ fun EditExercisePreviewDialog(
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     itemsIndexed(sets) { idx, setItem ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 2.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = SyntraColors.SurfaceCardElevated,
+                            border = BorderStroke(1.dp, SyntraColors.BorderSubtle),
+                            modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text(
-                                text = "#${idx + 1}",
-                                color = Color.Gray,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier.width(28.dp)
-                            )
-                            OutlinedTextField(
-                                value = if (setItem.weightKg == 0.0) "" else setItem.weightKg.toString().removeSuffix(".0"),
-                                onValueChange = { input ->
-                                    val parsed = input.toDoubleOrNull() ?: 0.0
-                                    setItem.weightKg = parsed
-                                },
-                                label = { Text("kg") },
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                                singleLine = true,
-                                modifier = Modifier.weight(1f)
-                            )
-                            OutlinedTextField(
-                                value = if (setItem.reps == 0) "" else setItem.reps.toString(),
-                                onValueChange = { input ->
-                                    val parsed = input.toIntOrNull() ?: 0
-                                    setItem.reps = parsed
-                                },
-                                label = { Text("reps") },
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                singleLine = true,
-                                modifier = Modifier.weight(1f)
-                            )
-                            IconButton(
-                                onClick = {
-                                    if (sets.size > 1) {
-                                        sets.removeAt(idx)
-                                    }
-                                },
-                                enabled = sets.size > 1
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(8.dp),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text("🗑", color = if (sets.size > 1) MaterialTheme.colorScheme.error else Color.DarkGray)
+                                Text(
+                                    text = "#${idx + 1}",
+                                    color = SyntraColors.SoftMint,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 12.sp,
+                                    modifier = Modifier.width(22.dp)
+                                )
+
+                                // Load field
+                                if (setItem.unit != "BW") {
+                                    OutlinedTextField(
+                                        value = if (setItem.loadValue == 0.0) "" else setItem.loadValue.toString().removeSuffix(".0"),
+                                        onValueChange = { input ->
+                                            setItem.loadValue = input.toDoubleOrNull() ?: 0.0
+                                        },
+                                        label = { Text("Carga") },
+                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                                        singleLine = true,
+                                        modifier = Modifier.weight(1.1f),
+                                        colors = OutlinedTextFieldDefaults.colors(
+                                            focusedBorderColor = SyntraColors.NeonMint,
+                                            unfocusedBorderColor = SyntraColors.BorderSubtle
+                                        )
+                                    )
+                                } else {
+                                    Box(
+                                        modifier = Modifier.weight(1.1f),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text("Corporal", style = MaterialTheme.typography.labelSmall, color = SyntraColors.NeonMint)
+                                    }
+                                }
+
+                                // Unit selector button (cycles through units on tap)
+                                Button(
+                                    onClick = {
+                                        val nextIdx = (availableUnits.indexOf(setItem.unit) + 1) % availableUnits.size
+                                        setItem.unit = availableUnits[nextIdx]
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = SyntraColors.SurfaceHighlight),
+                                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
+                                    shape = RoundedCornerShape(8.dp)
+                                ) {
+                                    Text(
+                                        text = setItem.unit.lowercase(),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = SyntraColors.NeonMint
+                                    )
+                                }
+
+                                // Reps field
+                                OutlinedTextField(
+                                    value = if (setItem.reps == 0) "" else setItem.reps.toString(),
+                                    onValueChange = { input ->
+                                        setItem.reps = input.toIntOrNull() ?: 0
+                                    },
+                                    label = { Text("Reps") },
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                    singleLine = true,
+                                    modifier = Modifier.weight(1.0f),
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedBorderColor = SyntraColors.NeonMint,
+                                        unfocusedBorderColor = SyntraColors.BorderSubtle
+                                    )
+                                )
+
+                                // Fallo toggle button
+                                FilterChip(
+                                    selected = setItem.toFailure,
+                                    onClick = { setItem.toFailure = !setItem.toFailure },
+                                    label = { Text("f", fontWeight = FontWeight.Bold) },
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        selectedContainerColor = SyntraColors.DarkMint,
+                                        selectedLabelColor = SyntraColors.NeonMint,
+                                        containerColor = SyntraColors.SurfaceHighlight,
+                                        labelColor = SyntraColors.TextMuted
+                                    ),
+                                    border = BorderStroke(1.dp, if (setItem.toFailure) SyntraColors.NeonMint else SyntraColors.BorderSubtle)
+                                )
+
+                                IconButton(
+                                    onClick = {
+                                        if (sets.size > 1) {
+                                            sets.removeAt(idx)
+                                        }
+                                    },
+                                    enabled = sets.size > 1,
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Text("🗑", color = if (sets.size > 1) SyntraColors.Error else Color.DarkGray, fontSize = 14.sp)
+                                }
                             }
                         }
                     }
@@ -203,42 +302,60 @@ fun EditExercisePreviewDialog(
                 // Action buttons
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End,
+                    horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    OutlinedButton(onClick = onDismiss) {
-                        Text("Cancelar", color = Color.White)
+                    if (onDelete != null && !isCreatingNew) {
+                        OutlinedButton(
+                            onClick = {
+                                onDelete()
+                                onDismiss()
+                            },
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = SyntraColors.Error),
+                            border = BorderStroke(1.dp, SyntraColors.Error)
+                        ) {
+                            Text("Eliminar", color = SyntraColors.Error, fontWeight = FontWeight.Bold)
+                        }
+                    } else {
+                        Spacer(Modifier.width(1.dp))
                     }
-                    Spacer(Modifier.width(8.dp))
-                    Button(
-                        onClick = {
-                            val newSets = sets.map {
-                                ParsedSet(
-                                    weightGrams = (it.weightKg * 1000).toInt(),
-                                    repetitions = it.reps
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        SyntraSecondaryButton(
+                            text = "Cancelar",
+                            onClick = onDismiss
+                        )
+                        SyntraButton(
+                            text = if (isCreatingNew) "Agregar" else "Guardar cambios",
+                            onClick = {
+                                val newSets = sets.map {
+                                    val grams = when (it.unit) {
+                                        "KG" -> (it.loadValue * 1000).toInt()
+                                        "LBS" -> (it.loadValue * 453.592).toInt()
+                                        "BLOQUES", "PLACAS" -> (it.loadValue * 1000).toInt()
+                                        "BW" -> 0
+                                        else -> (it.loadValue * 1000).toInt()
+                                    }
+                                    ParsedSet(
+                                        weightGrams = grams,
+                                        repetitions = it.reps,
+                                        isToFailure = it.toFailure,
+                                        loadUnit = it.unit,
+                                        rawLoadValue = it.loadValue,
+                                        note = if (it.toFailure) "[FALLO] ${it.note}".trim() else it.note
+                                    )
+                                }
+                                val updated = exercise.copy(
+                                    name = name.trim().ifBlank { if (isCreatingNew) "Ejercicio manual" else exercise.name },
+                                    sets = newSets,
+                                    plannedTarget = plannedTarget.trim().takeIf { it.isNotBlank() }
                                 )
+                                onSave(updated, !isCreatingNew && nameChanged && learnAlias, exercise.name)
                             }
-                            val updated = exercise.copy(
-                                name = name.trim().ifBlank { exercise.name },
-                                sets = newSets,
-                                plannedTarget = plannedTarget.trim().takeIf { it.isNotBlank() }
-                            )
-                            onSave(updated, nameChanged && learnAlias, exercise.name)
-                        },
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
-                    ) {
-                        Text("Guardar cambios", color = Color.Black, fontWeight = FontWeight.Bold)
+                        )
                     }
                 }
             }
         }
     }
-}
-
-class MutablePairSet(
-    weight: Double,
-    repetitions: Int
-) {
-    var weightKg by mutableStateOf(weight)
-    var reps by mutableStateOf(repetitions)
 }

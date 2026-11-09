@@ -10,6 +10,9 @@ data class ParsedSet(
     val repetitions: Int,
     val isAssisted: Boolean = false,
     val isDumbbell: Boolean = false,
+    val isToFailure: Boolean = false,
+    val loadUnit: String = "KG",
+    val rawLoadValue: Double = weightGrams / 1000.0,
     val note: String = ""
 )
 
@@ -22,18 +25,32 @@ data class ParsedExercise(
 
 data class IrisXDirective(val command: String, val line: Int)
 
+data class UnrecognizedLine(
+    val lineNumber: Int,
+    val rawText: String,
+    val reason: String
+)
+
+private sealed interface ValueTokenItem { val start: Int }
+private data class LoadItem(override val start: Int, val value: Double, val unit: String) : ValueTokenItem
+private data class RepItem(override val start: Int, val reps: Int, val isFailure: Boolean) : ValueTokenItem
+
 data class ParsePreview(
     val sessionTitle: String?,
     val exercises: List<ParsedExercise>,
     val warnings: List<String>,
-    val assistantCommands: List<IrisXDirective> = emptyList()
+    val assistantCommands: List<IrisXDirective> = emptyList(),
+    val unrecognizedLines: List<UnrecognizedLine> = emptyList(),
+    val rawText: String = ""
 ) {
     val seriesCount: Int get() = exercises.sumOf { it.sets.size }
 }
 
 object WorkoutTextParser {
-    private val kgRegex = Regex("(?i)([-+]?\\d+(?:[.,]\\d+)?)\\s*kg\\b")
-    private val tokenRegex = Regex("(?i)([-+]?\\d+(?:[.,]\\d+)?)\\s*kg\\b|\\b(\\d{1,2})\\b")
+    private val loadWithUnitRegex = Regex("(?i)([-+]?\\d+(?:[.,]\\d+)?)\\s*(kg|kgs?|kilos?|lbs?|libras?|bloques?|placas?)\\b")
+    private val bodyweightRegex = Regex("(?i)\\b(?:peso corporal|corporal|sin peso|bw)\\b")
+    private val repTokenRegex = Regex("(?i)\\b(\\d{1,2})\\s*(?:f|al fallo|fallo)\\b|\\b(\\d{1,2})f\\b|\\b(\\d{1,2})\\b")
+    private val failureNoteRegex = Regex("(?i)\\(?(fallo[^)]*)\\)?")
     private val irisxCommandPrefix = Regex("^(?i)(?:irisx|@irisx)[:,-]?\\s*(.+)$")
     private val knownTitles = setOf("piernas", "pecho", "espalda", "hombros", "brazos", "full body", "torso", "empuje", "tiron", "push", "pull")
 
@@ -59,6 +76,7 @@ object WorkoutTextParser {
         val exercises = mutableListOf<ParsedExercise>()
         val warnings = mutableListOf<String>()
         val assistantCommands = mutableListOf<IrisXDirective>()
+        val unrecognizedLines = mutableListOf<UnrecognizedLine>()
         val aliasIndex = aliases.entries.associate { normalize(it.key) to it.value }
 
         val catalogNormalized = ExerciseCatalog.DEFAULT_CATALOG.map { it.normalizedName }.toSet()
@@ -76,10 +94,11 @@ object WorkoutTextParser {
                 return@forEachIndexed
             }
 
-            // 2. Detect session titles (exact match or starts with a known session title token when line has no kg)
+            // 2. Detect session titles (exact match or starts with a known session title token when line has no load)
             val cleanHeaderCandidate = normalize(line.removeSuffix(":"))
+            val hasLoadIndicator = loadWithUnitRegex.containsMatchIn(line) || bodyweightRegex.containsMatchIn(line)
             val isTitleCandidate = cleanHeaderCandidate in knownTitles ||
-                (!explicitTitleDetected && kgRegex.find(line) == null && knownTitles.any {
+                (!explicitTitleDetected && !hasLoadIndicator && knownTitles.any {
                     cleanHeaderCandidate.startsWith("$it ") || cleanHeaderCandidate.startsWith("rutina ")
                 })
             if (isTitleCandidate && !explicitTitleDetected) {
@@ -94,23 +113,56 @@ object WorkoutTextParser {
                 warnings += "Línea ${lineNumber + 1}: Expresión ambigua detectada ('${ambiguousMatch.value}'). Especificá si son repeticiones asistidas, series o descansos."
             }
 
-            // 4. Disambiguate everyday phrases (e.g. "buenos días") when missing exercise weight
-            val firstKg = kgRegex.find(line)
-            if (firstKg == null) {
-                val normalizedLine = normalize(line)
-                if (normalizedLine == "buenos dias") {
-                    warnings += "Línea ${lineNumber + 1}: 'Buenos días' no tiene carga ni series. Si es el ejercicio, especificá el peso (ej. 'Buenos días 40kg 10'). Si es para el asistente, usá 'IrisX: <mensaje>'."
-                } else if (ambiguousMatch == null) {
-                    warnings += "Línea ${lineNumber + 1}: no se reconoció un peso con unidad kg."
+            // 4. Locate first load match or bodyweight indicator
+            val firstLoad = loadWithUnitRegex.find(line) ?: bodyweightRegex.find(line)
+
+            if (firstLoad == null) {
+                // Check if line has planning notation (e.g. "Remo con barra 3 de 10 a 12")
+                val planMatch = planningRegex.find(line)
+                if (planMatch != null) {
+                    val setsCount = planMatch.groups[1]?.value
+                    val minReps = planMatch.groups[2]?.value
+                    val maxReps = planMatch.groups[3]?.value
+                    val plannedTarget = if (maxReps != null) {
+                        "$setsCount series de $minReps–$maxReps repeticiones"
+                    } else {
+                        "$setsCount series de $minReps repeticiones"
+                    }
+                    val cleanName = line.removeRange(planMatch.range).trim(' ', ':', '-', '–', ',')
+                    if (cleanName.isNotBlank()) {
+                        val resolvedName = aliasIndex[normalize(cleanName)] ?: cleanName
+                        exercises += ParsedExercise(
+                            name = resolvedName,
+                            sets = emptyList(),
+                            plannedTarget = plannedTarget,
+                            isNewExercise = !allKnown.contains(normalize(resolvedName))
+                        )
+                        warnings += "Línea ${lineNumber + 1}: '$resolvedName' tiene plan ($plannedTarget) pero no tiene series ejecutadas aún. Podés completarlas en la revisión."
+                        return@forEachIndexed
+                    }
                 }
+
+                val normalizedLine = normalize(line)
+                val isBuenosDias = normalizedLine == "buenos dias"
+                val reason = if (isBuenosDias) {
+                    "'Buenos días' no tiene carga ni series. Si es el ejercicio, especificá el peso (ej. 'Buenos días 40kg 10'). Si es para el asistente, usá 'IrisX: <mensaje>'."
+                } else {
+                    "No se reconoció carga (kg, lb, bloques, placas, peso corporal) ni series."
+                }
+                val warningMsg = if (isBuenosDias) {
+                    "Línea ${lineNumber + 1}: 'Buenos días' no tiene carga ni series. Si es para el asistente IrisX, usá 'IrisX: <mensaje>'."
+                } else {
+                    "Línea ${lineNumber + 1}: no se reconoció un peso con unidad válida para '$line'."
+                }
+                unrecognizedLines += UnrecognizedLine(lineNumber + 1, line, reason)
+                warnings += warningMsg
                 return@forEachIndexed
             }
 
             // 5. Separate exercise name & planned target from execution values
-            val prefix = line.substring(0, firstKg.range.first).trim()
-            val values = line.substring(firstKg.range.first)
+            val prefix = line.substring(0, firstLoad.range.first).trim()
+            val values = line.substring(firstLoad.range.first)
 
-            // Extract planning (e.g. "3 de 10 a 12", "3x10-12")
             var plannedTarget: String? = null
             var exerciseNameRaw = prefix
 
@@ -124,12 +176,12 @@ object WorkoutTextParser {
                 } else {
                     "$setsCount series de $minReps repeticiones"
                 }
-                // Strip planning from exercise name
                 exerciseNameRaw = prefix.removeRange(planMatch.range)
             }
 
             val cleanName = exerciseNameRaw.trim(' ', ':', '-', '–', ',')
             if (cleanName.isBlank()) {
+                unrecognizedLines += UnrecognizedLine(lineNumber + 1, line, "Falta el nombre del ejercicio previo a la carga.")
                 warnings += "Línea ${lineNumber + 1}: falta el nombre del ejercicio."
                 return@forEachIndexed
             }
@@ -139,45 +191,115 @@ object WorkoutTextParser {
             val isAssistedLine = assistedRegex.containsMatchIn(line)
             val isUnilateralLine = unilateralRegex.containsMatchIn(line)
             val isWeightedBwLine = weightedBwRegex.containsMatchIn(line)
+            val generalFailureMatch = failureNoteRegex.find(line)
 
             // Resolve aliases & canonical name
             val resolvedName = aliasIndex[normalize(cleanName)] ?: cleanName
             val isKnown = allKnown.contains(normalize(resolvedName))
             val isNewExercise = !isKnown
 
-            // Parse sets and weights
-            var currentWeight: Int? = null
+            // Collect load matches in values
+            val loadMatches = mutableListOf<Triple<IntRange, Double, String>>()
+            for (m in loadWithUnitRegex.findAll(values)) {
+                val rawClean = m.groups[1]?.value?.replace(',', '.').orEmpty()
+                val isNegative = rawClean.startsWith("-")
+                val isPositivePlus = rawClean.startsWith("+")
+                val absVal = rawClean.removePrefix("+").removePrefix("-").toDoubleOrNull() ?: 0.0
+                val rawUnit = m.groups[2]?.value?.lowercase(Locale.ROOT).orEmpty()
+                val canonicalUnit = when {
+                    rawUnit.startsWith("kg") || rawUnit.startsWith("kilo") -> "KG"
+                    rawUnit.startsWith("lb") || rawUnit.startsWith("libra") -> "LBS"
+                    rawUnit.startsWith("bloque") -> "BLOQUES"
+                    rawUnit.startsWith("placa") -> "PLACAS"
+                    else -> "KG"
+                }
+                val signedVal = if (isNegative) -absVal else absVal
+                loadMatches.add(Triple(m.range, signedVal, canonicalUnit))
+            }
+            for (m in bodyweightRegex.findAll(values)) {
+                loadMatches.add(Triple(m.range, 0.0, "BW"))
+            }
+            loadMatches.sortBy { it.first.first }
+            val loadRanges = loadMatches.map { it.first }
+
+            // Range validation: flag invalid 0kg or extreme loads (>1000kg)
+            val outOfRangeLoad = loadMatches.firstOrNull { (_, v, u) ->
+                val abs = kotlin.math.abs(v)
+                (u == "KG" && (abs <= 0.0 || abs > 1000.0)) ||
+                (u == "LBS" && (abs <= 0.0 || abs > 2200.0)) ||
+                (u in listOf("BLOQUES", "PLACAS") && (abs <= 0.0 || abs > 100.0))
+            }
+            if (outOfRangeLoad != null) {
+                unrecognizedLines += UnrecognizedLine(lineNumber + 1, line, "Carga fuera de rango (${outOfRangeLoad.second} ${outOfRangeLoad.third}).")
+                warnings += "Línea ${lineNumber + 1}: carga fuera de rango para '$cleanName'."
+                return@forEachIndexed
+            }
+
+            val allSetsToFailure = line.contains(Regex("\\btodas? (?:las series )?al fallo\\b", RegexOption.IGNORE_CASE))
+
+            // Collect rep matches in values (excluding ranges occupied by load tokens)
+            data class RepMatch(val range: IntRange, val reps: Int, val isFailure: Boolean)
+            val repMatches = mutableListOf<RepMatch>()
+
+            for (m in repTokenRegex.findAll(values)) {
+                if (loadRanges.any { lr -> m.range.first in lr || m.range.last in lr }) continue
+
+                val group1 = m.groups[1]?.value
+                val group2 = m.groups[2]?.value
+                val group3 = m.groups[3]?.value
+
+                val reps = (group1 ?: group2 ?: group3)?.toIntOrNull()
+                if (reps != null && reps in 1..99) {
+                    val isFail = group1 != null || group2 != null
+                    repMatches.add(RepMatch(m.range, reps, isFail))
+                }
+            }
+            repMatches.sortBy { it.range.first }
+
+            val allTokens = mutableListOf<ValueTokenItem>()
+            loadMatches.forEach { allTokens.add(LoadItem(it.first.first, it.second, it.third)) }
+            repMatches.forEach { allTokens.add(RepItem(it.range.first, it.reps, it.isFailure)) }
+            allTokens.sortBy { it.start }
+
+            var currentRawLoad = 0.0
+            var currentUnit = "KG"
             var currentAssisted = isAssistedLine
             var currentWeightedBw = isWeightedBwLine
             val sets = mutableListOf<ParsedSet>()
 
-            for (match in tokenRegex.findAll(values)) {
-                val kilos = match.groups[1]?.value
-                if (kilos != null) {
-                    val rawClean = kilos.replace(',', '.')
-                    val isNegative = rawClean.startsWith("-")
-                    val isPositivePlus = rawClean.startsWith("+")
-                    val absVal = rawClean.removePrefix("+").removePrefix("-").toDoubleOrNull()
-                    if (absVal == null || absVal <= 0 || absVal > 1000) {
-                        warnings += "Línea ${lineNumber + 1}: carga fuera de rango ($kilos)."
-                        currentWeight = null
-                    } else {
-                        currentWeight = (absVal * 1000).roundToInt()
+            for (token in allTokens) {
+                when (token) {
+                    is LoadItem -> {
+                        val isNegative = token.value < 0.0
+                        val absVal = kotlin.math.abs(token.value)
+                        currentRawLoad = absVal
+                        currentUnit = token.unit
                         currentAssisted = isAssistedLine || isNegative
-                        currentWeightedBw = isWeightedBwLine || isPositivePlus
+                        currentWeightedBw = isWeightedBwLine || (token.value > 0.0 && token.unit == "KG" && values.contains("+"))
                     }
-                } else {
-                    val reps = match.groups[2]?.value?.toIntOrNull()
-                    if (currentWeight != null && reps != null && reps in 1..99) {
+                    is RepItem -> {
+                        val weightGrams = when (currentUnit) {
+                            "KG" -> (currentRawLoad * 1000).roundToInt()
+                            "LBS" -> (currentRawLoad * 453.592).roundToInt()
+                            "BLOQUES", "PLACAS" -> (currentRawLoad * 1000).roundToInt()
+                            "BW" -> 0
+                            else -> (currentRawLoad * 1000).roundToInt()
+                        }
+                        val setFailure = token.isFailure || allSetsToFailure
                         val noteTags = buildList {
                             if (isUnilateralLine) add("[UNILATERAL]")
-                            if (currentWeightedBw && !currentAssisted) add("[LASTRE]")
+                            if (currentWeightedBw && !currentAssisted && currentUnit != "BW") add("[LASTRE]")
+                            if (setFailure) add("[FALLO]")
                         }.joinToString(" ")
+
                         sets += ParsedSet(
-                            weightGrams = currentWeight,
-                            repetitions = reps,
+                            weightGrams = weightGrams,
+                            repetitions = token.reps,
                             isAssisted = currentAssisted,
                             isDumbbell = isDumbbell,
+                            isToFailure = setFailure,
+                            loadUnit = currentUnit,
+                            rawLoadValue = currentRawLoad,
                             note = noteTags
                         )
                     }
@@ -185,6 +307,7 @@ object WorkoutTextParser {
             }
 
             if (sets.isEmpty()) {
+                unrecognizedLines += UnrecognizedLine(lineNumber + 1, line, "Se identificó '$resolvedName' pero no se detectaron repeticiones válidas.")
                 warnings += "Línea ${lineNumber + 1}: no se encontraron series válidas para '$resolvedName'."
             } else {
                 exercises += ParsedExercise(
@@ -196,6 +319,6 @@ object WorkoutTextParser {
             }
         }
 
-        return ParsePreview(sessionTitle, exercises, warnings, assistantCommands)
+        return ParsePreview(sessionTitle, exercises, warnings, assistantCommands, unrecognizedLines, raw)
     }
 }
