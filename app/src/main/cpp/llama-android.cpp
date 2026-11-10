@@ -1,11 +1,14 @@
 #include <android/log.h>
 #include <jni.h>
+#include <atomic>
 #include <iomanip>
 #include <math.h>
 #include <string>
 #include <unistd.h>
 #include "llama.h"
 #include "common.h"
+
+static std::atomic<bool> g_is_cancelled{false};
 
 // Write C++ code here.
 //
@@ -291,7 +294,11 @@ Java_android_llama_cpp_LLamaAndroid_new_1sampler(JNIEnv *, jobject) {
     auto sparams = llama_sampler_chain_default_params();
     sparams.no_perf = true;
     llama_sampler * smpl = llama_sampler_chain_init(sparams);
-    llama_sampler_chain_add(smpl, llama_sampler_init_greedy());
+    llama_sampler_chain_add(smpl, llama_sampler_init_penalties(64, 1.15f, 0.0f, 0.0f));
+    llama_sampler_chain_add(smpl, llama_sampler_init_top_k(40));
+    llama_sampler_chain_add(smpl, llama_sampler_init_top_p(0.85f, 1));
+    llama_sampler_chain_add(smpl, llama_sampler_init_temp(0.7f));
+    llama_sampler_chain_add(smpl, llama_sampler_init_dist(LLAMA_DEFAULT_SEED));
 
     return reinterpret_cast<jlong>(smpl);
 }
@@ -300,6 +307,13 @@ extern "C"
 JNIEXPORT void JNICALL
 Java_android_llama_cpp_LLamaAndroid_free_1sampler(JNIEnv *, jobject, jlong sampler_pointer) {
     llama_sampler_free(reinterpret_cast<llama_sampler *>(sampler_pointer));
+}
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_android_llama_cpp_LLamaAndroid_cancel_1generation(JNIEnv *, jobject) {
+    g_is_cancelled.store(true);
+    LOGi("cancel_generation() called from JNI");
 }
 
 extern "C"
@@ -327,21 +341,31 @@ Java_android_llama_cpp_LLamaAndroid_completion_1init(
     ) {
 
     cached_token_chars.clear();
+    g_is_cancelled.store(false);
 
     const auto text = env->GetStringUTFChars(jtext, 0);
     const auto context = reinterpret_cast<llama_context *>(context_pointer);
     const auto batch = reinterpret_cast<llama_batch *>(batch_pointer);
 
-    bool parse_special = (format_chat == JNI_TRUE) || (text != nullptr && strstr(text, "<|im_start|>") != nullptr);
-    const auto tokens_list = common_tokenize(context, text, true, parse_special);
+    bool has_chatml = (format_chat == JNI_TRUE) || (text != nullptr && strstr(text, "<|im_start|>") != nullptr);
+    bool parse_special = has_chatml;
+    bool add_special = !has_chatml; // Avoid double BOS token corruption when ChatML is present
+    const auto tokens_list = common_tokenize(context, text, add_special, parse_special);
 
     auto n_ctx = llama_n_ctx(context);
     auto n_kv_req = tokens_list.size() + n_len;
 
-    LOGi("n_len = %d, n_ctx = %u, n_kv_req = %zu", n_len, n_ctx, n_kv_req);
+    LOGi("n_len = %d, n_ctx = %u, n_kv_req = %zu, add_special = %d, parse_special = %d",
+         n_len, n_ctx, n_kv_req, add_special ? 1 : 0, parse_special ? 1 : 0);
 
     if (n_kv_req > n_ctx) {
         LOGe("error: n_kv_req > n_ctx, the required KV cache size is not big enough");
+    }
+
+    if (g_is_cancelled.load()) {
+        LOGi("completion_init: aborted due to cancellation");
+        env->ReleaseStringUTFChars(jtext, text);
+        return 0;
     }
 
     for (auto id : tokens_list) {
@@ -378,6 +402,11 @@ Java_android_llama_cpp_LLamaAndroid_completion_1loop(
         jint n_len,
         jobject intvar_ncur
 ) {
+    if (g_is_cancelled.load()) {
+        LOGi("completion_loop: generation was cancelled cooperatively");
+        return nullptr;
+    }
+
     const auto context = reinterpret_cast<llama_context *>(context_pointer);
     const auto batch   = reinterpret_cast<llama_batch   *>(batch_pointer);
     const auto sampler = reinterpret_cast<llama_sampler *>(sampler_pointer);
@@ -390,6 +419,11 @@ Java_android_llama_cpp_LLamaAndroid_completion_1loop(
 
     // sample the most likely token
     const auto new_token_id = llama_sampler_sample(sampler, context, -1);
+
+    if (g_is_cancelled.load()) {
+        LOGi("completion_loop: cancelled after sampling");
+        return nullptr;
+    }
 
     const auto n_cur = env->CallIntMethod(intvar_ncur, la_int_var_value);
     if (llama_vocab_is_eog(vocab, new_token_id) || n_cur >= n_len) {

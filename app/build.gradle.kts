@@ -13,8 +13,8 @@ android {
         applicationId = "com.syntra.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 16
-        versionName = "0.7.0-alpha7"
+        versionCode = 17
+        versionName = "0.7.0-alpha8"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         ndk {
@@ -23,7 +23,9 @@ android {
 
         externalNativeBuild {
             cmake {
-                arguments("-DANDROID_STL=c++_shared")
+                arguments("-DANDROID_STL=c++_shared", "-DCMAKE_BUILD_TYPE=Release", "-DLLAMA_CURL=OFF")
+                cFlags("-O3", "-DNDEBUG")
+                cppFlags("-O3", "-DNDEBUG")
             }
         }
     }

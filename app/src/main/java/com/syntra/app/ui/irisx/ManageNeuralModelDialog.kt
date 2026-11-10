@@ -220,7 +220,7 @@ fun ManageNeuralModelDialog(
                                         testMetricsSummary = null
                                         testError = null
 
-                                        val testPrompt = "<|im_start|>system\nSos IrisX, asistente de entrenamiento de Syntra.<|im_end|>\n<|im_start|>user\nHola IrisX, ¿qué es la sobrecarga progresiva?<|im_end|>\n<|im_start|>assistant\n"
+                                        val testPrompt = "<|im_start|>system\nSos IrisX, asistente de entrenamiento de Syntra.<|im_end|>\n<|im_start|>user\nHola IrisX, ¿qué es la sobrecarga progresiva?<|im_end|>\n<|im_start|>assistant\n<think>\n</think>\n"
                                         val testStartTime = System.currentTimeMillis()
                                         var firstTokenTime: Long? = null
                                         var count = 0

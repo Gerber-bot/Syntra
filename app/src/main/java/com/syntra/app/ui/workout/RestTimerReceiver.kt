@@ -321,26 +321,27 @@ class RestTimerReceiver : BroadcastReceiver() {
 
             try {
                 // 1. Dual-path vibration with USAGE_ALARM attributes for screen-off & locked vibration
-                val waveform = longArrayOf(0, 350, 150, 350)
+                val waveform = longArrayOf(0, 450, 150, 450)
+                val amplitudes = intArrayOf(0, 255, 0, 255)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                     val vibratorManager = context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager
                     val vibrator = vibratorManager?.defaultVibrator
-                    val effect = VibrationEffect.createWaveform(waveform, -1)
+                    val effect = VibrationEffect.createWaveform(waveform, amplitudes, -1)
                     val attributes = VibrationAttributes.Builder()
                         .setUsage(VibrationAttributes.USAGE_ALARM)
                         .build()
                     vibrator?.vibrate(effect, attributes)
-                    RestTimerDiagnostics.log("VIBRATION_REQUESTED", "VibratorManager USAGE_ALARM (screenOn=$isScreenInteractive)")
+                    RestTimerDiagnostics.log("VIBRATION_REQUESTED", "VibratorManager USAGE_ALARM max amp (screenOn=$isScreenInteractive)")
                 } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     @Suppress("DEPRECATION")
                     val vibrator = context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
-                    val effect = VibrationEffect.createWaveform(waveform, -1)
+                    val effect = VibrationEffect.createWaveform(waveform, amplitudes, -1)
                     val audioAttributes = AudioAttributes.Builder()
                         .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
                         .setUsage(AudioAttributes.USAGE_ALARM)
                         .build()
                     vibrator?.vibrate(effect, audioAttributes)
-                    RestTimerDiagnostics.log("VIBRATION_REQUESTED", "Vibrator USAGE_ALARM (screenOn=$isScreenInteractive)")
+                    RestTimerDiagnostics.log("VIBRATION_REQUESTED", "Vibrator USAGE_ALARM max amp (screenOn=$isScreenInteractive)")
                 } else {
                     @Suppress("DEPRECATION")
                     val vibrator = context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator

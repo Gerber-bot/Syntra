@@ -105,7 +105,7 @@ object IrisXContextBuilder {
         sb.append("<|im_start|>user\n")
         sb.append(userMessage.trim()).append("\n")
         sb.append("<|im_end|>\n")
-        sb.append("<|im_start|>assistant\n")
+        sb.append("<|im_start|>assistant\n<think>\n</think>\n")
 
         sb.toString()
     }
@@ -145,6 +145,8 @@ object IrisXContextBuilder {
         return text.replace("<|im_start|>", "")
             .replace("<|im_end|>", "")
             .replace("<|endoftext|>", "")
+            .replace("<think>", "")
+            .replace("</think>", "")
             .replace(Regex("<\\|.*?\\|>"), "")
             .trim()
     }

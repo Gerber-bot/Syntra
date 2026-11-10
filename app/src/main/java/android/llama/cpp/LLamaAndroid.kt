@@ -85,6 +85,17 @@ class LLamaAndroid {
     ): String?
 
     private external fun kv_cache_clear(context: Long)
+    private external fun cancel_generation()
+
+    fun cancel() {
+        if (isLibraryLoaded) {
+            try {
+                cancel_generation()
+            } catch (t: Throwable) {
+                Log.w(tag, "Failed to cancel generation: ${t.message}")
+            }
+        }
+    }
 
     suspend fun bench(pp: Int, tg: Int, pl: Int, nr: Int = 1): String {
         return withContext(runLoop) {
@@ -132,14 +143,17 @@ class LLamaAndroid {
                 val promptTokens = completion_init(state.context, state.batch, message, formatChat, maxTokens)
                 val targetEnd = promptTokens + maxTokens
                 val ncur = IntVar(promptTokens)
-                while (ncur.value < targetEnd) {
-                    val str = completion_loop(state.context, state.batch, state.sampler, targetEnd, ncur)
-                    if (str == null) {
-                        break
+                try {
+                    while (ncur.value < targetEnd) {
+                        val str = completion_loop(state.context, state.batch, state.sampler, targetEnd, ncur)
+                        if (str == null) {
+                            break
+                        }
+                        emit(str)
                     }
-                    emit(str)
+                } finally {
+                    kv_cache_clear(state.context)
                 }
-                kv_cache_clear(state.context)
             }
             is State.Idle -> throw IllegalStateException("No model loaded")
         }

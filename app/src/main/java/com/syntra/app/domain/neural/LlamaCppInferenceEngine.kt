@@ -180,6 +180,11 @@ class LlamaCppInferenceEngine(
 
     override fun cancel() {
         isCancelled = true
+        if (isNativeAvailable()) {
+            try {
+                LLamaAndroid.instance().cancel()
+            } catch (_: Throwable) {}
+        }
         fallbackEngine?.cancel()
         if (state == EngineState.GENERATING) {
             state = EngineState.READY
