@@ -1919,7 +1919,7 @@ private fun ParserScreen(
 
     val currentExercises = editedExercises
     val compactExercises = remember(currentExercises) {
-        WorkoutPresentation.toCompactList(currentExercises)
+        currentExercises.map { WorkoutPresentation.toCompact(it) }
     }
 
     if (exerciseToEdit != null) {
@@ -1927,7 +1927,7 @@ private fun ParserScreen(
             exercise = exerciseToEdit!!,
             onDismiss = { exerciseToEdit = null },
             onSave = { updated, learnAlias, originalName ->
-                editedExercises = editedExercises.map { if (it.name == originalName) updated else it }
+                editedExercises = editedExercises.map { if (it.uid == updated.uid) updated else it }
                 if (learnAlias) {
                     scope.launch {
                         val normAlias = WorkoutTextParser.normalize(originalName)
@@ -2219,7 +2219,7 @@ private fun ParserScreen(
                             }
                             OutlinedButton(
                                 onClick = {
-                                    exerciseToEdit = currentExercises.find { it.name == exercise.name }
+                                    exerciseToEdit = currentExercises.find { it.uid == exercise.uid }
                                 },
                                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
                             ) {

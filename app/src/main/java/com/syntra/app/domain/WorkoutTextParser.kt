@@ -12,7 +12,7 @@ data class ParsedSet(
     val isDumbbell: Boolean = false,
     val isToFailure: Boolean = false,
     val loadUnit: String = "KG",
-    val rawLoadValue: Double = weightGrams / 1000.0,
+    val rawLoadValue: Double = UnitConverter.toRawValue(weightGrams, loadUnit),
     val note: String = ""
 )
 
@@ -20,7 +20,8 @@ data class ParsedExercise(
     val name: String,
     val sets: List<ParsedSet>,
     val plannedTarget: String? = null,
-    val isNewExercise: Boolean = false
+    val isNewExercise: Boolean = false,
+    val uid: String = java.util.UUID.randomUUID().toString()
 )
 
 data class IrisXDirective(val command: String, val line: Int)
@@ -220,13 +221,7 @@ object WorkoutTextParser {
                 val isPositivePlus = rawClean.startsWith("+")
                 val absVal = rawClean.removePrefix("+").removePrefix("-").toDoubleOrNull() ?: 0.0
                 val rawUnit = m.groups[2]?.value?.lowercase(Locale.ROOT).orEmpty()
-                val canonicalUnit = when {
-                    rawUnit.startsWith("kg") || rawUnit.startsWith("kilo") -> "KG"
-                    rawUnit.startsWith("lb") || rawUnit.startsWith("libra") -> "LBS"
-                    rawUnit.startsWith("bloque") -> "BLOQUES"
-                    rawUnit.startsWith("placa") -> "PLACAS"
-                    else -> "KG"
-                }
+                val canonicalUnit = UnitConverter.canonicalUnit(m.groups[2]?.value)
                 val signedVal = if (isNegative) -absVal else absVal
                 loadMatches.add(Triple(m.range, signedVal, canonicalUnit))
             }
@@ -236,12 +231,9 @@ object WorkoutTextParser {
             loadMatches.sortBy { it.first.first }
             val loadRanges = loadMatches.map { it.first }
 
-            // Range validation: flag invalid 0kg or extreme loads (>1000kg)
+            // Range validation: flag invalid loads
             val outOfRangeLoad = loadMatches.firstOrNull { (_, v, u) ->
-                val abs = kotlin.math.abs(v)
-                (u == "KG" && (abs <= 0.0 || abs > 1000.0)) ||
-                (u == "LBS" && (abs <= 0.0 || abs > 2200.0)) ||
-                (u in listOf("BLOQUES", "PLACAS") && (abs <= 0.0 || abs > 100.0))
+                !UnitConverter.isValidLoad(kotlin.math.abs(v), u)
             }
             if (outOfRangeLoad != null) {
                 unrecognizedLines += UnrecognizedLine(lineNumber + 1, line, "Carga fuera de rango (${outOfRangeLoad.second} ${outOfRangeLoad.third}).")
@@ -292,13 +284,7 @@ object WorkoutTextParser {
                         currentWeightedBw = isWeightedBwLine || (token.value > 0.0 && token.unit == "KG" && values.contains("+"))
                     }
                     is RepItem -> {
-                        val weightGrams = when (currentUnit) {
-                            "KG" -> (currentRawLoad * 1000).roundToInt()
-                            "LBS" -> (currentRawLoad * 453.592).roundToInt()
-                            "BLOQUES", "PLACAS" -> (currentRawLoad * 1000).roundToInt()
-                            "BW" -> 0
-                            else -> (currentRawLoad * 1000).roundToInt()
-                        }
+                        val weightGrams = UnitConverter.toGrams(currentRawLoad, currentUnit)
                         val setFailure = token.isFailure || allSetsToFailure
                         val noteTags = buildList {
                             if (isUnilateralLine) add("[UNILATERAL]")

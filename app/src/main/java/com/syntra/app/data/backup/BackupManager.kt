@@ -11,7 +11,7 @@ import java.nio.charset.StandardCharsets
 
 class BackupManager(private val db: AppDatabase) {
 
-    suspend fun createBackupPayload(): SyntraBackupPayload {
+    suspend fun createBackupPayload(): SyntraBackupPayload = db.withTransaction {
         val profileEntity = db.profileDao().get()
         val profileDto = profileEntity?.let { p ->
             ProfileBackupDto(
@@ -190,9 +190,9 @@ class BackupManager(private val db: AppDatabase) {
             )
         }
 
-        return SyntraBackupPayload(
+        SyntraBackupPayload(
             formatVersion = BackupSerializer.CURRENT_FORMAT_VERSION,
-            appVersion = "0.6.0",
+            appVersion = "0.7.0-alpha9",
             exportedAtMillis = System.currentTimeMillis(),
             profile = profileDto,
             weighIns = weighIns,

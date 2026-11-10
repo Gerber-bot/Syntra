@@ -26,11 +26,13 @@ import com.syntra.app.data.AppDatabase
 import com.syntra.app.data.ExerciseEntity
 import com.syntra.app.data.WorkoutSessionEntity
 import com.syntra.app.data.WorkoutSetEntity
+import com.syntra.app.domain.UnitConverter
 import com.syntra.app.ui.theme.*
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -538,14 +540,7 @@ fun EditWorkoutSessionDialog(
  * Helper to format set load according to its unit.
  */
 private fun formatSetLoadDisplay(s: WorkoutSetEntity): String {
-    val raw = s.loadGrams / 1000.0
-    return when (s.loadUnit.uppercase()) {
-        "BW" -> "BW"
-        "BLOQUES" -> "${raw.toInt()} bloques"
-        "PLACAS" -> "${raw.toInt()} placas"
-        "LBS", "LB" -> "${raw.toInt()} lb"
-        else -> "${if (raw % 1.0 == 0.0) raw.toInt().toString() else String.format(Locale.US, "%.1f", raw)} kg"
-    }
+    return UnitConverter.formatDisplay(s.loadGrams, s.loadUnit)
 }
 
 @Composable
@@ -555,9 +550,15 @@ private fun EditIndividualSetDialog(
     onDismiss: () -> Unit,
     onSave: (WorkoutSetEntity) -> Unit
 ) {
-    val initialRaw = targetSet.loadGrams / 1000.0
+    val initialRaw = UnitConverter.toRawValue(targetSet.loadGrams, targetSet.loadUnit)
     var loadText by remember {
-        mutableStateOf(if (targetSet.loadUnit.uppercase() == "BW") "" else if (initialRaw % 1.0 == 0.0) initialRaw.toInt().toString() else initialRaw.toString())
+        mutableStateOf(
+            if (targetSet.loadUnit.uppercase() == "BW") ""
+            else {
+                val rounded = (initialRaw * 10.0).roundToInt() / 10.0
+                if (rounded % 1.0 == 0.0) rounded.toInt().toString() else rounded.toString()
+            }
+        )
     }
     var selectedUnit by remember { mutableStateOf(targetSet.loadUnit.ifBlank { "KG" }) }
     var repsText by remember { mutableStateOf(targetSet.repetitions.toString()) }
@@ -565,6 +566,12 @@ private fun EditIndividualSetDialog(
     var noteText by remember { mutableStateOf(targetSet.note) }
 
     val units = listOf("KG", "BLOQUES", "PLACAS", "LBS", "BW")
+
+    val parsedLoad = if (selectedUnit == "BW") 0.0 else loadText.trim().replace(',', '.').toDoubleOrNull()
+    val isLoadValid = selectedUnit == "BW" || (parsedLoad != null && UnitConverter.isValidLoad(parsedLoad, selectedUnit))
+    val parsedReps = repsText.trim().toIntOrNull()
+    val isRepsValid = parsedReps != null && parsedReps in 1..200
+    val canSave = isLoadValid && isRepsValid
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -627,6 +634,12 @@ private fun EditIndividualSetDialog(
                         label = { Text("Carga (${selectedUnit})", color = SyntraColors.TextMuted) },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                         enabled = selectedUnit != "BW",
+                        isError = !isLoadValid && selectedUnit != "BW",
+                        supportingText = {
+                            if (!isLoadValid && selectedUnit != "BW") {
+                                Text("Carga inválida", color = SyntraColors.Error, fontSize = 10.sp)
+                            }
+                        },
                         modifier = Modifier.weight(1f),
                         singleLine = true,
                         colors = OutlinedTextFieldDefaults.colors(
@@ -642,6 +655,12 @@ private fun EditIndividualSetDialog(
                         onValueChange = { repsText = it },
                         label = { Text("Reps", color = SyntraColors.TextMuted) },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        isError = !isRepsValid,
+                        supportingText = {
+                            if (!isRepsValid) {
+                                Text("Entre 1 y 200", color = SyntraColors.Error, fontSize = 10.sp)
+                            }
+                        },
                         modifier = Modifier.weight(1f),
                         singleLine = true,
                         colors = OutlinedTextFieldDefaults.colors(
@@ -698,13 +717,15 @@ private fun EditIndividualSetDialog(
                     Spacer(Modifier.width(8.dp))
                     SyntraButton(
                         text = "Listo",
+                        enabled = canSave,
                         onClick = {
-                            val parsedLoad = if (selectedUnit == "BW") 0.0 else loadText.toDoubleOrNull() ?: 0.0
-                            val parsedReps = repsText.toIntOrNull() ?: 1
-                            val loadGrams = (parsedLoad * 1000).toInt()
+                            if (!canSave) return@SyntraButton
+                            val safeLoad = parsedLoad ?: 0.0
+                            val safeReps = parsedReps ?: 1
+                            val loadGrams = UnitConverter.toGrams(safeLoad, selectedUnit)
                             val updated = targetSet.copy(
                                 loadGrams = loadGrams,
-                                repetitions = parsedReps,
+                                repetitions = safeReps,
                                 loadUnit = selectedUnit,
                                 isToFailure = isToFailure,
                                 note = noteText.trim()

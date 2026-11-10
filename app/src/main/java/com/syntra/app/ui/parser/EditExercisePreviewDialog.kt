@@ -19,6 +19,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.syntra.app.domain.ParsedExercise
 import com.syntra.app.domain.ParsedSet
+import com.syntra.app.domain.UnitConverter
 import com.syntra.app.ui.theme.*
 import java.util.Locale
 
@@ -27,13 +28,17 @@ class MutablePairSet(
     repetitions: Int,
     unit: String = "KG",
     toFailure: Boolean = false,
-    note: String = ""
+    note: String = "",
+    isAssisted: Boolean = false,
+    isDumbbell: Boolean = false
 ) {
     var loadValue by mutableStateOf(weight)
     var reps by mutableStateOf(repetitions)
     var unit by mutableStateOf(unit)
     var toFailure by mutableStateOf(toFailure)
     var note by mutableStateOf(note)
+    var isAssisted by mutableStateOf(isAssisted)
+    var isDumbbell by mutableStateOf(isDumbbell)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -57,7 +62,9 @@ fun EditExercisePreviewDialog(
                         repetitions = it.repetitions,
                         unit = it.loadUnit,
                         toFailure = it.isToFailure,
-                        note = it.note
+                        note = it.note,
+                        isAssisted = it.isAssisted,
+                        isDumbbell = it.isDumbbell
                     )
                 })
             }
@@ -269,6 +276,34 @@ fun EditExercisePreviewDialog(
                                     )
                                 )
 
+                                // Mancuerna toggle chip
+                                FilterChip(
+                                    selected = setItem.isDumbbell,
+                                    onClick = { setItem.isDumbbell = !setItem.isDumbbell },
+                                    label = { Text("manc", fontSize = 10.sp, fontWeight = FontWeight.SemiBold) },
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        selectedContainerColor = SyntraColors.DarkMint,
+                                        selectedLabelColor = SyntraColors.NeonMint,
+                                        containerColor = SyntraColors.SurfaceHighlight,
+                                        labelColor = SyntraColors.TextMuted
+                                    ),
+                                    border = BorderStroke(1.dp, if (setItem.isDumbbell) SyntraColors.NeonMint else SyntraColors.BorderSubtle)
+                                )
+
+                                // Asistida toggle chip
+                                FilterChip(
+                                    selected = setItem.isAssisted,
+                                    onClick = { setItem.isAssisted = !setItem.isAssisted },
+                                    label = { Text("asist", fontSize = 10.sp, fontWeight = FontWeight.SemiBold) },
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        selectedContainerColor = SyntraColors.DarkMint,
+                                        selectedLabelColor = SyntraColors.NeonMint,
+                                        containerColor = SyntraColors.SurfaceHighlight,
+                                        labelColor = SyntraColors.TextMuted
+                                    ),
+                                    border = BorderStroke(1.dp, if (setItem.isAssisted) SyntraColors.NeonMint else SyntraColors.BorderSubtle)
+                                )
+
                                 // Fallo toggle button
                                 FilterChip(
                                     selected = setItem.toFailure,
@@ -329,20 +364,16 @@ fun EditExercisePreviewDialog(
                             text = if (isCreatingNew) "Agregar" else "Guardar cambios",
                             onClick = {
                                 val newSets = sets.map {
-                                    val grams = when (it.unit) {
-                                        "KG" -> (it.loadValue * 1000).toInt()
-                                        "LBS" -> (it.loadValue * 453.592).toInt()
-                                        "BLOQUES", "PLACAS" -> (it.loadValue * 1000).toInt()
-                                        "BW" -> 0
-                                        else -> (it.loadValue * 1000).toInt()
-                                    }
+                                    val grams = UnitConverter.toGrams(it.loadValue, it.unit)
                                     ParsedSet(
                                         weightGrams = grams,
                                         repetitions = it.reps,
+                                        isAssisted = it.isAssisted,
+                                        isDumbbell = it.isDumbbell,
                                         isToFailure = it.toFailure,
                                         loadUnit = it.unit,
                                         rawLoadValue = it.loadValue,
-                                        note = if (it.toFailure) "[FALLO] ${it.note}".trim() else it.note
+                                        note = if (it.toFailure && !it.note.contains("[FALLO]")) "[FALLO] ${it.note}".trim() else it.note
                                     )
                                 }
                                 val updated = exercise.copy(

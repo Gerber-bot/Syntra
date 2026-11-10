@@ -17,7 +17,7 @@ data class CompactSetGroup(
     val isDumbbell: Boolean = false,
     val isToFailure: Boolean = false,
     val loadUnit: String = "KG",
-    val rawLoadValue: Double = weightGrams / 1000.0,
+    val rawLoadValue: Double = UnitConverter.toRawValue(weightGrams, loadUnit),
     val note: String = "",
     val repNotations: List<String> = emptyList()
 ) {
@@ -25,11 +25,8 @@ data class CompactSetGroup(
 
     fun formattedWeight(): String {
         val base = when (loadUnit.uppercase()) {
-            "BLOQUES" -> "${rawLoadValue.toInt()} bloques"
-            "PLACAS" -> "${rawLoadValue.toInt()} placas"
-            "LBS", "LB" -> "${rawLoadValue.toInt()} lb"
             "BW" -> "Peso corporal"
-            else -> WorkoutPresentation.formatWeightKg(weightGrams)
+            else -> UnitConverter.formatDisplay(weightGrams, loadUnit)
         }
         return when {
             isAssisted -> "-$base (asistido)"
@@ -57,7 +54,8 @@ data class CompactExercise(
     val name: String,
     val groups: List<CompactSetGroup>,
     val plannedTarget: String? = null,
-    val isNewExercise: Boolean = false
+    val isNewExercise: Boolean = false,
+    val uid: String = ""
 ) {
     val totalSeriesCount: Int get() = groups.sumOf { it.setCount }
 }
@@ -155,7 +153,8 @@ object WorkoutPresentation {
             name = exercise.name,
             groups = groupConsecutiveSets(exercise.sets),
             plannedTarget = exercise.plannedTarget,
-            isNewExercise = exercise.isNewExercise
+            isNewExercise = exercise.isNewExercise,
+            uid = exercise.uid
         )
     }
 
@@ -169,10 +168,14 @@ object WorkoutPresentation {
 
         val exerciseMap = linkedMapOf<String, Triple<String, MutableList<ParsedSet>, MutableList<String>>>()
         val newExerciseMap = mutableMapOf<String, Boolean>()
+        val uidMap = mutableMapOf<String, String>()
 
         for (exercise in exercises) {
             val key = WorkoutTextParser.normalize(exercise.name)
-            val entry = exerciseMap.getOrPut(key) { Triple(exercise.name, mutableListOf(), mutableListOf()) }
+            val entry = exerciseMap.getOrPut(key) {
+                uidMap[key] = exercise.uid
+                Triple(exercise.name, mutableListOf(), mutableListOf())
+            }
             entry.second.addAll(exercise.sets)
             if (exercise.plannedTarget != null) {
                 entry.third.add(exercise.plannedTarget)
@@ -188,7 +191,8 @@ object WorkoutPresentation {
                 name = displayName,
                 groups = groupConsecutiveSets(allSets),
                 plannedTarget = plans.firstOrNull(),
-                isNewExercise = newExerciseMap[key] == true
+                isNewExercise = newExerciseMap[key] == true,
+                uid = uidMap[key] ?: ""
             )
         }
     }

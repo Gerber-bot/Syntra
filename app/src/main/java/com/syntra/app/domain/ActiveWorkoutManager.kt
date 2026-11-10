@@ -214,6 +214,21 @@ class RoomActiveWorkoutPersistencePort(
         finishedAtMillis: Long
     ): Long {
         return db.withTransaction {
+            // Idempotency guard: if this session UUID was already committed, return the existing session ID
+            if (draft.sessionUuid.isNotBlank()) {
+                val existingCommit = db.irisxMemoryDao().findByTypeAndKey(
+                    "COMMITTED_SESSION",
+                    draft.sessionUuid
+                )
+                if (existingCommit != null) {
+                    val existingId = existingCommit.targetValue.toLongOrNull()
+                    if (existingId != null && db.workoutSessionDao().getById(existingId) != null) {
+                        db.activeWorkoutDraftDao().clearCurrentDraft()
+                        return@withTransaction existingId
+                    }
+                }
+            }
+
             val resolvedCategory = WorkoutCategoryClassifier.resolveSessionCategory(
                 explicitCategory = null, // Planned category from sequence planner must not override actual exercises
                 routineCategory = draft.sourceRoutineId?.let { db.routineDao().getRoutineById(it)?.targetCategory },
@@ -221,6 +236,7 @@ class RoomActiveWorkoutPersistencePort(
                 exerciseNames = finalExercises.map { it.name },
                 learnedAliases = db.irisxMemoryDao().findByType("ALIAS").associate { it.sourceKey to it.targetValue }
             ).ifBlank { draft.plannedCategory.orEmpty() }
+
             val sId = db.workoutSessionDao().insert(
                 WorkoutSessionEntity(
                     title = finalTitle,
@@ -230,6 +246,21 @@ class RoomActiveWorkoutPersistencePort(
                     notes = draft.rawNotesText
                 )
             )
+
+            // Persist idempotency token with unique index constraint on (sourceKey, memoryType)
+            if (draft.sessionUuid.isNotBlank()) {
+                db.irisxMemoryDao().insert(
+                    com.syntra.app.data.IrisxMemoryEntity(
+                        memoryType = "COMMITTED_SESSION",
+                        sourceKey = draft.sessionUuid,
+                        targetValue = sId.toString(),
+                        confidence = 1.0,
+                        createdAtMillis = finishedAtMillis,
+                        updatedAtMillis = finishedAtMillis
+                    )
+                )
+            }
+
             var execOrder = 1
             finalExercises.forEach { ex ->
                 val norm = WorkoutTextParser.normalize(ex.name)
@@ -282,6 +313,17 @@ class RoomActiveWorkoutPersistencePort(
             if (manualOverride != null) {
                 db.irisxMemoryDao().deleteById(manualOverride.id)
             }
+
+            // ATOMIC STEP: Clear the draft INSIDE the same transaction so no gap exists
+            val completedDraft = draft.copy(
+                state = WorkoutSessionState.COMPLETED.name,
+                finalizedAtWallMillis = finishedAtMillis,
+                committedSessionId = sId,
+                lastErrorMessage = null
+            )
+            db.activeWorkoutDraftDao().saveDraft(completedDraft)
+            db.activeWorkoutDraftDao().clearCurrentDraft()
+
             sId
         }
     }

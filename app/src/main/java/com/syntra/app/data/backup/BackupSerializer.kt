@@ -603,6 +603,70 @@ object BackupSerializer {
             }
         }
 
+        // Relational Integrity & Duplicate Primary Key Validation:
+        val exerciseIds = mutableSetOf<Long>()
+        for (e in exercisesList) {
+            if (e.id > 0 && !exerciseIds.add(e.id)) {
+                return BackupValidationResult.Error("El respaldo contiene ejercicios con identificador duplicado (ID: ${e.id}).")
+            }
+        }
+
+        val sessionIds = mutableSetOf<Long>()
+        for (s in sessionsList) {
+            if (s.id > 0 && !sessionIds.add(s.id)) {
+                return BackupValidationResult.Error("El respaldo contiene sesiones con identificador duplicado (ID: ${s.id}).")
+            }
+        }
+
+        val routineIds = mutableSetOf<Long>()
+        for (r in routinesList) {
+            if (r.id > 0 && !routineIds.add(r.id)) {
+                return BackupValidationResult.Error("El respaldo contiene rutinas con identificador duplicado (ID: ${r.id}).")
+            }
+        }
+
+        val conversationIds = mutableSetOf<Long>()
+        for (c in conversationsList) {
+            if (c.id > 0 && !conversationIds.add(c.id)) {
+                return BackupValidationResult.Error("El respaldo contiene conversaciones con identificador duplicado (ID: ${c.id}).")
+            }
+        }
+
+        // Validate Foreign Keys
+        if (exerciseIds.isNotEmpty()) {
+            for (alias in aliasesList) {
+                if (alias.exerciseId > 0 && alias.exerciseId !in exerciseIds) {
+                    return BackupValidationResult.Error("El alias '${alias.normalizedAlias}' referencia a un ejercicio inexistente (ID: ${alias.exerciseId}).")
+                }
+            }
+        }
+
+        for (set in setsList) {
+            if (sessionIds.isNotEmpty() && set.sessionId > 0 && set.sessionId !in sessionIds) {
+                return BackupValidationResult.Error("Una serie deportiva referencia a una sesión inexistente (Session ID: ${set.sessionId}).")
+            }
+            if (exerciseIds.isNotEmpty() && set.exerciseId > 0 && set.exerciseId !in exerciseIds) {
+                return BackupValidationResult.Error("Una serie deportiva referencia a un ejercicio inexistente (Exercise ID: ${set.exerciseId}).")
+            }
+        }
+
+        for (re in routineExercisesList) {
+            if (routineIds.isNotEmpty() && re.routineId > 0 && re.routineId !in routineIds) {
+                return BackupValidationResult.Error("Un ejercicio de rutina referencia a una rutina inexistente (Routine ID: ${re.routineId}).")
+            }
+            if (exerciseIds.isNotEmpty() && re.exerciseId != null && re.exerciseId > 0 && re.exerciseId !in exerciseIds) {
+                return BackupValidationResult.Error("Un ejercicio de rutina referencia a un ejercicio inexistente (Exercise ID: ${re.exerciseId}).")
+            }
+        }
+
+        if (conversationIds.isNotEmpty()) {
+            for (msg in messagesList) {
+                if (msg.conversationId > 0 && msg.conversationId !in conversationIds) {
+                    return BackupValidationResult.Error("Un mensaje de chat referencia a una conversación inexistente (Conversation ID: ${msg.conversationId}).")
+                }
+            }
+        }
+
         return BackupValidationResult.Success(
             SyntraBackupPayload(
                 formatVersion = formatVersion,

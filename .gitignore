@@ -20,3 +20,5 @@ local.properties
 **/build/
 external/
 *.gguf
+.atl/
+

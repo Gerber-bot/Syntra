@@ -919,7 +919,7 @@ private fun ActiveWorkoutReviewView(
     onConfirmCommit: () -> Unit
 ) {
     val compactExercises = remember(exercises) {
-        WorkoutPresentation.toCompactList(exercises)
+        exercises.map { WorkoutPresentation.toCompact(it) }
     }
     val totalSets = remember(exercises) {
         exercises.sumOf { it.sets.size }
@@ -1151,7 +1151,7 @@ private fun ActiveWorkoutReviewView(
                             ) {
                                 OutlinedButton(
                                     onClick = {
-                                        exercises.find { it.name == exercise.name }?.let(onAddSetToExercise)
+                                        exercises.find { it.uid == exercise.uid }?.let(onAddSetToExercise)
                                     },
                                     contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
                                 ) {
@@ -1159,7 +1159,7 @@ private fun ActiveWorkoutReviewView(
                                 }
                                 OutlinedButton(
                                     onClick = {
-                                        exercises.find { it.name == exercise.name }?.let(onEditExercise)
+                                        exercises.find { it.uid == exercise.uid }?.let(onEditExercise)
                                     },
                                     contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
                                 ) {
@@ -1167,7 +1167,7 @@ private fun ActiveWorkoutReviewView(
                                 }
                                 IconButton(
                                     onClick = {
-                                        exercises.find { it.name == exercise.name }?.let(onDeleteExercise)
+                                        exercises.find { it.uid == exercise.uid }?.let(onDeleteExercise)
                                     },
                                     modifier = Modifier.size(32.dp)
                                 ) {
