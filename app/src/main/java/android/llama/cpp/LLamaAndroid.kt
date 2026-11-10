@@ -13,10 +13,13 @@ import kotlin.concurrent.thread
 class LLamaAndroid {
     private val tag: String? = this::class.simpleName
 
-    private val threadLocalState: ThreadLocal<State> = ThreadLocal.withInitial { State.Idle }
+    private val stateLock = Any()
 
     @Volatile
-    private var isModelLoaded = false
+    private var nativeState: State = State.Idle
+
+    @Volatile
+    private var isGenerating: Boolean = false
 
     private val runLoop: CoroutineDispatcher = Executors.newSingleThreadExecutor {
         thread(start = false, name = "Llm-RunLoop") {
@@ -41,7 +44,13 @@ class LLamaAndroid {
 
     fun getNativeLoadError(): String? = libraryLoadError
 
-    fun hasModelLoaded(): Boolean = isModelLoaded
+    fun hasModelLoaded(): Boolean = synchronized(stateLock) {
+        nativeState is State.Loaded
+    }
+
+    fun getCurrentModelPath(): String? = synchronized(stateLock) {
+        (nativeState as? State.Loaded)?.modelPath
+    }
 
     var nlen: Int = 256
 
@@ -81,7 +90,7 @@ class LLamaAndroid {
         batch: Long,
         sampler: Long,
         nLen: Int,
-        ncur: IntVar
+        ncur: Int
     ): String?
 
     private external fun kv_cache_clear(context: Long)
@@ -99,12 +108,13 @@ class LLamaAndroid {
 
     suspend fun bench(pp: Int, tg: Int, pl: Int, nr: Int = 1): String {
         return withContext(runLoop) {
-            when (val state = threadLocalState.get() ?: State.Idle) {
+            val state = synchronized(stateLock) { nativeState }
+            when (state) {
                 is State.Loaded -> {
                     Log.d(tag, "bench(): $state")
                     bench_model(state.context, state.model, state.batch, pp, tg, pl, nr)
                 }
-                is State.Idle -> throw IllegalStateException("No model loaded")
+                else -> throw IllegalStateException("No model loaded")
             }
         }
     }
@@ -114,69 +124,116 @@ class LLamaAndroid {
             if (!isLibraryLoaded) {
                 throw UnsatisfiedLinkError("Librería nativa llama-android no cargada")
             }
-            when (threadLocalState.get() ?: State.Idle) {
-                is State.Idle -> {
-                    val model = load_model(pathToModel)
-                    if (model == 0L) throw IllegalStateException("load_model() failed")
 
-                    val context = new_context(model)
-                    if (context == 0L) throw IllegalStateException("new_context() failed")
-
-                    val batch = new_batch(2048, 0, 1)
-                    if (batch == 0L) throw IllegalStateException("new_batch() failed")
-
-                    val sampler = new_sampler()
-                    if (sampler == 0L) throw IllegalStateException("new_sampler() failed")
-
-                    Log.i(tag, "Loaded model $pathToModel")
-                    threadLocalState.set(State.Loaded(model, context, batch, sampler))
-                    isModelLoaded = true
+            synchronized(stateLock) {
+                if (nativeState is State.Loaded || nativeState is State.Loading) {
+                    throw IllegalStateException("Model already loaded or currently loading")
                 }
-                is State.Loaded -> throw IllegalStateException("Model already loaded")
+                nativeState = State.Loading
+            }
+
+            try {
+                val model = load_model(pathToModel)
+                if (model == 0L) throw IllegalStateException("load_model() returned null")
+
+                val context = new_context(model)
+                if (context == 0L) {
+                    free_model(model)
+                    throw IllegalStateException("new_context() returned null")
+                }
+
+                val batch = new_batch(2048, 0, 1)
+                if (batch == 0L) {
+                    free_context(context)
+                    free_model(model)
+                    throw IllegalStateException("new_batch() returned null")
+                }
+
+                val sampler = new_sampler()
+                if (sampler == 0L) {
+                    free_batch(batch)
+                    free_context(context)
+                    free_model(model)
+                    throw IllegalStateException("new_sampler() returned null")
+                }
+
+                synchronized(stateLock) {
+                    nativeState = State.Loaded(model, context, batch, sampler, pathToModel)
+                }
+                Log.i(tag, "Loaded model successfully: $pathToModel")
+            } catch (t: Throwable) {
+                synchronized(stateLock) {
+                    nativeState = State.Idle
+                }
+                throw t
             }
         }
     }
 
     fun send(message: String, maxTokens: Int = nlen, formatChat: Boolean = true): Flow<String> = flow {
-        when (val state = threadLocalState.get() ?: State.Idle) {
-            is State.Loaded -> {
-                val promptTokens = completion_init(state.context, state.batch, message, formatChat, maxTokens)
-                val targetEnd = promptTokens + maxTokens
-                val ncur = IntVar(promptTokens)
-                try {
-                    while (ncur.value < targetEnd) {
-                        val str = completion_loop(state.context, state.batch, state.sampler, targetEnd, ncur)
-                        if (str == null) {
-                            break
-                        }
-                        emit(str)
-                    }
-                } finally {
-                    kv_cache_clear(state.context)
+        val state = synchronized(stateLock) {
+            val current = nativeState
+            if (current !is State.Loaded) {
+                throw IllegalStateException("No model loaded")
+            }
+            if (isGenerating) {
+                throw IllegalStateException("Inference already in progress")
+            }
+            isGenerating = true
+            current
+        }
+
+        try {
+            val promptTokens = completion_init(state.context, state.batch, message, formatChat, maxTokens)
+            if (promptTokens < 0) {
+                throw IllegalStateException("completion_init failed with error code $promptTokens (prompt exceeds context or decode failed)")
+            }
+            val targetEnd = promptTokens + maxTokens
+            var ncur = promptTokens
+
+            while (ncur < targetEnd) {
+                val str = completion_loop(state.context, state.batch, state.sampler, targetEnd, ncur)
+                if (str == null) {
+                    break
+                }
+                ncur++
+                if (str.isNotEmpty()) {
+                    emit(str)
                 }
             }
-            is State.Idle -> throw IllegalStateException("No model loaded")
+        } finally {
+            try {
+                kv_cache_clear(state.context)
+            } catch (_: Throwable) {}
+            synchronized(stateLock) {
+                isGenerating = false
+            }
         }
     }.flowOn(runLoop)
 
-    /**
-     * Unloads the model and frees resources.
-     * This is a no-op if there's no model loaded.
-     */
     suspend fun unload() {
         withContext(runLoop) {
-            when (val state = threadLocalState.get() ?: State.Idle) {
-                is State.Loaded -> {
-                    free_context(state.context)
-                    free_model(state.model)
-                    free_batch(state.batch)
-                    free_sampler(state.sampler)
-
-                    threadLocalState.set(State.Idle)
-                    isModelLoaded = false
+            val stateToFree: State.Loaded? = synchronized(stateLock) {
+                val current = nativeState
+                if (current is State.Loaded) {
+                    nativeState = State.Idle
+                    current
+                } else {
+                    nativeState = State.Idle
+                    null
                 }
-                is State.Idle -> {
-                    isModelLoaded = false
+            }
+
+            if (stateToFree != null) {
+                try {
+                    cancel_generation()
+                    free_sampler(stateToFree.sampler)
+                    free_batch(stateToFree.batch)
+                    free_context(stateToFree.context)
+                    free_model(stateToFree.model)
+                    Log.i(tag, "Unloaded model and freed native resources: ${stateToFree.modelPath}")
+                } catch (t: Throwable) {
+                    Log.w(tag, "Error freeing native resources: ${t.message}")
                 }
             }
         }
@@ -217,24 +274,18 @@ class LLamaAndroid {
 
         fun getNativeLoadError(): String? = libraryLoadError
 
-        private class IntVar(value: Int) {
-            @Volatile
-            var value: Int = value
-                private set
-
-            fun inc() {
-                synchronized(this) {
-                    value += 1
-                }
-            }
-        }
-
-        private sealed interface State {
+        sealed interface State {
             data object Idle: State
-            data class Loaded(val model: Long, val context: Long, val batch: Long, val sampler: Long): State
+            data object Loading: State
+            data class Loaded(
+                val model: Long,
+                val context: Long,
+                val batch: Long,
+                val sampler: Long,
+                val modelPath: String
+            ): State
         }
 
-        // Enforce only one instance of Llm.
         private val _instance: LLamaAndroid = LLamaAndroid()
 
         fun instance(): LLamaAndroid = _instance

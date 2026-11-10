@@ -3,40 +3,19 @@
 #include <atomic>
 #include <iomanip>
 #include <math.h>
+#include <mutex>
 #include <string>
 #include <unistd.h>
 #include "llama.h"
 #include "common.h"
 
-static std::atomic<bool> g_is_cancelled{false};
-
-// Write C++ code here.
-//
-// Do not forget to dynamically load the C++ library into your application.
-//
-// For instance,
-//
-// In MainActivity.java:
-//    static {
-//       System.loadLibrary("llama-android");
-//    }
-//
-// Or, in MainActivity.kt:
-//    companion object {
-//      init {
-//         System.loadLibrary("llama-android")
-//      }
-//    }
-
 #define TAG "llama-android.cpp"
 #define LOGi(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 #define LOGe(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
-jclass la_int_var;
-jmethodID la_int_var_value;
-jmethodID la_int_var_inc;
-
-std::string cached_token_chars;
+static std::atomic<bool> g_is_cancelled{false};
+static std::mutex g_token_chars_mutex;
+static std::string cached_token_chars;
 
 bool is_valid_utf8(const char * string) {
     if (!string) {
@@ -105,6 +84,7 @@ Java_android_llama_cpp_LLamaAndroid_load_1model(JNIEnv *env, jobject, jstring fi
 extern "C"
 JNIEXPORT void JNICALL
 Java_android_llama_cpp_LLamaAndroid_free_1model(JNIEnv *, jobject, jlong model) {
+    if (!model) return;
     llama_model_free(reinterpret_cast<llama_model *>(model));
 }
 
@@ -143,6 +123,7 @@ Java_android_llama_cpp_LLamaAndroid_new_1context(JNIEnv *env, jobject, jlong jmo
 extern "C"
 JNIEXPORT void JNICALL
 Java_android_llama_cpp_LLamaAndroid_free_1context(JNIEnv *, jobject, jlong context) {
+    if (!context) return;
     llama_free(reinterpret_cast<llama_context *>(context));
 }
 
@@ -306,6 +287,7 @@ Java_android_llama_cpp_LLamaAndroid_new_1sampler(JNIEnv *, jobject) {
 extern "C"
 JNIEXPORT void JNICALL
 Java_android_llama_cpp_LLamaAndroid_free_1sampler(JNIEnv *, jobject, jlong sampler_pointer) {
+    if (!sampler_pointer) return;
     llama_sampler_free(reinterpret_cast<llama_sampler *>(sampler_pointer));
 }
 
@@ -313,6 +295,8 @@ extern "C"
 JNIEXPORT void JNICALL
 Java_android_llama_cpp_LLamaAndroid_cancel_1generation(JNIEnv *, jobject) {
     g_is_cancelled.store(true);
+    std::lock_guard<std::mutex> lock(g_token_chars_mutex);
+    cached_token_chars.clear();
     LOGi("cancel_generation() called from JNI");
 }
 
@@ -340,8 +324,17 @@ Java_android_llama_cpp_LLamaAndroid_completion_1init(
         jint n_len
     ) {
 
-    cached_token_chars.clear();
+    {
+        std::lock_guard<std::mutex> lock(g_token_chars_mutex);
+        cached_token_chars.clear();
+    }
     g_is_cancelled.store(false);
+
+    if (!context_pointer || !batch_pointer || !jtext) {
+        LOGe("completion_init: invalid null pointers passed");
+        env->ThrowNew(env->FindClass("java/lang/IllegalArgumentException"), "Punteros nulos pasados a completion_init");
+        return -1;
+    }
 
     const auto text = env->GetStringUTFChars(jtext, 0);
     const auto context = reinterpret_cast<llama_context *>(context_pointer);
@@ -358,8 +351,19 @@ Java_android_llama_cpp_LLamaAndroid_completion_1init(
     LOGi("n_len = %d, n_ctx = %u, n_kv_req = %zu, add_special = %d, parse_special = %d",
          n_len, n_ctx, n_kv_req, add_special ? 1 : 0, parse_special ? 1 : 0);
 
-    if (n_kv_req > n_ctx) {
-        LOGe("error: n_kv_req > n_ctx, the required KV cache size is not big enough");
+    if (tokens_list.empty()) {
+        LOGe("completion_init: prompt produced 0 tokens");
+        env->ReleaseStringUTFChars(jtext, text);
+        return 0;
+    }
+
+    if (tokens_list.size() >= n_ctx || n_kv_req > n_ctx) {
+        LOGe("completion_init: prompt tokens (%zu) + n_len (%d) > n_ctx (%u), context overflow",
+             tokens_list.size(), n_len, n_ctx);
+        env->ReleaseStringUTFChars(jtext, text);
+        env->ThrowNew(env->FindClass("java/lang/IllegalArgumentException"),
+                      "El prompt excede el tamaño máximo de contexto del modelo");
+        return -1;
     }
 
     if (g_is_cancelled.load()) {
@@ -383,7 +387,12 @@ Java_android_llama_cpp_LLamaAndroid_completion_1init(
     batch->logits[batch->n_tokens - 1] = true;
 
     if (llama_decode(context, *batch) != 0) {
-        LOGe("llama_decode() failed");
+        LOGe("llama_decode() failed on prompt evaluation");
+        llama_kv_self_clear(context);
+        env->ReleaseStringUTFChars(jtext, text);
+        env->ThrowNew(env->FindClass("java/lang/IllegalStateException"),
+                      "llama_decode() falló al evaluar el prompt inicial");
+        return -2;
     }
 
     env->ReleaseStringUTFChars(jtext, text);
@@ -400,10 +409,15 @@ Java_android_llama_cpp_LLamaAndroid_completion_1loop(
         jlong batch_pointer,
         jlong sampler_pointer,
         jint n_len,
-        jobject intvar_ncur
+        jint n_cur
 ) {
     if (g_is_cancelled.load()) {
         LOGi("completion_loop: generation was cancelled cooperatively");
+        return nullptr;
+    }
+
+    if (!context_pointer || !batch_pointer || !sampler_pointer) {
+        LOGe("completion_loop: invalid null pointers passed");
         return nullptr;
     }
 
@@ -413,10 +427,6 @@ Java_android_llama_cpp_LLamaAndroid_completion_1loop(
     const auto model = llama_get_model(context);
     const auto vocab = llama_model_get_vocab(model);
 
-    if (!la_int_var) la_int_var = env->GetObjectClass(intvar_ncur);
-    if (!la_int_var_value) la_int_var_value = env->GetMethodID(la_int_var, "getValue", "()I");
-    if (!la_int_var_inc) la_int_var_inc = env->GetMethodID(la_int_var, "inc", "()V");
-
     // sample the most likely token
     const auto new_token_id = llama_sampler_sample(sampler, context, -1);
 
@@ -425,30 +435,33 @@ Java_android_llama_cpp_LLamaAndroid_completion_1loop(
         return nullptr;
     }
 
-    const auto n_cur = env->CallIntMethod(intvar_ncur, la_int_var_value);
     if (llama_vocab_is_eog(vocab, new_token_id) || n_cur >= n_len) {
         return nullptr;
     }
 
     auto new_token_chars = common_token_to_piece(context, new_token_id);
-    cached_token_chars += new_token_chars;
-
     jstring new_token = nullptr;
-    if (is_valid_utf8(cached_token_chars.c_str())) {
-        new_token = env->NewStringUTF(cached_token_chars.c_str());
-        LOGi("cached: %s, new_token_chars: `%s`, id: %d", cached_token_chars.c_str(), new_token_chars.c_str(), new_token_id);
-        cached_token_chars.clear();
-    } else {
-        new_token = env->NewStringUTF("");
+
+    {
+        std::lock_guard<std::mutex> lock(g_token_chars_mutex);
+        cached_token_chars += new_token_chars;
+
+        if (is_valid_utf8(cached_token_chars.c_str())) {
+            new_token = env->NewStringUTF(cached_token_chars.c_str());
+            LOGi("cached: %s, new_token_chars: `%s`, id: %d", cached_token_chars.c_str(), new_token_chars.c_str(), new_token_id);
+            cached_token_chars.clear();
+        } else {
+            new_token = env->NewStringUTF("");
+        }
     }
 
     common_batch_clear(*batch);
     common_batch_add(*batch, new_token_id, n_cur, { 0 }, true);
 
-    env->CallVoidMethod(intvar_ncur, la_int_var_inc);
-
     if (llama_decode(context, *batch) != 0) {
-        LOGe("llama_decode() returned null");
+        LOGe("llama_decode() failed during generation loop");
+        llama_kv_self_clear(context);
+        return nullptr;
     }
 
     return new_token;
@@ -457,5 +470,9 @@ Java_android_llama_cpp_LLamaAndroid_completion_1loop(
 extern "C"
 JNIEXPORT void JNICALL
 Java_android_llama_cpp_LLamaAndroid_kv_1cache_1clear(JNIEnv *, jobject, jlong context) {
-    llama_kv_self_clear(reinterpret_cast<llama_context *>(context));
+    if (context) {
+        llama_kv_self_clear(reinterpret_cast<llama_context *>(context));
+    }
+    std::lock_guard<std::mutex> lock(g_token_chars_mutex);
+    cached_token_chars.clear();
 }

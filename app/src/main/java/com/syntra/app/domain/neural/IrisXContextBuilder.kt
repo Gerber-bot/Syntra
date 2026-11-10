@@ -142,14 +142,15 @@ object IrisXContextBuilder {
 
     /**
      * Strips all ChatML tags (<|im_start|>, <|im_end|>, etc.) from generated text.
+     * When [trim] is false (e.g. streaming individual token pieces), leading and trailing whitespace is preserved.
      */
-    fun stripChatMlTokens(text: String): String {
-        return text.replace("<|im_start|>", "")
+    fun stripChatMlTokens(text: String, trim: Boolean = false): String {
+        val cleaned = text.replace("<|im_start|>", "")
             .replace("<|im_end|>", "")
             .replace("<|endoftext|>", "")
             .replace("<think>", "")
             .replace("</think>", "")
             .replace(Regex("<\\|.*?\\|>"), "")
-            .trim()
+        return if (trim) cleaned.trim() else cleaned
     }
 }

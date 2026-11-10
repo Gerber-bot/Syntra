@@ -148,7 +148,7 @@ class LlamaCppInferenceEngine(
                     return@collect
                 }
 
-                val cleanPiece = IrisXContextBuilder.stripChatMlTokens(piece)
+                val cleanPiece = IrisXContextBuilder.stripChatMlTokens(piece, trim = false)
                 if (cleanPiece.isNotEmpty()) {
                     tokenCount++
                     val elapsed = System.currentTimeMillis() - startTime
@@ -161,6 +161,10 @@ class LlamaCppInferenceEngine(
                         )
                     )
                 }
+            }
+
+            if (isCancelled) {
+                return@flow
             }
 
             val totalElapsed = (System.currentTimeMillis() - startTime).coerceAtLeast(1L)
