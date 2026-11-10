@@ -61,7 +61,7 @@ data class ExerciseAliasEntity(
 
 @Entity(
     tableName = "workout_sessions",
-    indices = [Index(value = ["sessionUuid"])]
+    indices = [Index(value = ["sessionUuid"], unique = true)]
 )
 data class WorkoutSessionEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
@@ -70,7 +70,7 @@ data class WorkoutSessionEntity(
     val finishedAtMillis: Long? = null,
     val notes: String = "",
     val category: String = "",
-    val sessionUuid: String = ""
+    val sessionUuid: String? = null
 )
 
 @Entity(
@@ -332,13 +332,13 @@ interface WorkoutSessionDao {
     @Query("SELECT * FROM workout_sessions WHERE id = :id LIMIT 1")
     suspend fun getById(id: Long): WorkoutSessionEntity?
 
-    @Query("SELECT * FROM workout_sessions WHERE sessionUuid = :uuid AND sessionUuid != '' LIMIT 1")
+    @Query("SELECT * FROM workout_sessions WHERE sessionUuid = :uuid AND sessionUuid IS NOT NULL AND sessionUuid != '' LIMIT 1")
     suspend fun findBySessionUuid(uuid: String): WorkoutSessionEntity?
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Insert
     suspend fun insert(session: WorkoutSessionEntity): Long
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Insert
     suspend fun insertAll(sessions: List<WorkoutSessionEntity>)
 
     @Update
@@ -533,6 +533,9 @@ interface ActiveWorkoutDraftDao {
     @Query("DELETE FROM active_workout_drafts WHERE slotId = 1")
     suspend fun clearCurrentDraft()
 
+    @Query("DELETE FROM active_workout_drafts WHERE slotId = :slotId AND sessionUuid = :uuid")
+    suspend fun clearDraftBySlotAndUuid(slotId: Int, uuid: String)
+
     @Query("DELETE FROM active_workout_drafts")
     suspend fun deleteAllDrafts()
 }
@@ -553,7 +556,7 @@ interface ActiveWorkoutDraftDao {
         ActiveWorkoutDraftEntity::class,
         CategoryEntity::class
     ],
-    version = 7,
+    version = 8,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -751,10 +754,37 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Table recreation migration to make sessionUuid nullable and enforce UNIQUE constraint
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `workout_sessions_new` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `title` TEXT NOT NULL,
+                        `startedAtMillis` INTEGER NOT NULL,
+                        `finishedAtMillis` INTEGER,
+                        `notes` TEXT NOT NULL,
+                        `category` TEXT NOT NULL,
+                        `sessionUuid` TEXT
+                    )
+                """.trimIndent())
+
+                db.execSQL("""
+                    INSERT INTO `workout_sessions_new` (`id`, `title`, `startedAtMillis`, `finishedAtMillis`, `notes`, `category`, `sessionUuid`)
+                    SELECT `id`, `title`, `startedAtMillis`, `finishedAtMillis`, `notes`, `category`, CASE WHEN `sessionUuid` = '' THEN NULL ELSE `sessionUuid` END
+                    FROM `workout_sessions`
+                """.trimIndent())
+
+                db.execSQL("DROP TABLE `workout_sessions`")
+                db.execSQL("ALTER TABLE `workout_sessions_new` RENAME TO `workout_sessions`")
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_workout_sessions_sessionUuid` ON `workout_sessions` (`sessionUuid`)")
+            }
+        }
+
         fun get(context: Context): AppDatabase = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(
                 context.applicationContext, AppDatabase::class.java, "syntra.db"
-            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
+            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8)
             .build().also { instance = it }
         }
     }

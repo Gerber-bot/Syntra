@@ -220,7 +220,11 @@ object RoutineManager {
             // If user exceeded maxReps at or above suggested load, propose small increment
             val currentSuggested = spec.suggestedLoadGrams ?: last.topLoadGrams
             if (last.topLoadGrams >= currentSuggested && last.topLoadReps >= spec.maxReps && modality != LoadModality.BODYWEIGHT) {
-                val incrementGrams = if (modality == LoadModality.DUMBBELL_PER_ARM || modality == LoadModality.UNILATERAL) 1000 else 2500
+                val incrementGrams = when {
+                    modality == LoadModality.MACHINE_BLOCKS || last.unit in listOf("BLOQUES", "PLACAS") -> 1000 // 1 discrete block / placa
+                    modality == LoadModality.DUMBBELL_PER_ARM || modality == LoadModality.UNILATERAL -> 1000
+                    else -> 2500
+                }
                 val recommended = last.topLoadGrams + incrementGrams
                 val lastLoad = UnitConverter.formatDisplay(last.topLoadGrams, last.unit)
                 val recLoad = UnitConverter.formatDisplay(recommended, last.unit)

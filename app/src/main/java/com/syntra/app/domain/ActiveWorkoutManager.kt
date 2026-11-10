@@ -173,6 +173,7 @@ interface ActiveWorkoutPersistencePort {
     suspend fun getCurrentDraft(): ActiveWorkoutDraftEntity?
     suspend fun saveDraft(draft: ActiveWorkoutDraftEntity)
     suspend fun clearCurrentDraft()
+    suspend fun clearDraftBySlotAndUuid(slotId: Int, uuid: String) { clearCurrentDraft() }
     suspend fun getLearnedAliases(): Map<String, String>
     suspend fun getAllExercises(): List<ExerciseEntity>
     suspend fun findSessionByUuid(uuid: String): WorkoutSessionEntity?
@@ -197,6 +198,10 @@ class RoomActiveWorkoutPersistencePort(
 
     override suspend fun clearCurrentDraft() {
         db.activeWorkoutDraftDao().clearCurrentDraft()
+    }
+
+    override suspend fun clearDraftBySlotAndUuid(slotId: Int, uuid: String) {
+        db.activeWorkoutDraftDao().clearDraftBySlotAndUuid(slotId, uuid)
     }
 
     override suspend fun getLearnedAliases(): Map<String, String> {
@@ -224,7 +229,7 @@ class RoomActiveWorkoutPersistencePort(
             if (draft.sessionUuid.isNotBlank()) {
                 val existingSession = db.workoutSessionDao().findBySessionUuid(draft.sessionUuid)
                 if (existingSession != null && existingSession.id > 0) {
-                    db.activeWorkoutDraftDao().clearCurrentDraft()
+                    db.activeWorkoutDraftDao().clearDraftBySlotAndUuid(draft.slotId, draft.sessionUuid)
                     return@withTransaction existingSession.id
                 }
 
@@ -236,7 +241,7 @@ class RoomActiveWorkoutPersistencePort(
                 if (existingCommit != null) {
                     val existingId = existingCommit.targetValue.toLongOrNull()
                     if (existingId != null && existingId > 0 && db.workoutSessionDao().getById(existingId) != null) {
-                        db.activeWorkoutDraftDao().clearCurrentDraft()
+                        db.activeWorkoutDraftDao().clearDraftBySlotAndUuid(draft.slotId, draft.sessionUuid)
                         return@withTransaction existingId
                     }
                 }
@@ -332,8 +337,8 @@ class RoomActiveWorkoutPersistencePort(
                 db.irisxMemoryDao().deleteById(manualOverride.id)
             }
 
-            // ATOMIC STEP: Sole owner of clearing the draft INSIDE the same transaction
-            db.activeWorkoutDraftDao().clearCurrentDraft()
+            // ATOMIC STEP: Sole owner of clearing ONLY the active draft INSIDE the same transaction
+            db.activeWorkoutDraftDao().clearDraftBySlotAndUuid(draft.slotId, draft.sessionUuid)
 
             sId
         }
@@ -686,9 +691,6 @@ class ActiveWorkoutManager(
             }
 
             lastCompletedUuid = normalized.sessionUuid
-            try {
-                port.clearCurrentDraft()
-            } catch (_: Exception) {}
 
             FinalizationResult.Success(
                 sessionId = committedId,

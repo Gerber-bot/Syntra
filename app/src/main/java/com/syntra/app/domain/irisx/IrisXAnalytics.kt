@@ -312,12 +312,16 @@ object IrisXAnalytics {
             else -> {
                 val prev = dominantHistory[dominantHistory.size - 2]
                 val last = dominantHistory.last()
-                val improved = isSessionImproved(prev, last, dominantModality!!)
-                val regressed = isSessionRegressed(prev, last, dominantModality)
-                when {
-                    improved -> ProgressionStatus.PROGRESSING
-                    regressed -> ProgressionStatus.REGRESSING
-                    else -> ProgressionStatus.MAINTAINING
+                if (prev.unit != last.unit) {
+                    ProgressionStatus.INSUFFICIENT_DATA
+                } else {
+                    val improved = isSessionImproved(prev, last, dominantModality!!)
+                    val regressed = isSessionRegressed(prev, last, dominantModality)
+                    when {
+                        improved -> ProgressionStatus.PROGRESSING
+                        regressed -> ProgressionStatus.REGRESSING
+                        else -> ProgressionStatus.MAINTAINING
+                    }
                 }
             }
         }
@@ -336,17 +340,28 @@ object IrisXAnalytics {
 
         // Build Chart Data Points for the dominant modality
         val loadChartPoints = dominantHistory.mapIndexed { idx, pt ->
-            val displayVal = com.syntra.app.domain.UnitConverter.toRawValue(pt.topLoadGrams, pt.unit)
+            val displayVal = if (pt.modality == LoadModality.BODYWEIGHT) {
+                pt.maxRepsInSet.toDouble()
+            } else {
+                com.syntra.app.domain.UnitConverter.toRawValue(pt.topLoadGrams, pt.unit)
+            }
+            val unitStr = when (pt.modality) {
+                LoadModality.DUMBBELL_PER_ARM -> {
+                    val baseUnit = when (pt.unit) {
+                        "LBS" -> "lb"
+                        else -> "kg"
+                    }
+                    "$baseUnit/brazo"
+                }
+                LoadModality.MACHINE_BLOCKS -> pt.unit.lowercase()
+                LoadModality.BODYWEIGHT -> "reps"
+                else -> pt.unit.lowercase()
+            }
             ChartDataPoint(
                 label = "S${idx + 1}",
                 timestampMillis = pt.timestampMillis,
                 value = displayVal,
-                unit = when (pt.modality) {
-                    LoadModality.DUMBBELL_PER_ARM -> "kg/brazo"
-                    LoadModality.MACHINE_BLOCKS -> pt.unit.lowercase()
-                    LoadModality.BODYWEIGHT -> "reps"
-                    else -> pt.unit.lowercase()
-                },
+                unit = unitStr,
                 modality = pt.modality,
                 dataQuality = pt.dataQuality
             )
@@ -430,6 +445,7 @@ object IrisXAnalytics {
         curr: ExerciseSessionPoint,
         modality: LoadModality
     ): Boolean {
+        if (prev.modality != curr.modality || prev.unit != curr.unit) return false
         return when (modality) {
             LoadModality.ASSISTED_BODYWEIGHT -> {
                 curr.topLoadGrams < prev.topLoadGrams ||
@@ -451,6 +467,7 @@ object IrisXAnalytics {
         curr: ExerciseSessionPoint,
         modality: LoadModality
     ): Boolean {
+        if (prev.modality != curr.modality || prev.unit != curr.unit) return false
         return when (modality) {
             LoadModality.ASSISTED_BODYWEIGHT -> {
                 curr.topLoadGrams > prev.topLoadGrams ||

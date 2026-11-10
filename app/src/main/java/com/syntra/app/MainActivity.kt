@@ -1914,7 +1914,8 @@ private fun ParserScreen(
         if (analyzed) WorkoutTextParser.parse(input, aliases = mergedAliases, knownExercises = knownNames) else null
     }
     val rawParsedExercises = remember(preview) { preview?.exercises ?: emptyList() }
-    var editedExercises by remember(rawParsedExercises) { mutableStateOf(rawParsedExercises) }
+    // Key editedExercises strictly on input and analyzed flag, preserving in-progress edits when alias memories update
+    var editedExercises by remember(input, analyzed) { mutableStateOf(rawParsedExercises) }
     var exerciseToEdit by remember { mutableStateOf<ParsedExercise?>(null) }
 
     val currentExercises = editedExercises

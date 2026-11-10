@@ -300,12 +300,20 @@ object BackupSerializer {
 
         // WeighIns validation
         val weighInsList = mutableListOf<WeighInBackupDto>()
-        if (root.has("weighIns")) {
+        val weighInIds = mutableSetOf<Long>()
+        if (root.has("weighIns") && !root.isNull("weighIns")) {
             val arr = root.optJSONArray("weighIns")
                 ?: return BackupValidationResult.Error("El campo 'weighIns' debe ser una lista.")
             for (i in 0 until arr.length()) {
                 val item = arr.optJSONObject(i)
                     ?: return BackupValidationResult.Error("Elemento de pesaje $i inválido.")
+                val id = item.optLong("id", 0L)
+                if (id <= 0L) {
+                    return BackupValidationResult.Error("Pesaje en posición $i tiene identificador no positivo (ID: $id).")
+                }
+                if (!weighInIds.add(id)) {
+                    return BackupValidationResult.Error("El respaldo contiene pesajes con identificador duplicado (ID: $id).")
+                }
                 val measuredAt = item.optLong("measuredAtMillis", 0L)
                 val weightGrams = item.optInt("weightGrams", 0)
                 if (measuredAt <= 0L || weightGrams <= 0) {
@@ -313,7 +321,7 @@ object BackupSerializer {
                 }
                 weighInsList.add(
                     WeighInBackupDto(
-                        id = item.optLong("id", 0L),
+                        id = id,
                         measuredAtMillis = measuredAt,
                         weightGrams = weightGrams,
                         note = item.optString("note", "")
@@ -600,25 +608,34 @@ object BackupSerializer {
 
         // Workout Categories validation (optional for backward compatibility)
         val categoriesList = mutableListOf<CategoryBackupDto>()
-        if (root.has("workoutCategories")) {
+        val categoryIds = mutableSetOf<Long>()
+        if (root.has("workoutCategories") && !root.isNull("workoutCategories")) {
             val arr = root.optJSONArray("workoutCategories")
-            if (arr != null) {
-                for (i in 0 until arr.length()) {
-                    val cObj = arr.optJSONObject(i) ?: continue
-                    val name = cObj.optString("name", "").trim()
-                    if (name.isNotEmpty()) {
-                        categoriesList.add(
-                            CategoryBackupDto(
-                                id = cObj.optLong("id", 0L),
-                                name = name,
-                                icon = cObj.optString("icon", "📁"),
-                                orderIndex = cObj.optInt("orderIndex", 0),
-                                isHidden = cObj.optBoolean("isHidden", false),
-                                colorHex = cObj.optString("colorHex", "#75D9C1")
-                            )
-                        )
-                    }
+                ?: return BackupValidationResult.Error("El campo 'workoutCategories' debe ser una lista.")
+            for (i in 0 until arr.length()) {
+                val cObj = arr.optJSONObject(i)
+                    ?: return BackupValidationResult.Error("Elemento de categoría $i inválido.")
+                val id = cObj.optLong("id", 0L)
+                if (id <= 0L) {
+                    return BackupValidationResult.Error("Categoría en posición $i tiene identificador no positivo (ID: $id).")
                 }
+                if (!categoryIds.add(id)) {
+                    return BackupValidationResult.Error("El respaldo contiene categorías con identificador duplicado (ID: $id).")
+                }
+                val name = cObj.optString("name", "").trim()
+                if (name.isEmpty()) {
+                    return BackupValidationResult.Error("Categoría en posición $i tiene nombre vacío.")
+                }
+                categoriesList.add(
+                    CategoryBackupDto(
+                        id = id,
+                        name = name,
+                        icon = cObj.optString("icon", "📁"),
+                        orderIndex = cObj.optInt("orderIndex", 0),
+                        isHidden = cObj.optBoolean("isHidden", false),
+                        colorHex = cObj.optString("colorHex", "#75D9C1")
+                    )
+                )
             }
         }
 
@@ -638,12 +655,18 @@ object BackupSerializer {
         }
 
         val sessionIds = mutableSetOf<Long>()
+        val sessionUuids = mutableSetOf<String>()
         for (s in sessionsList) {
             if (s.id <= 0) {
                 return BackupValidationResult.Error("El respaldo contiene una sesión con identificador no positivo (ID: ${s.id}).")
             }
             if (!sessionIds.add(s.id)) {
                 return BackupValidationResult.Error("El respaldo contiene sesiones con identificador duplicado (ID: ${s.id}).")
+            }
+            if (s.sessionUuid.isNotBlank()) {
+                if (!sessionUuids.add(s.sessionUuid)) {
+                    return BackupValidationResult.Error("El respaldo contiene sesiones con sessionUuid duplicado ('${s.sessionUuid}').")
+                }
             }
         }
 
@@ -700,8 +723,8 @@ object BackupSerializer {
             if (!setIds.add(set.id)) {
                 return BackupValidationResult.Error("El respaldo contiene series con identificador duplicado (ID: ${set.id}).")
             }
-            val canonical = com.syntra.app.domain.UnitConverter.canonicalUnit(set.loadUnit)
-            if (canonical !in validUnits) {
+            val canonical = com.syntra.app.domain.UnitConverter.canonicalUnitOrNull(set.loadUnit)
+            if (canonical == null || canonical !in validUnits) {
                 return BackupValidationResult.Error("Serie ID ${set.id} contiene una unidad no soportada: '${set.loadUnit}'.")
             }
             if (set.repetitions !in 1..999) {
@@ -726,11 +749,13 @@ object BackupSerializer {
             if (!routineExerciseIds.add(re.id)) {
                 return BackupValidationResult.Error("El respaldo contiene ejercicios de rutina con identificador duplicado (ID: ${re.id}).")
             }
-            if (re.routineId !in routineIds) {
-                return BackupValidationResult.Error("Un ejercicio de rutina referencia a una rutina inexistente (Routine ID: ${re.routineId}).")
+            if (re.routineId <= 0 || re.routineId !in routineIds) {
+                return BackupValidationResult.Error("Un ejercicio de rutina referencia a una rutina inexistente o no positiva (Routine ID: ${re.routineId}).")
             }
-            if (re.exerciseId != null && re.exerciseId > 0 && re.exerciseId !in exerciseIds) {
-                return BackupValidationResult.Error("Un ejercicio de rutina referencia a un ejercicio inexistente (Exercise ID: ${re.exerciseId}).")
+            if (re.exerciseId != null) {
+                if (re.exerciseId <= 0 || re.exerciseId !in exerciseIds) {
+                    return BackupValidationResult.Error("Un ejercicio de rutina referencia a un ejercicio inexistente o no positivo (Exercise ID: ${re.exerciseId}).")
+                }
             }
         }
 
@@ -744,6 +769,14 @@ object BackupSerializer {
             }
             if (msg.conversationId !in conversationIds) {
                 return BackupValidationResult.Error("Un mensaje de chat referencia a una conversación inexistente (Conversation ID: ${msg.conversationId}).")
+            }
+        }
+
+        // Verify mandatory core athletic sections present according to formatVersion
+        val mandatoryCoreSections = listOf("exercises", "workoutSessions", "workoutSets")
+        for (section in mandatoryCoreSections) {
+            if (!root.has(section) || root.isNull(section)) {
+                return BackupValidationResult.Error("El respaldo no contiene la sección obligatoria '$section' requerida para el formato v$formatVersion.")
             }
         }
 

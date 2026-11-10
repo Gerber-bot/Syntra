@@ -11,7 +11,7 @@ object UnitConverter {
 
     const val GRAMS_PER_LB = 453.59237
 
-    fun canonicalUnit(rawUnit: String?): String {
+    fun canonicalUnitOrNull(rawUnit: String?): String? {
         val u = rawUnit?.trim()?.lowercase(Locale.ROOT).orEmpty()
         return when {
             u.startsWith("kg") || u.startsWith("kilo") -> "KG"
@@ -19,9 +19,13 @@ object UnitConverter {
             u.startsWith("bloque") -> "BLOQUES"
             u.startsWith("placa") -> "PLACAS"
             u == "bw" || u.contains("corporal") -> "BW"
-            else -> "KG"
+            else -> null
         }
     }
+
+    fun isValidUnit(rawUnit: String?): Boolean = canonicalUnitOrNull(rawUnit) != null
+
+    fun canonicalUnit(rawUnit: String?): String = canonicalUnitOrNull(rawUnit) ?: "KG"
 
     /**
      * Converts a raw user-entered load into integer grams for persistence in SQLite.
