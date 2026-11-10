@@ -3,11 +3,16 @@ package android.llama.cpp
 import android.util.Log
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import java.util.concurrent.CancellationException
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.concurrent.thread
@@ -23,10 +28,19 @@ class LLamaAndroid {
     @Volatile
     private var isGenerating: Boolean = false
 
+    private var activeGenerationJob: Job? = null
     private var activeGenerationDeferred: CompletableDeferred<Unit>? = null
     private val generationIdCounter = AtomicLong(0L)
     @Volatile
     private var activeGenerationId: Long = 0L
+
+    private val loadIdCounter = AtomicLong(0L)
+    @Volatile
+    private var activeLoadId: Long = 0L
+    @Volatile
+    private var isLoadCancelled: Boolean = false
+
+    private var activeUnloadDeferred: CompletableDeferred<Unit>? = null
 
     private val runLoop: CoroutineDispatcher = Executors.newSingleThreadExecutor {
         thread(start = false, name = "Llm-RunLoop") {
@@ -139,6 +153,7 @@ class LLamaAndroid {
     }
 
     suspend fun load(pathToModel: String) {
+        val currentLoadId = loadIdCounter.incrementAndGet()
         withContext(runLoop) {
             if (!isLibraryLoaded) {
                 throw UnsatisfiedLinkError("Librería nativa llama-android no cargada")
@@ -148,7 +163,15 @@ class LLamaAndroid {
                 if (nativeState !is State.Idle) {
                     throw IllegalStateException("Cannot load model: engine is not Idle (current state: $nativeState)")
                 }
-                nativeState = State.Loading(pathToModel)
+                isLoadCancelled = false
+                activeLoadId = currentLoadId
+                nativeState = State.Loading(currentLoadId, pathToModel)
+            }
+
+            fun checkNotCancelled() {
+                if (isLoadCancelled || activeLoadId != currentLoadId) {
+                    throw CancellationException("Carga abortada por solicitud de descarga")
+                }
             }
 
             var model: Long = 0L
@@ -159,17 +182,24 @@ class LLamaAndroid {
             try {
                 model = load_model(pathToModel)
                 if (model == 0L) throw IllegalStateException("load_model() returned null")
+                checkNotCancelled()
 
                 context = new_context(model)
                 if (context == 0L) throw IllegalStateException("new_context() returned null")
+                checkNotCancelled()
 
                 batch = new_batch(2048, 0, 1)
                 if (batch == 0L) throw IllegalStateException("new_batch() returned null")
+                checkNotCancelled()
 
                 sampler = new_sampler()
                 if (sampler == 0L) throw IllegalStateException("new_sampler() returned null")
+                checkNotCancelled()
 
                 synchronized(stateLock) {
+                    if (isLoadCancelled || activeLoadId != currentLoadId || nativeState !is State.Loading) {
+                        throw CancellationException("Carga abortada antes de publicar Loaded")
+                    }
                     nativeState = State.Loaded(model, context, batch, sampler, pathToModel)
                 }
                 Log.i(tag, "Loaded model successfully: $pathToModel")
@@ -180,7 +210,9 @@ class LLamaAndroid {
                 if (context != 0L) try { free_context(context) } catch (_: Throwable) {}
                 if (model != 0L) try { free_model(model) } catch (_: Throwable) {}
                 synchronized(stateLock) {
-                    nativeState = State.Idle
+                    if (nativeState is State.Loading && (nativeState as State.Loading).loadId == currentLoadId) {
+                        nativeState = State.Idle
+                    }
                 }
                 throw t
             }
@@ -191,6 +223,7 @@ class LLamaAndroid {
         val genDeferred = CompletableDeferred<Unit>()
         val genId = generationIdCounter.incrementAndGet()
         val loadedState: State.Loaded
+        val job = currentCoroutineContext()[Job]
 
         synchronized(stateLock) {
             val current = nativeState
@@ -202,6 +235,7 @@ class LLamaAndroid {
             }
             isGenerating = true
             activeGenerationId = genId
+            activeGenerationJob = job
             activeGenerationDeferred = genDeferred
             loadedState = current
         }
@@ -241,8 +275,6 @@ class LLamaAndroid {
                 }
             }
         } finally {
-            // Context cleanup MUST happen while the context is 100% still valid!
-            // Notice: unload() awaits genDeferred, so loadedState.context cannot be freed during this call.
             try {
                 kv_cache_clear(loadedState.context)
             } catch (_: Throwable) {}
@@ -250,60 +282,132 @@ class LLamaAndroid {
             synchronized(stateLock) {
                 isGenerating = false
                 if (activeGenerationId == genId) {
+                    activeGenerationJob = null
                     activeGenerationDeferred = null
                 }
             }
-            // Signal to unload() or any waiting operation that generation cleanup has completely finished
             genDeferred.complete(Unit)
         }
     }.flowOn(runLoop)
 
+    private data class UnloadPlan(
+        val isOwner: Boolean,
+        val unloadDeferred: CompletableDeferred<Unit>?,
+        val stateToFree: State.Loaded?,
+        val genJobToCancel: Job?,
+        val genDeferredToAwait: CompletableDeferred<Unit>?
+    )
+
     suspend fun unload() {
-        val (deferredToAwait, stateToFree) = synchronized(stateLock) {
+        val plan = synchronized(stateLock) {
             when (val current = nativeState) {
-                is State.Loaded -> {
-                    val deferred = if (isGenerating) activeGenerationDeferred else null
-                    nativeState = State.Unloading(current)
-                    Pair(deferred, current)
+                is State.Idle -> {
+                    UnloadPlan(
+                        isOwner = false,
+                        unloadDeferred = null,
+                        stateToFree = null,
+                        genJobToCancel = null,
+                        genDeferredToAwait = null
+                    )
                 }
                 is State.Unloading -> {
-                    val deferred = if (isGenerating) activeGenerationDeferred else null
-                    Pair(deferred, current.loadedState)
+                    // Secondary concurrent caller: simply await ongoing single-flight unload
+                    UnloadPlan(
+                        isOwner = false,
+                        unloadDeferred = activeUnloadDeferred,
+                        stateToFree = null,
+                        genJobToCancel = null,
+                        genDeferredToAwait = null
+                    )
                 }
-                else -> {
-                    nativeState = State.Idle
-                    Pair(null, null)
+                is State.Loading -> {
+                    // Cancel pending load so it aborts and rolls back
+                    isLoadCancelled = true
+                    val deferred = CompletableDeferred<Unit>()
+                    activeUnloadDeferred = deferred
+                    nativeState = State.Unloading(null)
+                    UnloadPlan(
+                        isOwner = true,
+                        unloadDeferred = deferred,
+                        stateToFree = null,
+                        genJobToCancel = null,
+                        genDeferredToAwait = null
+                    )
+                }
+                is State.Loaded -> {
+                    val deferred = CompletableDeferred<Unit>()
+                    activeUnloadDeferred = deferred
+                    nativeState = State.Unloading(current)
+                    val job = activeGenerationJob
+                    val genDef = if (isGenerating) activeGenerationDeferred else null
+                    UnloadPlan(
+                        isOwner = true,
+                        unloadDeferred = deferred,
+                        stateToFree = current,
+                        genJobToCancel = job,
+                        genDeferredToAwait = genDef
+                    )
                 }
             }
         }
 
-        if (stateToFree != null) {
+        if (!plan.isOwner) {
+            plan.unloadDeferred?.await()
+            return
+        }
+
+        // --- SOLE OWNER OF UNLOAD ---
+        try {
             // 1. Cooperative cancellation request to native bridge
-            try {
-                cancel_generation(activeGenerationId)
-            } catch (_: Throwable) {}
-
-            // 2. Await full completion of active generation's finally block
-            try {
-                deferredToAwait?.await()
-            } catch (_: Throwable) {}
-
-            // 3. Now generation has fully terminated and run kv_cache_clear().
-            // We can safely free native resources on runLoop.
-            withContext(runLoop) {
+            val genId = activeGenerationId
+            if (genId > 0) {
                 try {
-                    free_sampler(stateToFree.sampler)
-                    free_batch(stateToFree.batch)
-                    free_context(stateToFree.context)
-                    free_model(stateToFree.model)
-                    Log.i(tag, "Unloaded model and freed native resources: ${stateToFree.modelPath}")
-                } catch (t: Throwable) {
-                    Log.w(tag, "Error freeing native resources: ${t.message}")
-                } finally {
+                    cancel_generation(genId)
+                } catch (_: Throwable) {}
+            }
+
+            // 2. Cancel the coroutine job that may be suspended in emit()
+            plan.genJobToCancel?.cancel(CancellationException("Modelo en proceso de descarga"))
+
+            // 3. Await generation cleanup with timeout to prevent deadlock
+            if (plan.genDeferredToAwait != null) {
+                withTimeoutOrNull(5000L) {
+                    plan.genDeferredToAwait.await()
+                } ?: run {
+                    Log.w(tag, "La generación activa no finalizó su limpieza dentro del tiempo límite durante unload")
+                }
+            }
+
+            // 4. Free native resources under NonCancellable on runLoop so caller cancellation CANNOT abort cleanup
+            withContext(NonCancellable) {
+                withContext(runLoop) {
+                    val stateToFree = plan.stateToFree
+                    if (stateToFree != null) {
+                        try {
+                            free_sampler(stateToFree.sampler)
+                            free_batch(stateToFree.batch)
+                            free_context(stateToFree.context)
+                            free_model(stateToFree.model)
+                            Log.i(tag, "Unloaded model and freed native resources: ${stateToFree.modelPath}")
+                        } catch (t: Throwable) {
+                            Log.w(tag, "Error freeing native resources: ${t.message}")
+                        }
+                    }
                     synchronized(stateLock) {
                         nativeState = State.Idle
+                        isGenerating = false
+                        activeGenerationJob = null
+                        activeGenerationDeferred = null
                     }
                 }
+            }
+        } finally {
+            synchronized(stateLock) {
+                if (nativeState is State.Unloading) {
+                    nativeState = State.Idle
+                }
+                activeUnloadDeferred?.complete(Unit)
+                activeUnloadDeferred = null
             }
         }
     }
@@ -345,7 +449,7 @@ class LLamaAndroid {
 
         sealed interface State {
             data object Idle: State
-            data class Loading(val modelPath: String): State
+            data class Loading(val loadId: Long, val modelPath: String): State
             data class Loaded(
                 val model: Long,
                 val context: Long,
@@ -353,7 +457,7 @@ class LLamaAndroid {
                 val sampler: Long,
                 val modelPath: String
             ): State
-            data class Unloading(val loadedState: Loaded): State
+            data class Unloading(val loadedState: Loaded?): State
         }
 
         private val _instance: LLamaAndroid = LLamaAndroid()

@@ -214,4 +214,61 @@ class IrisXNeuralStageB1Test {
         val preserved = IrisXContextBuilder.stripChatMlTokens(multilineText, trim = false)
         assertEquals(multilineText, preserved)
     }
+
+    @Test
+    fun `single flight unload allows multiple concurrent unload calls without race or error`() = runBlocking {
+        val llama = LLamaAndroid.instance()
+        // Concurrent unloads when Idle or Unloading must resolve cleanly
+        val jobs = (1..5).map {
+            launch {
+                llama.unload()
+            }
+        }
+        jobs.forEach { it.join() }
+        assertEquals(LLamaAndroid.Companion.State.Idle, llama.getCurrentState())
+        assertFalse(llama.hasModelLoaded())
+    }
+
+    @Test
+    fun `cancellation of an unload caller does not leave engine stuck in unloading state`() = runBlocking {
+        val llama = LLamaAndroid.instance()
+        val job = launch {
+            llama.unload()
+        }
+        job.cancel()
+        job.join()
+        assertEquals(LLamaAndroid.Companion.State.Idle, llama.getCurrentState())
+    }
+
+    @Test
+    fun `inference engine transitions through clean lifecycle during sequential load and unload`() = runBlocking {
+        val fallback = DeterministicInferenceEngine(db = null)
+        val engine = LlamaCppInferenceEngine(fallbackEngine = fallback)
+
+        val dummyModel = tempFolder.newFile("test_lifecycle.gguf")
+        FileOutputStream(dummyModel).use { out ->
+            val buffer = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN)
+            buffer.putInt(0x46554747)
+            buffer.putInt(3)
+            out.write(buffer.array())
+        }
+
+        assertEquals(EngineState.UNINITIALIZED, engine.state)
+        engine.loadModel(dummyModel)
+        assertEquals(EngineState.READY, engine.state)
+
+        // Multiple concurrent unloads must not throw or leave engine corrupted
+        val unloads = (1..3).map {
+            launch { engine.unloadModel() }
+        }
+        unloads.forEach { it.join() }
+
+        assertEquals(EngineState.UNINITIALIZED, engine.state)
+        assertFalse(engine.isModelLoaded())
+
+        // Re-load must work cleanly after multiple unloads
+        engine.loadModel(dummyModel)
+        assertEquals(EngineState.READY, engine.state)
+        assertTrue(engine.isModelLoaded())
+    }
 }

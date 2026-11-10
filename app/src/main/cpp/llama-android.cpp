@@ -16,112 +16,155 @@
 
 static std::atomic<uint64_t> g_active_generation_id{0};
 static std::atomic<uint64_t> g_cancelled_generation_id{0};
+static uint64_t g_buffer_generation_id{0};
 static std::mutex g_token_chars_mutex;
 static std::string cached_token_chars;
 
-bool is_valid_utf8(const char * string) {
-    if (!string) {
-        return true;
-    }
-
-    const unsigned char * bytes = (const unsigned char *)string;
-    int num;
-
-    while (*bytes != 0x00) {
-        if ((*bytes & 0x80) == 0x00) {
-            // U+0000 to U+007F
-            num = 1;
-        } else if ((*bytes & 0xE0) == 0xC0) {
-            // U+0080 to U+07FF
-            num = 2;
-        } else if ((*bytes & 0xF0) == 0xE0) {
-            // U+0800 to U+FFFF
-            num = 3;
-        } else if ((*bytes & 0xF8) == 0xF0) {
-            // U+10000 to U+10FFFF
-            num = 4;
-        } else {
-            return false;
-        }
-
-        bytes += 1;
-        for (int i = 1; i < num; ++i) {
-            if ((*bytes & 0xC0) != 0x80) {
-                return false;
-            }
-            bytes += 1;
-        }
-    }
-
-    return true;
-}
-
-// Converts standard UTF-8 string to a Java jstring using UTF-16 representation,
-// preventing JNI Modified UTF-8 issues with 4-byte characters (e.g. emojis).
-static jstring create_java_string_from_utf8(JNIEnv *env, const std::string &utf8_str) {
-    if (utf8_str.empty()) {
+// Robust Streaming UTF-8 to Java UTF-16 String decoder.
+// Decodes all complete valid UTF-8 sequences from buffer into UTF-16.
+// Rejects overlong encodings, out-of-range codepoints (> 0x10FFFF), and surrogate halves (0xD800..0xDFFF).
+// Emits U+FFFD (0xFFFD) for malformed bytes without dropping subsequent valid text.
+// If an incomplete valid sequence remains at the buffer boundary, it is retained for the next token chunk.
+static jstring decode_utf8_buffer_to_java_string(JNIEnv *env, std::string &buffer) {
+    if (buffer.empty()) {
         jchar empty_char = 0;
         return env->NewString(&empty_char, 0);
     }
 
     std::vector<jchar> utf16;
-    utf16.reserve(utf8_str.size());
+    utf16.reserve(buffer.size());
 
-    const unsigned char *p = reinterpret_cast<const unsigned char *>(utf8_str.data());
-    const unsigned char *end = p + utf8_str.size();
+    const unsigned char *p = reinterpret_cast<const unsigned char *>(buffer.data());
+    const size_t total = buffer.size();
+    size_t i = 0;
+    size_t last_consumed = 0;
 
-    while (p < end) {
-        uint32_t cp = 0;
-        int len = 0;
+    while (i < total) {
+        unsigned char b0 = p[i];
 
-        if (*p < 0x80) {
-            cp = *p;
-            len = 1;
-        } else if ((*p & 0xE0) == 0xC0) {
-            cp = *p & 0x1F;
-            len = 2;
-        } else if ((*p & 0xF0) == 0xE0) {
-            cp = *p & 0x0F;
-            len = 3;
-        } else if ((*p & 0xF8) == 0xF0) {
-            cp = *p & 0x07;
-            len = 4;
-        } else {
-            // Invalid byte, skip
-            p++;
-            continue;
-        }
-
-        if (p + len > end) {
-            // Incomplete byte sequence at tail
-            break;
-        }
-
-        bool valid = true;
-        for (int i = 1; i < len; ++i) {
-            if ((p[i] & 0xC0) != 0x80) {
-                valid = false;
+        if (b0 < 0x80) {
+            // 1-byte ASCII (0x00..0x7F)
+            utf16.push_back(static_cast<jchar>(b0));
+            i += 1;
+            last_consumed = i;
+        } else if (b0 >= 0xC2 && b0 <= 0xDF) {
+            // 2-byte sequence (0xC2..0xDF) -> 0x80..0x7FF (0xC0..0xC1 are overlong and rejected)
+            if (i + 1 >= total) {
+                // Incomplete sequence at buffer boundary: stop and retain for next token
                 break;
             }
-            cp = (cp << 6) | (p[i] & 0x3F);
-        }
+            unsigned char b1 = p[i + 1];
+            if ((b1 & 0xC0) == 0x80) {
+                uint32_t cp = ((b0 & 0x1F) << 6) | (b1 & 0x3F);
+                utf16.push_back(static_cast<jchar>(cp));
+                i += 2;
+                last_consumed = i;
+            } else {
+                // Invalid continuation byte: replace b0 with U+FFFD and resume scan from b1
+                utf16.push_back(0xFFFD);
+                i += 1;
+                last_consumed = i;
+            }
+        } else if (b0 >= 0xE0 && b0 <= 0xEF) {
+            // 3-byte sequence (0xE0..0xEF) -> 0x800..0xFFFF
+            if (i + 1 >= total) {
+                break;
+            }
+            unsigned char b1 = p[i + 1];
 
-        if (!valid) {
-            p++;
-            continue;
-        }
+            // Overlong check: if b0 == 0xE0, b1 must be >= 0xA0
+            // Surrogate check: if b0 == 0xED, b1 must be <= 0x9F (reject 0xD800..0xDFFF)
+            bool valid_b1 = ((b1 & 0xC0) == 0x80);
+            if (b0 == 0xE0 && b1 < 0xA0) valid_b1 = false;
+            if (b0 == 0xED && b1 > 0x9F) valid_b1 = false;
 
-        p += len;
+            if (!valid_b1) {
+                utf16.push_back(0xFFFD);
+                i += 1;
+                last_consumed = i;
+                continue;
+            }
 
-        if (cp <= 0xFFFF) {
-            utf16.push_back(static_cast<jchar>(cp));
-        } else if (cp <= 0x10FFFF) {
-            cp -= 0x10000;
-            jchar high = static_cast<jchar>(0xD800 + (cp >> 10));
-            jchar low = static_cast<jchar>(0xDC00 + (cp & 0x3FF));
-            utf16.push_back(high);
-            utf16.push_back(low);
+            if (i + 2 >= total) {
+                break;
+            }
+            unsigned char b2 = p[i + 2];
+            if ((b2 & 0xC0) == 0x80) {
+                uint32_t cp = ((b0 & 0x0F) << 12) | ((b1 & 0x3F) << 6) | (b2 & 0x3F);
+                utf16.push_back(static_cast<jchar>(cp));
+                i += 3;
+                last_consumed = i;
+            } else {
+                utf16.push_back(0xFFFD);
+                i += 1;
+                last_consumed = i;
+            }
+        } else if (b0 >= 0xF0 && b0 <= 0xF4) {
+            // 4-byte sequence (0xF0..0xF4) -> 0x10000..0x10FFFF
+            if (i + 1 >= total) {
+                break;
+            }
+            unsigned char b1 = p[i + 1];
+
+            // Overlong check: if b0 == 0xF0, b1 must be >= 0x90
+            // Out of range check: if b0 == 0xF4, b1 must be <= 0x8F
+            bool valid_b1 = ((b1 & 0xC0) == 0x80);
+            if (b0 == 0xF0 && b1 < 0x90) valid_b1 = false;
+            if (b0 == 0xF4 && b1 > 0x8F) valid_b1 = false;
+
+            if (!valid_b1) {
+                utf16.push_back(0xFFFD);
+                i += 1;
+                last_consumed = i;
+                continue;
+            }
+
+            if (i + 2 >= total) {
+                break;
+            }
+            unsigned char b2 = p[i + 2];
+            if ((b2 & 0xC0) != 0x80) {
+                utf16.push_back(0xFFFD);
+                i += 1;
+                last_consumed = i;
+                continue;
+            }
+
+            if (i + 3 >= total) {
+                break;
+            }
+            unsigned char b3 = p[i + 3];
+            if ((b3 & 0xC0) == 0x80) {
+                uint32_t cp = ((b0 & 0x07) << 18) | ((b1 & 0x3F) << 12) | ((b2 & 0x3F) << 6) | (b3 & 0x3F);
+                cp -= 0x10000;
+                jchar high = static_cast<jchar>(0xD800 + (cp >> 10));
+                jchar low = static_cast<jchar>(0xDC00 + (cp & 0x3FF));
+                utf16.push_back(high);
+                utf16.push_back(low);
+                i += 4;
+                last_consumed = i;
+            } else {
+                utf16.push_back(0xFFFD);
+                i += 1;
+                last_consumed = i;
+            }
+        } else {
+            // Invalid lead byte (0x80..0xBF, 0xC0..0xC1, 0xF5..0xFF)
+            utf16.push_back(0xFFFD);
+            i += 1;
+            last_consumed = i;
         }
+    }
+
+    if (last_consumed >= total) {
+        buffer.clear();
+    } else {
+        buffer.erase(0, last_consumed);
+    }
+
+    if (utf16.empty()) {
+        jchar empty_char = 0;
+        return env->NewString(&empty_char, 0);
     }
 
     return env->NewString(utf16.data(), static_cast<jsize>(utf16.size()));
@@ -367,14 +410,23 @@ Java_android_llama_cpp_LLamaAndroid_free_1sampler(JNIEnv *, jobject, jlong sampl
 extern "C"
 JNIEXPORT void JNICALL
 Java_android_llama_cpp_LLamaAndroid_cancel_1generation(JNIEnv *, jobject, jlong gen_id) {
-    if (gen_id <= 0) {
-        g_cancelled_generation_id.store(g_active_generation_id.load());
-    } else {
-        g_cancelled_generation_id.store(static_cast<uint64_t>(gen_id));
+    uint64_t target_gen_id = (gen_id <= 0) ? g_active_generation_id.load() : static_cast<uint64_t>(gen_id);
+
+    // Monotonic non-regressing cancellation marker
+    uint64_t current = g_cancelled_generation_id.load();
+    while (target_gen_id > current) {
+        if (g_cancelled_generation_id.compare_exchange_weak(current, target_gen_id)) {
+            break;
+        }
     }
+
+    // Only clear token buffer if the cancellation matches the active generation
     std::lock_guard<std::mutex> lock(g_token_chars_mutex);
-    cached_token_chars.clear();
-    LOGi("cancel_generation() called from JNI for gen_id %llu", (unsigned long long)gen_id);
+    if (target_gen_id == g_active_generation_id.load() && g_buffer_generation_id == target_gen_id) {
+        cached_token_chars.clear();
+    }
+    LOGi("cancel_generation() called from JNI for gen_id %llu (active: %llu)",
+         (unsigned long long)target_gen_id, (unsigned long long)g_active_generation_id.load());
 }
 
 extern "C"
@@ -406,6 +458,7 @@ Java_android_llama_cpp_LLamaAndroid_completion_1init(
     {
         std::lock_guard<std::mutex> lock(g_token_chars_mutex);
         cached_token_chars.clear();
+        g_buffer_generation_id = static_cast<uint64_t>(gen_id);
     }
 
     g_active_generation_id.store(static_cast<uint64_t>(gen_id));
@@ -512,7 +565,9 @@ Java_android_llama_cpp_LLamaAndroid_completion_1loop(
         static_cast<uint64_t>(gen_id) != g_active_generation_id.load()) {
         LOGi("completion_loop: generation %llu was cancelled cooperatively", (unsigned long long)gen_id);
         std::lock_guard<std::mutex> lock(g_token_chars_mutex);
-        cached_token_chars.clear();
+        if (g_buffer_generation_id == static_cast<uint64_t>(gen_id)) {
+            cached_token_chars.clear();
+        }
         env->ThrowNew(env->FindClass("java/util/concurrent/CancellationException"),
                       "Inferencia cancelada por el usuario");
         return nullptr;
@@ -538,7 +593,9 @@ Java_android_llama_cpp_LLamaAndroid_completion_1loop(
         static_cast<uint64_t>(gen_id) != g_active_generation_id.load()) {
         LOGi("completion_loop: cancelled after sampling");
         std::lock_guard<std::mutex> lock(g_token_chars_mutex);
-        cached_token_chars.clear();
+        if (g_buffer_generation_id == static_cast<uint64_t>(gen_id)) {
+            cached_token_chars.clear();
+        }
         env->ThrowNew(env->FindClass("java/util/concurrent/CancellationException"),
                       "Inferencia cancelada por el usuario");
         return nullptr;
@@ -547,7 +604,9 @@ Java_android_llama_cpp_LLamaAndroid_completion_1loop(
     if (llama_vocab_is_eog(vocab, new_token_id) || n_cur >= n_len) {
         // COMPLETED cleanly. Clear buffer and return nullptr without exception.
         std::lock_guard<std::mutex> lock(g_token_chars_mutex);
-        cached_token_chars.clear();
+        if (g_buffer_generation_id == static_cast<uint64_t>(gen_id)) {
+            cached_token_chars.clear();
+        }
         return nullptr;
     }
 
@@ -556,15 +615,12 @@ Java_android_llama_cpp_LLamaAndroid_completion_1loop(
 
     {
         std::lock_guard<std::mutex> lock(g_token_chars_mutex);
-        cached_token_chars += new_token_chars;
-
-        if (is_valid_utf8(cached_token_chars.c_str())) {
-            new_token = create_java_string_from_utf8(env, cached_token_chars);
-            LOGi("cached: %s, new_token_chars: `%s`, id: %d", cached_token_chars.c_str(), new_token_chars.c_str(), new_token_id);
+        if (g_buffer_generation_id != static_cast<uint64_t>(gen_id)) {
             cached_token_chars.clear();
-        } else {
-            new_token = create_java_string_from_utf8(env, "");
+            g_buffer_generation_id = static_cast<uint64_t>(gen_id);
         }
+        cached_token_chars += new_token_chars;
+        new_token = decode_utf8_buffer_to_java_string(env, cached_token_chars);
     }
 
     common_batch_clear(*batch);
@@ -574,7 +630,9 @@ Java_android_llama_cpp_LLamaAndroid_completion_1loop(
         LOGe("llama_decode() failed during generation loop");
         llama_kv_self_clear(context);
         std::lock_guard<std::mutex> lock(g_token_chars_mutex);
-        cached_token_chars.clear();
+        if (g_buffer_generation_id == static_cast<uint64_t>(gen_id)) {
+            cached_token_chars.clear();
+        }
         env->ThrowNew(env->FindClass("java/lang/IllegalStateException"),
                       "llama_decode() falló durante la generación");
         return nullptr;

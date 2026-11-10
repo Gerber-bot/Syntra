@@ -13,8 +13,8 @@ android {
         applicationId = "com.syntra.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 25
-        versionName = "0.7.0-alpha16"
+        versionCode = 26
+        versionName = "0.7.0-alpha17"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         ndk {
