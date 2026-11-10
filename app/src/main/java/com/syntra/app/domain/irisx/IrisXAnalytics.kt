@@ -174,39 +174,18 @@ object IrisXAnalytics {
         val targetNorm = normalize(exerciseName)
         val canonicalTarget = learnedAliases[targetNorm]?.let { normalize(it) } ?: targetNorm
 
-        // Match exercise IDs with strict identity isolation:
-        // 1. If targetExerciseId is provided, isolate to that exercise and explicit confirmed aliases with matching equipment.
-        // 2. If targetExerciseId is null, match exact normalized names or confirmed aliases (no partial substrings).
-        //    If candidates have distinct non-blank equipments, they represent separate machines and cannot be merged.
+        // A name alias or matching equipment label does not confirm physical equivalence.
+        // The current model has no equipment-equivalence records, so histories must stay within one stable ID.
+        // Without an ID, exact names and aliases may resolve only one unambiguous exercise.
         val matchingExercises: List<ExerciseEntity> = if (targetExerciseId != null) {
-            val targetEx = exercises.find { it.id == targetExerciseId }
-            if (targetEx == null) emptyList()
-            else {
-                exercises.filter { ex ->
-                    if (ex.id == targetExerciseId) {
-                        true
-                    } else {
-                        val exNorm = normalize(ex.displayName)
-                        val isAlias = learnedAliases[exNorm]?.let { normalize(it) } == normalize(targetEx.displayName) ||
-                            learnedAliases[ex.normalizedName]?.let { normalize(it) } == targetEx.normalizedName
-                        val sameEquipment = (ex.equipment ?: "").trim().equals((targetEx.equipment ?: "").trim(), ignoreCase = true)
-                        isAlias && sameEquipment
-                    }
-                }
-            }
+            exercises.filter { it.id == targetExerciseId }
         } else {
             val candidates = exercises.filter { ex ->
                 val exNorm = normalize(ex.displayName)
                 exNorm == canonicalTarget || exNorm == targetNorm ||
                     ex.normalizedName == canonicalTarget || ex.normalizedName == targetNorm
             }
-            val distinctEquipments = candidates.mapNotNull { it.equipment?.trim()?.lowercase() }.filter { it.isNotEmpty() }.distinct()
-            if (distinctEquipments.size > 1) {
-                // Ambiguous machines with same name but distinct equipments: require targetExerciseId, do not merge
-                emptyList()
-            } else {
-                candidates
-            }
+            if (candidates.size == 1) candidates else emptyList()
         }
 
         val matchingIds = matchingExercises.map { it.id }.toSet()

@@ -213,6 +213,8 @@ object IrisXCoach {
                 learnedAliases = learnedAliases,
                 targetExerciseId = ex.id
             )
+            // Never derive numeric advice from another exercise's history, even through a name alias.
+            if (report.history.any { it.exerciseId != ex.id }) continue
             val modality = report.dominantModality ?: continue
             val modHistory = report.history.filter { it.modality == modality }
             if (modHistory.size < 2) continue

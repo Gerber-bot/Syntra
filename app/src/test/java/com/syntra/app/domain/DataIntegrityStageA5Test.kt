@@ -317,7 +317,7 @@ class DataIntegrityStageA5Test {
     }
 
     @Test
-    fun testConfirmedAliasAggregatesSameEquipment() {
+    fun testConfirmedNameAliasDoesNotProvePhysicalEquivalenceBetweenIds() {
         val ex1 = ExerciseEntity(id = 1, displayName = "Press Banca Plano", normalizedName = "press banca plano", muscleGroup = "Pecho", equipment = "Barra")
         val exAlias = ExerciseEntity(id = 2, displayName = "Banca Plana", normalizedName = "banca plana", muscleGroup = "Pecho", equipment = "Barra")
 
@@ -338,7 +338,8 @@ class DataIntegrityStageA5Test {
             learnedAliases = aliases
         )
 
-        assertEquals("Confirmed alias with matching equipment must be aggregated", 2, report.history.size)
+        assertEquals("A name alias and equipment label must not merge distinct IDs", 1, report.history.size)
+        assertEquals(1L, report.history.single().exerciseId)
     }
 
     // =========================================================================
