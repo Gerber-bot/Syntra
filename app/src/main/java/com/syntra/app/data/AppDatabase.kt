@@ -769,26 +769,89 @@ abstract class AppDatabase : RoomDatabase() {
                     )
                 """.trimIndent())
 
-                db.execSQL("""
-                    INSERT INTO `workout_sessions_new` (`id`, `title`, `startedAtMillis`, `finishedAtMillis`, `notes`, `category`, `sessionUuid`)
-                    SELECT 
-                        s.id, 
-                        s.title, 
-                        s.startedAtMillis, 
-                        s.finishedAtMillis, 
-                        s.notes, 
-                        s.category,
-                        CASE 
-                            WHEN trim(s.sessionUuid) = '' THEN NULL
-                            WHEN s.id = (
-                                SELECT min(d.id) 
-                                FROM workout_sessions d 
-                                WHERE trim(d.sessionUuid) = trim(s.sessionUuid)
-                            ) THEN trim(s.sessionUuid)
-                            ELSE trim(s.sessionUuid) || '_dup_' || s.id
-                        END
-                    FROM `workout_sessions` s
-                """.trimIndent())
+                // Deterministic UUID assignment policy:
+                // 1. Normalize: trim leading/trailing whitespace. Empty or blank strings map to NULL (legacy sessions).
+                // 2. Reserved originals: record all existing non-blank normalized UUIDs before generating replacements.
+                // 3. First-come reservation: the first session (ordered by id ASC) in any duplicate group retains the normalized UUID.
+                // 4. Collision-free substitutes: duplicates generate candidate "${trimmed}_dup_${id}".
+                //    If the candidate collides with ANY reserved original UUID or already-assigned UUID, append a progressive counter.
+                // 5. Preserves all row IDs, sessions, sets, and foreign key relations without drops or cascades.
+                val reservedOriginalUuids = mutableSetOf<String>()
+                data class SessionRow(
+                    val id: Long,
+                    val title: String,
+                    val startedAtMillis: Long,
+                    val finishedAtMillis: Long?,
+                    val notes: String,
+                    val category: String,
+                    val trimmedUuid: String?
+                )
+                val rows = mutableListOf<SessionRow>()
+
+                db.query("SELECT id, title, startedAtMillis, finishedAtMillis, notes, category, sessionUuid FROM workout_sessions ORDER BY id ASC").use { cursor ->
+                    val idIdx = cursor.getColumnIndexOrThrow("id")
+                    val titleIdx = cursor.getColumnIndexOrThrow("title")
+                    val startedIdx = cursor.getColumnIndexOrThrow("startedAtMillis")
+                    val finishedIdx = cursor.getColumnIndexOrThrow("finishedAtMillis")
+                    val notesIdx = cursor.getColumnIndexOrThrow("notes")
+                    val catIdx = cursor.getColumnIndexOrThrow("category")
+                    val uuidIdx = cursor.getColumnIndexOrThrow("sessionUuid")
+
+                    while (cursor.moveToNext()) {
+                        val id = cursor.getLong(idIdx)
+                        val title = cursor.getString(titleIdx)
+                        val started = cursor.getLong(startedIdx)
+                        val finished = if (cursor.isNull(finishedIdx)) null else cursor.getLong(finishedIdx)
+                        val notes = cursor.getString(notesIdx)
+                        val cat = cursor.getString(catIdx)
+                        val rawUuid = if (cursor.isNull(uuidIdx)) null else cursor.getString(uuidIdx)
+                        val trimmed = rawUuid?.trim()?.takeIf { it.isNotEmpty() }
+                        if (trimmed != null) {
+                            reservedOriginalUuids.add(trimmed)
+                        }
+                        rows.add(SessionRow(id, title, started, finished, notes, cat, trimmed))
+                    }
+                }
+
+                val assignedUuids = mutableSetOf<String>()
+                val insertStmt = db.compileStatement(
+                    "INSERT INTO `workout_sessions_new` (`id`, `title`, `startedAtMillis`, `finishedAtMillis`, `notes`, `category`, `sessionUuid`) VALUES (?, ?, ?, ?, ?, ?, ?)"
+                )
+
+                for (row in rows) {
+                    val finalUuid: String? = if (row.trimmedUuid == null) {
+                        null
+                    } else if (!assignedUuids.contains(row.trimmedUuid)) {
+                        assignedUuids.add(row.trimmedUuid)
+                        row.trimmedUuid
+                    } else {
+                        var candidate = "${row.trimmedUuid}_dup_${row.id}"
+                        var counter = 1
+                        while (assignedUuids.contains(candidate) || reservedOriginalUuids.contains(candidate)) {
+                            candidate = "${row.trimmedUuid}_dup_${row.id}_$counter"
+                            counter++
+                        }
+                        assignedUuids.add(candidate)
+                        candidate
+                    }
+
+                    insertStmt.bindLong(1, row.id)
+                    insertStmt.bindString(2, row.title)
+                    insertStmt.bindLong(3, row.startedAtMillis)
+                    if (row.finishedAtMillis != null) {
+                        insertStmt.bindLong(4, row.finishedAtMillis)
+                    } else {
+                        insertStmt.bindNull(4)
+                    }
+                    insertStmt.bindString(5, row.notes)
+                    insertStmt.bindString(6, row.category)
+                    if (finalUuid != null) {
+                        insertStmt.bindString(7, finalUuid)
+                    } else {
+                        insertStmt.bindNull(7)
+                    }
+                    insertStmt.executeInsert()
+                }
 
                 db.execSQL("DROP TABLE `workout_sessions`")
                 db.execSQL("ALTER TABLE `workout_sessions_new` RENAME TO `workout_sessions`")

@@ -35,7 +35,9 @@ data class ExerciseSessionPoint(
     val modalityVolumeKg: Double,
     val assistedCounterweightKg: Double = 0.0,
     val dataQuality: MetricDataQuality,
-    val unit: String = "KG"
+    val unit: String = "KG",
+    val equipment: String? = null,
+    val exerciseId: Long? = null
 )
 
 data class PersonalRecord(
@@ -143,26 +145,70 @@ object IrisXAnalytics {
     }
 
     /**
+     * Checks if two exercise load units can be converted and quantitatively compared.
+     * Physical mass units (KG and LBS) are mutually convertible via standard conversion.
+     * Discrete machine units (BLOQUES, PLACAS) and bodyweight (BW) cannot be converted to physical mass
+     * or between each other without explicit calibration.
+     */
+    fun areUnitsConvertible(u1: String, u2: String): Boolean {
+        val c1 = com.syntra.app.domain.UnitConverter.canonicalUnit(u1)
+        val c2 = com.syntra.app.domain.UnitConverter.canonicalUnit(u2)
+        if (c1 == c2) return true
+        if ((c1 == "KG" || c1 == "LBS") && (c2 == "KG" || c2 == "LBS")) return true
+        return false
+    }
+
+    /**
      * Analyzes progression, history, PRs, stagnation, and chart points for a specific exercise.
      * Strictly separates incompatible load modalities (e.g., never mixes bilateral barbell with
-     * per-arm dumbbell or assisted counterweight).
+     * per-arm dumbbell or assisted counterweight) and isolates by stable exercise and equipment identity.
      */
     fun analyzeExerciseProgression(
         exerciseName: String,
         sessions: List<WorkoutSessionEntity>,
         allSets: List<WorkoutSetEntity>,
         exercises: List<ExerciseEntity>,
-        learnedAliases: Map<String, String> = emptyMap()
+        learnedAliases: Map<String, String> = emptyMap(),
+        targetExerciseId: Long? = null
     ): ExerciseProgressionReport {
         val targetNorm = normalize(exerciseName)
         val canonicalTarget = learnedAliases[targetNorm]?.let { normalize(it) } ?: targetNorm
 
-        // Match exercise IDs
-        val matchingExercises = exercises.filter { ex ->
-            val exNorm = normalize(ex.displayName)
-            exNorm == canonicalTarget || exNorm == targetNorm ||
-                exNorm.contains(canonicalTarget) || canonicalTarget.contains(exNorm)
+        // Match exercise IDs with strict identity isolation:
+        // 1. If targetExerciseId is provided, isolate to that exercise and explicit confirmed aliases with matching equipment.
+        // 2. If targetExerciseId is null, match exact normalized names or confirmed aliases (no partial substrings).
+        //    If candidates have distinct non-blank equipments, they represent separate machines and cannot be merged.
+        val matchingExercises: List<ExerciseEntity> = if (targetExerciseId != null) {
+            val targetEx = exercises.find { it.id == targetExerciseId }
+            if (targetEx == null) emptyList()
+            else {
+                exercises.filter { ex ->
+                    if (ex.id == targetExerciseId) {
+                        true
+                    } else {
+                        val exNorm = normalize(ex.displayName)
+                        val isAlias = learnedAliases[exNorm]?.let { normalize(it) } == normalize(targetEx.displayName) ||
+                            learnedAliases[ex.normalizedName]?.let { normalize(it) } == targetEx.normalizedName
+                        val sameEquipment = (ex.equipment ?: "").trim().equals((targetEx.equipment ?: "").trim(), ignoreCase = true)
+                        isAlias && sameEquipment
+                    }
+                }
+            }
+        } else {
+            val candidates = exercises.filter { ex ->
+                val exNorm = normalize(ex.displayName)
+                exNorm == canonicalTarget || exNorm == targetNorm ||
+                    ex.normalizedName == canonicalTarget || ex.normalizedName == targetNorm
+            }
+            val distinctEquipments = candidates.mapNotNull { it.equipment?.trim()?.lowercase() }.filter { it.isNotEmpty() }.distinct()
+            if (distinctEquipments.size > 1) {
+                // Ambiguous machines with same name but distinct equipments: require targetExerciseId, do not merge
+                emptyList()
+            } else {
+                candidates
+            }
         }
+
         val matchingIds = matchingExercises.map { it.id }.toSet()
         val displayTitle = matchingExercises.firstOrNull()?.displayName ?: exerciseName.trim()
         val equipmentMap = exercises.associate { it.id to it.equipment }
@@ -181,7 +227,7 @@ object IrisXAnalytics {
                     consecutiveSessionsWithoutProgress = 0,
                     modality = null,
                     criteriaUsed = "Mínimo $STAGNATION_THRESHOLD_SESSIONS sesiones en la misma modalidad.",
-                    explanation = "Datos insuficientes: no hay sesiones registradas para '$displayTitle'.",
+                    explanation = "Datos insuficientes: no hay sesiones comparables registradas para '$displayTitle'.",
                     dataQuality = MetricDataQuality.INSUFFICIENT_DATA
                 ),
                 loadChartPoints = emptyList(),
@@ -189,7 +235,7 @@ object IrisXAnalytics {
                 incompatibleModalitiesDetected = false,
                 fatigueDisclaimer = null,
                 dataQuality = MetricDataQuality.INSUFFICIENT_DATA,
-                summaryText = "Datos insuficientes: no se encontraron registros históricos para '$displayTitle'."
+                summaryText = "Datos insuficientes: no se encontraron registros históricos comparables para '$displayTitle'."
             )
         }
 
@@ -246,7 +292,9 @@ object IrisXAnalytics {
                         modalityVolumeKg = volMetrics.totalExternalKg,
                         assistedCounterweightKg = volMetrics.assistedWeightKg,
                         dataQuality = quality,
-                        unit = bestSet.loadUnit
+                        unit = bestSet.loadUnit,
+                        equipment = equipmentMap[bestSet.exerciseId],
+                        exerciseId = bestSet.exerciseId
                     )
                 )
             }
@@ -312,7 +360,11 @@ object IrisXAnalytics {
             else -> {
                 val prev = dominantHistory[dominantHistory.size - 2]
                 val last = dominantHistory.last()
-                if (prev.unit != last.unit) {
+                val unitsConvertible = areUnitsConvertible(prev.unit, last.unit)
+                val sameEquipment = prev.equipment.isNullOrBlank() || last.equipment.isNullOrBlank() ||
+                    prev.equipment.trim().equals(last.equipment.trim(), ignoreCase = true)
+
+                if (!unitsConvertible || !sameEquipment) {
                     ProgressionStatus.INSUFFICIENT_DATA
                 } else {
                     val improved = isSessionImproved(prev, last, dominantModality!!)
@@ -445,7 +497,12 @@ object IrisXAnalytics {
         curr: ExerciseSessionPoint,
         modality: LoadModality
     ): Boolean {
-        if (prev.modality != curr.modality || prev.unit != curr.unit) return false
+        if (prev.modality != curr.modality) return false
+        if (!areUnitsConvertible(prev.unit, curr.unit)) return false
+        if (!prev.equipment.isNullOrBlank() && !curr.equipment.isNullOrBlank() &&
+            !prev.equipment.trim().equals(curr.equipment.trim(), ignoreCase = true)) {
+            return false
+        }
         return when (modality) {
             LoadModality.ASSISTED_BODYWEIGHT -> {
                 curr.topLoadGrams < prev.topLoadGrams ||
@@ -467,7 +524,12 @@ object IrisXAnalytics {
         curr: ExerciseSessionPoint,
         modality: LoadModality
     ): Boolean {
-        if (prev.modality != curr.modality || prev.unit != curr.unit) return false
+        if (prev.modality != curr.modality) return false
+        if (!areUnitsConvertible(prev.unit, curr.unit)) return false
+        if (!prev.equipment.isNullOrBlank() && !curr.equipment.isNullOrBlank() &&
+            !prev.equipment.trim().equals(curr.equipment.trim(), ignoreCase = true)) {
+            return false
+        }
         return when (modality) {
             LoadModality.ASSISTED_BODYWEIGHT -> {
                 curr.topLoadGrams > prev.topLoadGrams ||
@@ -486,7 +548,8 @@ object IrisXAnalytics {
     /**
      * Explicit stagnation detection:
      * Requires at least 3 consecutive sessions of the same modality where neither maximum load,
-     * repetitions at top load, nor total modality volume has exceeded the baseline session of the window.
+     * repetitions at top load, nor total modality volume has exceeded the baseline session of the window,
+     * AND performance has not regressed (distinguishing a plateau from regression/deload).
      */
     fun evaluateStagnation(
         exerciseName: String,
@@ -509,8 +572,10 @@ object IrisXAnalytics {
         val recent = modalityHistory.takeLast(STAGNATION_THRESHOLD_SESSIONS)
         val distinctUnits = recent.map { it.unit }.distinct()
         if (distinctUnits.size > 1) {
-            val allKgOrLb = distinctUnits.all { it == "KG" || it == "LBS" }
-            if (!allKgOrLb) {
+            val allConvertible = recent.all { r ->
+                areUnitsConvertible(recent.first().unit, r.unit)
+            }
+            if (!allConvertible) {
                 return StagnationReport(
                     isStagnant = false,
                     consecutiveSessionsWithoutProgress = 0,
@@ -520,6 +585,18 @@ object IrisXAnalytics {
                     dataQuality = MetricDataQuality.INSUFFICIENT_DATA
                 )
             }
+        }
+
+        val distinctEquipments = recent.mapNotNull { it.equipment?.trim()?.takeIf { s -> s.isNotEmpty() } }.distinct()
+        if (distinctEquipments.size > 1) {
+            return StagnationReport(
+                isStagnant = false,
+                consecutiveSessionsWithoutProgress = 0,
+                modality = modality,
+                criteriaUsed = criterion,
+                explanation = "No es posible evaluar estancamiento en $exerciseName: la ventana contiene registros de equipos diferentes (${distinctEquipments.joinToString()}) sin equivalencia confirmada.",
+                dataQuality = MetricDataQuality.INSUFFICIENT_DATA
+            )
         }
 
         val baseline = recent.first()
@@ -532,18 +609,23 @@ object IrisXAnalytics {
             }
         }
 
-        val isStagnant = !progressedInWindow
+        // Distinguish load regression from flat stagnation
+        val hasDecreasingLoad = recent.last().topLoadGrams < baseline.topLoadGrams
+        val isStagnant = !progressedInWindow && !hasDecreasingLoad
         val quality = if (recent.any { it.dataQuality == MetricDataQuality.ESTIMATED }) {
             MetricDataQuality.ESTIMATED
         } else {
             MetricDataQuality.MEASURED
         }
 
-        val explanation = if (isStagnant) {
-            val loadStr = com.syntra.app.domain.UnitConverter.formatDisplay(baseline.topLoadGrams, baseline.unit)
-            "Estancamiento detectado en $exerciseName (${modality.displayName}): $STAGNATION_THRESHOLD_SESSIONS sesiones sin superar la marca de $loadStr × ${baseline.topLoadReps} reps."
-        } else {
-            "Sin estancamiento en $exerciseName: se registró progresión dentro de las últimas $STAGNATION_THRESHOLD_SESSIONS sesiones."
+        val explanation = when {
+            progressedInWindow -> "Sin estancamiento en $exerciseName: se registró progresión dentro de las últimas $STAGNATION_THRESHOLD_SESSIONS sesiones."
+            hasDecreasingLoad -> "Sin estancamiento en $exerciseName: se registró disminución de carga o repeticiones (retroceso puntual o descarga), no meseta estable."
+            isStagnant -> {
+                val loadStr = com.syntra.app.domain.UnitConverter.formatDisplay(baseline.topLoadGrams, baseline.unit)
+                "Estancamiento detectado en $exerciseName (${modality.displayName}): $STAGNATION_THRESHOLD_SESSIONS sesiones sin superar la marca de $loadStr × ${baseline.topLoadReps} reps."
+            }
+            else -> "Datos insuficientes para determinar estancamiento en $exerciseName."
         }
 
         return StagnationReport(

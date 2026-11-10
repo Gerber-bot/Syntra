@@ -210,7 +210,8 @@ object IrisXCoach {
                 sessions = sessions,
                 allSets = allSets,
                 exercises = exercises,
-                learnedAliases = learnedAliases
+                learnedAliases = learnedAliases,
+                targetExerciseId = ex.id
             )
             val modality = report.dominantModality ?: continue
             val modHistory = report.history.filter { it.modality == modality }
@@ -219,8 +220,10 @@ object IrisXCoach {
             val lastPoint = modHistory.last()
             val prevPoint = modHistory[modHistory.size - 2]
 
-            // If units differ, they cannot be quantitatively compared without defined equivalence
-            if (lastPoint.unit != prevPoint.unit) continue
+            // If units cannot be converted, or distinct equipments are involved without confirmed equivalence, skip progression
+            if (!IrisXAnalytics.areUnitsConvertible(lastPoint.unit, prevPoint.unit)) continue
+            if (!lastPoint.equipment.isNullOrBlank() && !prevPoint.equipment.isNullOrBlank() &&
+                !lastPoint.equipment.trim().equals(prevPoint.equipment.trim(), ignoreCase = true)) continue
 
             val lastLoadStr = com.syntra.app.domain.UnitConverter.formatDisplay(lastPoint.topLoadGrams, lastPoint.unit)
             val prevLoadStr = com.syntra.app.domain.UnitConverter.formatDisplay(prevPoint.topLoadGrams, prevPoint.unit)
