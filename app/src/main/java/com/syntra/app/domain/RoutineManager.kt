@@ -222,24 +222,24 @@ object RoutineManager {
             if (last.topLoadGrams >= currentSuggested && last.topLoadReps >= spec.maxReps && modality != LoadModality.BODYWEIGHT) {
                 val incrementGrams = if (modality == LoadModality.DUMBBELL_PER_ARM || modality == LoadModality.UNILATERAL) 1000 else 2500
                 val recommended = last.topLoadGrams + incrementGrams
-                val lastKg = SportsMetricsCalculator.formatKg(last.topLoadGrams / 1000.0)
-                val recKg = SportsMetricsCalculator.formatKg(recommended / 1000.0)
+                val lastLoad = UnitConverter.formatDisplay(last.topLoadGrams, last.unit)
+                val recLoad = UnitConverter.formatDisplay(recommended, last.unit)
                 suggestions.add(
                     RoutineCoachSuggestion(
                         exerciseName = spec.exerciseName,
                         currentSuggestedLoadGrams = spec.suggestedLoadGrams,
                         recommendedLoadGrams = recommended,
-                        reason = "Alcanzaste el tope del rango (${last.topLoadReps} reps con $lastKg). IrisX Coach sugiere $recKg para la próxima sesión."
+                        reason = "Alcanzaste el tope del rango (${last.topLoadReps} reps con $lastLoad). IrisX Coach sugiere $recLoad para la próxima sesión."
                     )
                 )
             } else if (spec.suggestedLoadGrams == null && last.topLoadGrams > 0) {
-                val lastKg = SportsMetricsCalculator.formatKg(last.topLoadGrams / 1000.0)
+                val lastLoad = UnitConverter.formatDisplay(last.topLoadGrams, last.unit)
                 suggestions.add(
                     RoutineCoachSuggestion(
                         exerciseName = spec.exerciseName,
                         currentSuggestedLoadGrams = null,
                         recommendedLoadGrams = last.topLoadGrams,
-                        reason = "Sin carga base definida en la rutina; tu última carga registrada fue $lastKg × ${last.topLoadReps} reps."
+                        reason = "Sin carga base definida en la rutina; tu última carga registrada fue $lastLoad × ${last.topLoadReps} reps."
                     )
                 )
             }

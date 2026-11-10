@@ -34,7 +34,8 @@ data class ExerciseSessionPoint(
     val setsCount: Int,
     val modalityVolumeKg: Double,
     val assistedCounterweightKg: Double = 0.0,
-    val dataQuality: MetricDataQuality
+    val dataQuality: MetricDataQuality,
+    val unit: String = "KG"
 )
 
 data class PersonalRecord(
@@ -47,7 +48,8 @@ data class PersonalRecord(
     val loadAtMaxRepsGrams: Int,
     val achievedAtMillis: Long,
     val sessionId: Long,
-    val dataQuality: MetricDataQuality
+    val dataQuality: MetricDataQuality,
+    val unit: String = "KG"
 )
 
 enum class ProgressionStatus(val displayName: String) {
@@ -243,7 +245,8 @@ object IrisXAnalytics {
                         setsCount = modSets.size,
                         modalityVolumeKg = volMetrics.totalExternalKg,
                         assistedCounterweightKg = volMetrics.assistedWeightKg,
-                        dataQuality = quality
+                        dataQuality = quality,
+                        unit = bestSet.loadUnit
                     )
                 )
             }
@@ -294,7 +297,8 @@ object IrisXAnalytics {
                 loadAtMaxRepsGrams = maxRepsSet.loadGrams,
                 achievedAtMillis = bestPoint.timestampMillis,
                 sessionId = bestPoint.sessionId,
-                dataQuality = bestPoint.dataQuality
+                dataQuality = bestPoint.dataQuality,
+                unit = bestPoint.unit
             )
         }
 
@@ -332,12 +336,17 @@ object IrisXAnalytics {
 
         // Build Chart Data Points for the dominant modality
         val loadChartPoints = dominantHistory.mapIndexed { idx, pt ->
-            val kg = pt.topLoadGrams / 1000.0
+            val displayVal = com.syntra.app.domain.UnitConverter.toRawValue(pt.topLoadGrams, pt.unit)
             ChartDataPoint(
                 label = "S${idx + 1}",
                 timestampMillis = pt.timestampMillis,
-                value = kg,
-                unit = if (pt.modality == LoadModality.DUMBBELL_PER_ARM) "kg/brazo" else "kg",
+                value = displayVal,
+                unit = when (pt.modality) {
+                    LoadModality.DUMBBELL_PER_ARM -> "kg/brazo"
+                    LoadModality.MACHINE_BLOCKS -> pt.unit.lowercase()
+                    LoadModality.BODYWEIGHT -> "reps"
+                    else -> pt.unit.lowercase()
+                },
                 modality = pt.modality,
                 dataQuality = pt.dataQuality
             )
@@ -368,7 +377,11 @@ object IrisXAnalytics {
             append("Estado: ${status.displayName} [${overallQuality.displayName}]\n")
             val pr = dominantModality?.let { prsByModality[it] }
             if (pr != null) {
-                val prKg = SportsMetricsCalculator.formatKg(pr.maxLoadGrams / 1000.0)
+                val prLoadFormatted = when (dominantModality) {
+                    LoadModality.MACHINE_BLOCKS -> com.syntra.app.domain.UnitConverter.formatDisplay(pr.maxLoadGrams, pr.unit)
+                    LoadModality.BODYWEIGHT -> "peso corporal"
+                    else -> com.syntra.app.domain.UnitConverter.formatDisplay(pr.maxLoadGrams, pr.unit)
+                }
                 val suffix = when (dominantModality) {
                     LoadModality.DUMBBELL_PER_ARM -> " por brazo"
                     LoadModality.UNILATERAL -> " por lado"
@@ -376,14 +389,14 @@ object IrisXAnalytics {
                     LoadModality.ASSISTED_BODYWEIGHT -> " de asistencia"
                     else -> ""
                 }
-                append("Récord registrado: $prKg$suffix × ${pr.repsAtMaxLoad} reps\n")
+                append("Récord registrado: $prLoadFormatted$suffix × ${pr.repsAtMaxLoad} reps\n")
             }
             if (dominantHistory.size >= 2) {
                 val first = dominantHistory.first()
                 val last = dominantHistory.last()
-                val firstKg = SportsMetricsCalculator.formatKg(first.topLoadGrams / 1000.0)
-                val lastKg = SportsMetricsCalculator.formatKg(last.topLoadGrams / 1000.0)
-                append("Evolución: de $firstKg × ${first.topLoadReps} a $lastKg × ${last.topLoadReps}\n")
+                val firstFormatted = com.syntra.app.domain.UnitConverter.formatDisplay(first.topLoadGrams, first.unit)
+                val lastFormatted = com.syntra.app.domain.UnitConverter.formatDisplay(last.topLoadGrams, last.unit)
+                append("Evolución: de $firstFormatted × ${first.topLoadReps} a $lastFormatted × ${last.topLoadReps}\n")
             }
             if (incompatibleModalitiesDetected) {
                 append("ℹ Se registraron múltiples modalidades (${distinctModalities.joinToString { it.displayName }}). Las cargas se analizaron por separado sin mezclarlas.\n")

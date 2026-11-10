@@ -79,6 +79,7 @@ object BackupSerializer {
                 put("startedAtMillis", s.startedAtMillis)
                 put("finishedAtMillis", s.finishedAtMillis ?: JSONObject.NULL)
                 put("notes", s.notes)
+                put("sessionUuid", s.sessionUuid)
             })
         }
         root.put("workoutSessions", sessionsArr)
@@ -252,6 +253,23 @@ object BackupSerializer {
             return BackupValidationResult.Error("Fecha de exportación inválida o ausente.")
         }
 
+        // Verify parent presence for child collections
+        if (root.has("routineExercises") && !root.isNull("routineExercises") && (!root.has("routines") || root.isNull("routines"))) {
+            return BackupValidationResult.Error("El respaldo contiene ejercicios de rutina pero no incluye la sección obligatoria 'routines'.")
+        }
+        if (root.has("irisxMessages") && !root.isNull("irisxMessages") && (!root.has("irisxConversations") || root.isNull("irisxConversations"))) {
+            return BackupValidationResult.Error("El respaldo contiene mensajes pero no incluye la sección obligatoria 'irisxConversations'.")
+        }
+        if (root.has("exerciseAliases") && !root.isNull("exerciseAliases") && (!root.has("exercises") || root.isNull("exercises"))) {
+            return BackupValidationResult.Error("El respaldo contiene alias pero no incluye la sección obligatoria 'exercises'.")
+        }
+        if (root.has("workoutSets") && !root.isNull("workoutSets") && (!root.has("workoutSessions") || root.isNull("workoutSessions"))) {
+            return BackupValidationResult.Error("El respaldo contiene series pero no incluye la sección obligatoria 'workoutSessions'.")
+        }
+        if (root.has("workoutSets") && !root.isNull("workoutSets") && (!root.has("exercises") || root.isNull("exercises"))) {
+            return BackupValidationResult.Error("El respaldo contiene series pero no incluye la sección obligatoria 'exercises'.")
+        }
+
         // Profile validation (optional but if present must be valid)
         val profileDto = if (root.has("profile") && !root.isNull("profile")) {
             val pObj = root.getJSONObject("profile")
@@ -376,7 +394,8 @@ object BackupSerializer {
                         startedAtMillis = startedAt,
                         finishedAtMillis = if (item.isNull("finishedAtMillis")) null else item.optLong("finishedAtMillis"),
                         notes = item.optString("notes", ""),
-                        category = item.optString("category", "")
+                        category = item.optString("category", ""),
+                        sessionUuid = item.optString("sessionUuid", "")
                     )
                 )
             }
@@ -605,65 +624,126 @@ object BackupSerializer {
 
         // Relational Integrity & Duplicate Primary Key Validation:
         val exerciseIds = mutableSetOf<Long>()
+        val exerciseNormalizedNames = mutableSetOf<String>()
         for (e in exercisesList) {
-            if (e.id > 0 && !exerciseIds.add(e.id)) {
+            if (e.id <= 0) {
+                return BackupValidationResult.Error("El respaldo contiene un ejercicio con identificador no positivo (ID: ${e.id}).")
+            }
+            if (!exerciseIds.add(e.id)) {
                 return BackupValidationResult.Error("El respaldo contiene ejercicios con identificador duplicado (ID: ${e.id}).")
+            }
+            if (!exerciseNormalizedNames.add(e.normalizedName.lowercase())) {
+                return BackupValidationResult.Error("El respaldo contiene ejercicios duplicados con el mismo nombre normalizado ('${e.normalizedName}').")
             }
         }
 
         val sessionIds = mutableSetOf<Long>()
         for (s in sessionsList) {
-            if (s.id > 0 && !sessionIds.add(s.id)) {
+            if (s.id <= 0) {
+                return BackupValidationResult.Error("El respaldo contiene una sesión con identificador no positivo (ID: ${s.id}).")
+            }
+            if (!sessionIds.add(s.id)) {
                 return BackupValidationResult.Error("El respaldo contiene sesiones con identificador duplicado (ID: ${s.id}).")
             }
         }
 
         val routineIds = mutableSetOf<Long>()
         for (r in routinesList) {
-            if (r.id > 0 && !routineIds.add(r.id)) {
+            if (r.id <= 0) {
+                return BackupValidationResult.Error("El respaldo contiene una rutina con identificador no positivo (ID: ${r.id}).")
+            }
+            if (!routineIds.add(r.id)) {
                 return BackupValidationResult.Error("El respaldo contiene rutinas con identificador duplicado (ID: ${r.id}).")
             }
         }
 
         val conversationIds = mutableSetOf<Long>()
         for (c in conversationsList) {
-            if (c.id > 0 && !conversationIds.add(c.id)) {
+            if (c.id <= 0) {
+                return BackupValidationResult.Error("El respaldo contiene una conversación con identificador no positivo (ID: ${c.id}).")
+            }
+            if (!conversationIds.add(c.id)) {
                 return BackupValidationResult.Error("El respaldo contiene conversaciones con identificador duplicado (ID: ${c.id}).")
             }
         }
 
-        // Validate Foreign Keys
-        if (exerciseIds.isNotEmpty()) {
-            for (alias in aliasesList) {
-                if (alias.exerciseId > 0 && alias.exerciseId !in exerciseIds) {
-                    return BackupValidationResult.Error("El alias '${alias.normalizedAlias}' referencia a un ejercicio inexistente (ID: ${alias.exerciseId}).")
-                }
+        val aliasIds = mutableSetOf<Long>()
+        val aliasNames = mutableSetOf<String>()
+        for (a in aliasesList) {
+            if (a.id <= 0) {
+                return BackupValidationResult.Error("El respaldo contiene un alias con identificador no positivo (ID: ${a.id}).")
+            }
+            if (!aliasIds.add(a.id)) {
+                return BackupValidationResult.Error("El respaldo contiene alias con identificador duplicado (ID: ${a.id}).")
+            }
+            if (!aliasNames.add(a.normalizedAlias.lowercase())) {
+                return BackupValidationResult.Error("El respaldo contiene alias duplicados ('${a.normalizedAlias}').")
+            }
+            if (a.exerciseId !in exerciseIds) {
+                return BackupValidationResult.Error("El alias '${a.normalizedAlias}' referencia a un ejercicio inexistente (ID: ${a.exerciseId}).")
             }
         }
 
+        val categoryNames = mutableSetOf<String>()
+        for (cat in categoriesList) {
+            if (!categoryNames.add(cat.name.lowercase())) {
+                return BackupValidationResult.Error("El respaldo contiene categorías con nombres duplicados ('${cat.name}').")
+            }
+        }
+
+        val validUnits = setOf("KG", "LBS", "BLOQUES", "PLACAS", "BW")
+        val setIds = mutableSetOf<Long>()
         for (set in setsList) {
-            if (sessionIds.isNotEmpty() && set.sessionId > 0 && set.sessionId !in sessionIds) {
+            if (set.id <= 0) {
+                return BackupValidationResult.Error("El respaldo contiene una serie con identificador no positivo (ID: ${set.id}).")
+            }
+            if (!setIds.add(set.id)) {
+                return BackupValidationResult.Error("El respaldo contiene series con identificador duplicado (ID: ${set.id}).")
+            }
+            val canonical = com.syntra.app.domain.UnitConverter.canonicalUnit(set.loadUnit)
+            if (canonical !in validUnits) {
+                return BackupValidationResult.Error("Serie ID ${set.id} contiene una unidad no soportada: '${set.loadUnit}'.")
+            }
+            if (set.repetitions !in 1..999) {
+                return BackupValidationResult.Error("Serie ID ${set.id} tiene repeticiones inválidas: ${set.repetitions}.")
+            }
+            if (canonical != "BW" && set.loadGrams <= 0) {
+                return BackupValidationResult.Error("Serie ID ${set.id} con unidad '$canonical' tiene carga no positiva: ${set.loadGrams}g.")
+            }
+            if (set.sessionId !in sessionIds) {
                 return BackupValidationResult.Error("Una serie deportiva referencia a una sesión inexistente (Session ID: ${set.sessionId}).")
             }
-            if (exerciseIds.isNotEmpty() && set.exerciseId > 0 && set.exerciseId !in exerciseIds) {
+            if (set.exerciseId !in exerciseIds) {
                 return BackupValidationResult.Error("Una serie deportiva referencia a un ejercicio inexistente (Exercise ID: ${set.exerciseId}).")
             }
         }
 
+        val routineExerciseIds = mutableSetOf<Long>()
         for (re in routineExercisesList) {
-            if (routineIds.isNotEmpty() && re.routineId > 0 && re.routineId !in routineIds) {
+            if (re.id <= 0) {
+                return BackupValidationResult.Error("El respaldo contiene un ejercicio de rutina con identificador no positivo (ID: ${re.id}).")
+            }
+            if (!routineExerciseIds.add(re.id)) {
+                return BackupValidationResult.Error("El respaldo contiene ejercicios de rutina con identificador duplicado (ID: ${re.id}).")
+            }
+            if (re.routineId !in routineIds) {
                 return BackupValidationResult.Error("Un ejercicio de rutina referencia a una rutina inexistente (Routine ID: ${re.routineId}).")
             }
-            if (exerciseIds.isNotEmpty() && re.exerciseId != null && re.exerciseId > 0 && re.exerciseId !in exerciseIds) {
+            if (re.exerciseId != null && re.exerciseId > 0 && re.exerciseId !in exerciseIds) {
                 return BackupValidationResult.Error("Un ejercicio de rutina referencia a un ejercicio inexistente (Exercise ID: ${re.exerciseId}).")
             }
         }
 
-        if (conversationIds.isNotEmpty()) {
-            for (msg in messagesList) {
-                if (msg.conversationId > 0 && msg.conversationId !in conversationIds) {
-                    return BackupValidationResult.Error("Un mensaje de chat referencia a una conversación inexistente (Conversation ID: ${msg.conversationId}).")
-                }
+        val messageIds = mutableSetOf<Long>()
+        for (msg in messagesList) {
+            if (msg.id <= 0) {
+                return BackupValidationResult.Error("El respaldo contiene un mensaje de chat con identificador no positivo (ID: ${msg.id}).")
+            }
+            if (!messageIds.add(msg.id)) {
+                return BackupValidationResult.Error("El respaldo contiene mensajes de chat con identificador duplicado (ID: ${msg.id}).")
+            }
+            if (msg.conversationId !in conversationIds) {
+                return BackupValidationResult.Error("Un mensaje de chat referencia a una conversación inexistente (Conversation ID: ${msg.conversationId}).")
             }
         }
 

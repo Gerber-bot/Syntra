@@ -53,16 +53,33 @@ object UnitConverter {
 
     /**
      * Validates whether a load value is physiologically possible and valid for its unit.
+     * Enforces that non-BW loads are positive, finite numbers that do not round to 0 grams in SQLite.
      */
     fun isValidLoad(rawValue: Double, unit: String): Boolean {
+        if (rawValue.isNaN() || rawValue.isInfinite()) return false
         val cUnit = canonicalUnit(unit)
         if (cUnit == "BW") return true
         if (rawValue <= 0.0) return false
+        val grams = toGrams(rawValue, cUnit)
+        if (grams <= 0) return false
         return when (cUnit) {
             "KG" -> rawValue <= 1000.0
             "LBS" -> rawValue <= 2200.0
             "BLOQUES", "PLACAS" -> rawValue <= 100.0
             else -> rawValue <= 1000.0
+        }
+    }
+
+    /**
+     * Formats a raw unit value into an exact decimal string for text inputs without destructive rounding.
+     */
+    fun formatRawForInput(rawValue: Double): String {
+        if (rawValue.isNaN() || rawValue.isInfinite() || rawValue <= 0.0) return ""
+        val rounded = (rawValue * 1000.0).roundToInt() / 1000.0
+        return if (rounded % 1.0 == 0.0) {
+            rounded.toInt().toString()
+        } else {
+            String.format(Locale.US, "%.3f", rounded).trimEnd('0').trimEnd('.')
         }
     }
 
@@ -85,7 +102,7 @@ object UnitConverter {
                     "${weightGrams / 1000} kg"
                 } else {
                     val kg = weightGrams / 1000.0
-                    val formatted = String.format(Locale.US, "%.2f", kg).trimEnd('0').trimEnd('.')
+                    val formatted = String.format(Locale.ROOT, "%.2f", kg).trimEnd('0').trimEnd('.')
                     formatted.replace('.', ',') + " kg"
                 }
             }

@@ -49,10 +49,12 @@ object IrisXContextBuilder {
             val allSets = db.workoutSetDao().getAll()
             val sets = allSets.filter { it.exerciseId == matchingExercise.id }
             if (sets.isNotEmpty()) {
-                val maxLoadGrams = sets.maxOfOrNull { it.loadGrams } ?: 0
+                val maxSet = sets.maxByOrNull { it.loadGrams }
+                val maxLoadGrams = maxSet?.loadGrams ?: 0
                 val totalVolumeSets = sets.size
+                val loadFormatted = com.syntra.app.domain.UnitConverter.formatDisplay(maxLoadGrams, maxSet?.loadUnit ?: "KG")
                 facts.append("- Ejercicio consultado '${matchingExercise.displayName}' (${matchingExercise.muscleGroup}): ")
-                facts.append("Carga máxima registrada: ${maxLoadGrams / 1000.0} kg, Total series históricas: $totalVolumeSets.\n")
+                facts.append("Carga máxima registrada: $loadFormatted, Total series históricas: $totalVolumeSets.\n")
             }
         }
 

@@ -562,19 +562,19 @@ class IrisXCore(
             .sortedWith(compareBy<WorkoutSetEntity> { it.executionOrder }.thenBy { it.id })
 
         val dateStr = DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(lastPerf.timestampMillis))
-        val topKg = SportsMetricsCalculator.formatKg(lastPerf.topLoadGrams / 1000.0)
+        val topFormatted = com.syntra.app.domain.UnitConverter.formatDisplay(lastPerf.topLoadGrams, lastPerf.unit)
         val setsSummary = if (sessionSets.isNotEmpty()) {
             sessionSets.joinToString(", ") { s ->
-                val kg = SportsMetricsCalculator.formatKg(s.loadGrams / 1000.0)
+                val loadStr = com.syntra.app.domain.UnitConverter.formatDisplay(s.loadGrams, s.loadUnit)
                 val mod = when {
                     s.isAssisted -> " asist."
                     s.isDumbbell -> " c/u"
                     else -> ""
                 }
-                "$kg$mod × ${s.repetitions}"
+                "$loadStr$mod × ${s.repetitions}"
             }
         } else {
-            "$topKg × ${lastPerf.topLoadReps} reps (${lastPerf.setsCount} series)"
+            "$topFormatted × ${lastPerf.topLoadReps} reps (${lastPerf.setsCount} series)"
         }
 
         contextState = contextState.copy(
@@ -585,7 +585,7 @@ class IrisXCore(
 
         val msg = buildString {
             append("🏋️ Último registro en ${report.exerciseName} ($dateStr):\n")
-            append("• Mejor serie: $topKg × ${lastPerf.topLoadReps} reps\n")
+            append("• Mejor serie: $topFormatted × ${lastPerf.topLoadReps} reps\n")
             append("• Series ejecutadas (${lastPerf.setsCount}): $setsSummary")
         }
 
@@ -724,7 +724,7 @@ class IrisXCore(
             append("Series totales: ${sessionSets.size} | Ejercicios: ${byExercise.size}\n")
             byExercise.forEach { (exName, sets) ->
                 val formattedSets = sets.joinToString(", ") { s ->
-                    "${SportsMetricsCalculator.formatKg(s.loadGrams / 1000.0)} × ${s.repetitions}"
+                    "${com.syntra.app.domain.UnitConverter.formatDisplay(s.loadGrams, s.loadUnit)} × ${s.repetitions}"
                 }
                 append("• $exName: $formattedSets\n")
             }
@@ -892,8 +892,8 @@ class IrisXCore(
             val r = IrisXAnalytics.analyzeExerciseProgression(ex.displayName, sessions, allSets, exercises, aliases)
             if (r.history.isNotEmpty()) {
                 val last = r.history.last()
-                val kg = SportsMetricsCalculator.formatKg(last.topLoadGrams / 1000.0)
-                "• ${r.exerciseName}: ${r.status.displayName} (último tope: $kg × ${last.topLoadReps} reps)"
+                val loadStr = com.syntra.app.domain.UnitConverter.formatDisplay(last.topLoadGrams, last.unit)
+                "• ${r.exerciseName}: ${r.status.displayName} (último tope: $loadStr × ${last.topLoadReps} reps)"
             } else null
         }
 

@@ -178,6 +178,8 @@ class ActiveWorkoutAndSprint05Test {
 
         override suspend fun getAllExercises(): List<ExerciseEntity> = ExerciseCatalog.toEntities()
 
+        override suspend fun findSessionByUuid(uuid: String): WorkoutSessionEntity? = null
+
         override suspend fun commitWorkoutSessionAtomically(
             draft: ActiveWorkoutDraftEntity,
             finalTitle: String,
@@ -232,6 +234,7 @@ class ActiveWorkoutAndSprint05Test {
                         }
                     }
                 }
+                clearCurrentDraft()
                 conn.commit()
                 return sessionId
             } catch (e: Exception) {
@@ -572,7 +575,7 @@ class ActiveWorkoutAndSprint05Test {
         val rCat = core.ask("Mostrame mi última sesión de pecho")
         assertTrue(rCat is IrisXResponse.Success)
         val catMsg = (rCat as IrisXResponse.Success).message
-        assertTrue("Expected Pecho Hipertrofia and 77.5 kg: $catMsg", catMsg.contains("Pecho Hipertrofia") && catMsg.contains("77.5 kg"))
+        assertTrue("Expected Pecho Hipertrofia and 77.5 kg: $catMsg", catMsg.contains("Pecho Hipertrofia") && (catMsg.contains("77.5 kg") || catMsg.contains("77,5 kg")))
     }
 
     @Test

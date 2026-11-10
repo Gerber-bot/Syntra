@@ -207,6 +207,13 @@ class BackupSerializerTest {
             appVersion = "0.4.0",
             exportedAtMillis = 1710000000000L,
             profile = null,
+            exercises = listOf(
+                ExerciseBackupDto(
+                    id = 2,
+                    displayName = "Press de banca",
+                    normalizedName = "press de banca"
+                )
+            ),
             irisxConversations = listOf(
                 IrisxConversationBackupDto(
                     id = 1,
@@ -348,6 +355,20 @@ class BackupSerializerTest {
             appVersion = "0.7.0-alpha4",
             exportedAtMillis = 1716000000000L,
             profile = null,
+            exercises = listOf(
+                ExerciseBackupDto(
+                    id = 1,
+                    displayName = "Femoral sentado",
+                    normalizedName = "femoral sentado"
+                )
+            ),
+            workoutSessions = listOf(
+                WorkoutSessionBackupDto(
+                    id = 10,
+                    title = "Piernas",
+                    startedAtMillis = 1716000000000L
+                )
+            ),
             workoutSets = listOf(setDto)
         )
 

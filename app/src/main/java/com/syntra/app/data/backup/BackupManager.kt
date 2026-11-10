@@ -65,7 +65,8 @@ class BackupManager(private val db: AppDatabase) {
                 category = s.category,
                 startedAtMillis = s.startedAtMillis,
                 finishedAtMillis = s.finishedAtMillis,
-                notes = s.notes
+                notes = s.notes,
+                sessionUuid = s.sessionUuid
             )
         }
 
@@ -192,7 +193,7 @@ class BackupManager(private val db: AppDatabase) {
 
         SyntraBackupPayload(
             formatVersion = BackupSerializer.CURRENT_FORMAT_VERSION,
-            appVersion = "0.7.0-alpha9",
+            appVersion = "0.7.0-alpha10",
             exportedAtMillis = System.currentTimeMillis(),
             profile = profileDto,
             weighIns = weighIns,
@@ -311,7 +312,8 @@ class BackupManager(private val db: AppDatabase) {
                             category = s.category,
                             startedAtMillis = s.startedAtMillis,
                             finishedAtMillis = s.finishedAtMillis,
-                            notes = s.notes
+                            notes = s.notes,
+                            sessionUuid = s.sessionUuid
                         )
                     }
                 )

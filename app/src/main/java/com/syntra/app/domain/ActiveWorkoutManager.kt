@@ -175,6 +175,7 @@ interface ActiveWorkoutPersistencePort {
     suspend fun clearCurrentDraft()
     suspend fun getLearnedAliases(): Map<String, String>
     suspend fun getAllExercises(): List<ExerciseEntity>
+    suspend fun findSessionByUuid(uuid: String): WorkoutSessionEntity?
     suspend fun commitWorkoutSessionAtomically(
         draft: ActiveWorkoutDraftEntity,
         finalTitle: String,
@@ -206,6 +207,11 @@ class RoomActiveWorkoutPersistencePort(
         return db.exerciseDao().getAll()
     }
 
+    override suspend fun findSessionByUuid(uuid: String): WorkoutSessionEntity? {
+        if (uuid.isBlank()) return null
+        return db.workoutSessionDao().findBySessionUuid(uuid)
+    }
+
     override suspend fun commitWorkoutSessionAtomically(
         draft: ActiveWorkoutDraftEntity,
         finalTitle: String,
@@ -214,15 +220,22 @@ class RoomActiveWorkoutPersistencePort(
         finishedAtMillis: Long
     ): Long {
         return db.withTransaction {
-            // Idempotency guard: if this session UUID was already committed, return the existing session ID
+            // Idempotency check 1: direct persistent UUID lookup in workout_sessions table
             if (draft.sessionUuid.isNotBlank()) {
+                val existingSession = db.workoutSessionDao().findBySessionUuid(draft.sessionUuid)
+                if (existingSession != null && existingSession.id > 0) {
+                    db.activeWorkoutDraftDao().clearCurrentDraft()
+                    return@withTransaction existingSession.id
+                }
+
+                // Idempotency check 2: legacy fallback in irisx_memories
                 val existingCommit = db.irisxMemoryDao().findByTypeAndKey(
                     "COMMITTED_SESSION",
                     draft.sessionUuid
                 )
                 if (existingCommit != null) {
                     val existingId = existingCommit.targetValue.toLongOrNull()
-                    if (existingId != null && db.workoutSessionDao().getById(existingId) != null) {
+                    if (existingId != null && existingId > 0 && db.workoutSessionDao().getById(existingId) != null) {
                         db.activeWorkoutDraftDao().clearCurrentDraft()
                         return@withTransaction existingId
                     }
@@ -243,9 +256,14 @@ class RoomActiveWorkoutPersistencePort(
                     category = resolvedCategory,
                     startedAtMillis = startedAtMillis,
                     finishedAtMillis = finishedAtMillis,
-                    notes = draft.rawNotesText
+                    notes = draft.rawNotesText,
+                    sessionUuid = draft.sessionUuid
                 )
             )
+
+            if (sId <= 0) {
+                throw IllegalStateException("No se pudo obtener un identificador válido para la sesión guardada.")
+            }
 
             // Persist idempotency token with unique index constraint on (sourceKey, memoryType)
             if (draft.sessionUuid.isNotBlank()) {
@@ -314,14 +332,7 @@ class RoomActiveWorkoutPersistencePort(
                 db.irisxMemoryDao().deleteById(manualOverride.id)
             }
 
-            // ATOMIC STEP: Clear the draft INSIDE the same transaction so no gap exists
-            val completedDraft = draft.copy(
-                state = WorkoutSessionState.COMPLETED.name,
-                finalizedAtWallMillis = finishedAtMillis,
-                committedSessionId = sId,
-                lastErrorMessage = null
-            )
-            db.activeWorkoutDraftDao().saveDraft(completedDraft)
+            // ATOMIC STEP: Sole owner of clearing the draft INSIDE the same transaction
             db.activeWorkoutDraftDao().clearCurrentDraft()
 
             sId
@@ -599,25 +610,31 @@ class ActiveWorkoutManager(
                 )
             )
 
-        // Idempotency guard 1: already committed in DB
-        if (draft.committedSessionId != null ||
-            draft.sessionUuid == lastCompletedUuid ||
-            WorkoutSessionState.fromString(draft.state) == WorkoutSessionState.COMPLETED
-        ) {
+        // Idempotency guard 1: already committed
+        if (draft.committedSessionId != null && draft.committedSessionId > 0) {
             return@withLock FinalizationResult.Success(
-                sessionId = draft.committedSessionId ?: 0L,
+                sessionId = draft.committedSessionId,
                 sessionUuid = draft.sessionUuid,
                 alreadyCommitted = true
             )
+        }
+        if (draft.sessionUuid.isNotBlank()) {
+            val existing = port.findSessionByUuid(draft.sessionUuid)
+            if (existing != null && existing.id > 0) {
+                return@withLock FinalizationResult.Success(
+                    sessionId = existing.id,
+                    sessionUuid = draft.sessionUuid,
+                    alreadyCommitted = true
+                )
+            }
         }
 
         // Idempotency guard 2: concurrent click in-flight for the same sessionUuid
         synchronized(commitLock) {
             if (commitInFlightUuid == draft.sessionUuid) {
-                return@withLock FinalizationResult.Success(
-                    sessionId = draft.committedSessionId ?: -1L,
-                    sessionUuid = draft.sessionUuid,
-                    alreadyCommitted = true
+                return@withLock FinalizationResult.Failure(
+                    errorMessage = "La confirmación de la sesión ya está en curso.",
+                    preservedDraft = draft
                 )
             }
             commitInFlightUuid = draft.sessionUuid
@@ -664,16 +681,14 @@ class ActiveWorkoutManager(
                 finishedAtMillis = finishedWall
             )
 
-            // Mark COMPLETED first, record lastCompletedUuid, then clear current draft slot so no active draft remains
+            if (committedId <= 0L) {
+                throw IllegalStateException("Identificador de sesión inválido ($committedId) devuelto por la base de datos.")
+            }
+
             lastCompletedUuid = normalized.sessionUuid
-            val completedDraft = normalized.copy(
-                state = WorkoutSessionState.COMPLETED.name,
-                finalizedAtWallMillis = finishedWall,
-                committedSessionId = committedId,
-                lastErrorMessage = null
-            )
-            port.saveDraft(completedDraft)
-            port.clearCurrentDraft()
+            try {
+                port.clearCurrentDraft()
+            } catch (_: Exception) {}
 
             FinalizationResult.Success(
                 sessionId = committedId,

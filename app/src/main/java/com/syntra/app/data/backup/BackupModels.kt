@@ -22,12 +22,12 @@ data class ExerciseBackupDto(
     val id: Long = 0,
     val displayName: String,
     val normalizedName: String,
-    val muscleGroup: String,
+    val muscleGroup: String = "General",
     val secondaryMuscleGroups: String = "",
     val equipment: String? = null,
     val exerciseType: String = "strength",
     val status: String = "CONFIRMED",
-    val createdAtMillis: Long
+    val createdAtMillis: Long = System.currentTimeMillis()
 )
 
 data class ExerciseAliasBackupDto(
@@ -43,7 +43,8 @@ data class WorkoutSessionBackupDto(
     val startedAtMillis: Long,
     val finishedAtMillis: Long? = null,
     val notes: String = "",
-    val category: String = ""
+    val category: String = "",
+    val sessionUuid: String = ""
 )
 
 data class CategoryBackupDto(

@@ -59,14 +59,18 @@ data class ExerciseAliasEntity(
     val createdAtMillis: Long = System.currentTimeMillis()
 )
 
-@Entity(tableName = "workout_sessions")
+@Entity(
+    tableName = "workout_sessions",
+    indices = [Index(value = ["sessionUuid"])]
+)
 data class WorkoutSessionEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val title: String,
     val startedAtMillis: Long,
     val finishedAtMillis: Long? = null,
     val notes: String = "",
-    val category: String = ""
+    val category: String = "",
+    val sessionUuid: String = ""
 )
 
 @Entity(
@@ -328,6 +332,9 @@ interface WorkoutSessionDao {
     @Query("SELECT * FROM workout_sessions WHERE id = :id LIMIT 1")
     suspend fun getById(id: Long): WorkoutSessionEntity?
 
+    @Query("SELECT * FROM workout_sessions WHERE sessionUuid = :uuid AND sessionUuid != '' LIMIT 1")
+    suspend fun findBySessionUuid(uuid: String): WorkoutSessionEntity?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(session: WorkoutSessionEntity): Long
 
@@ -546,7 +553,7 @@ interface ActiveWorkoutDraftDao {
         ActiveWorkoutDraftEntity::class,
         CategoryEntity::class
     ],
-    version = 6,
+    version = 7,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -737,10 +744,17 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE workout_sessions ADD COLUMN sessionUuid TEXT NOT NULL DEFAULT ''")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_workout_sessions_sessionUuid ON workout_sessions (sessionUuid)")
+            }
+        }
+
         fun get(context: Context): AppDatabase = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(
                 context.applicationContext, AppDatabase::class.java, "syntra.db"
-            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
             .build().also { instance = it }
         }
     }

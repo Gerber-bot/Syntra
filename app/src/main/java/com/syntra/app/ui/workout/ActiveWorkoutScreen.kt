@@ -278,10 +278,10 @@ fun ActiveWorkoutScreen(
             exercise = currentEx,
             onDismiss = { exerciseToEdit = null },
             onSave = { updated, learnAlias, originalName ->
-                val exists = editedExercises.any { it.name.equals(originalName, ignoreCase = true) }
+                val exists = editedExercises.any { it.uid == updated.uid }
                 if (exists) {
                     editedExercises = editedExercises.map {
-                        if (it.name.equals(originalName, ignoreCase = true)) updated else it
+                        if (it.uid == updated.uid) updated else it
                     }
                 } else {
                     editedExercises = editedExercises + updated
@@ -320,7 +320,7 @@ fun ActiveWorkoutScreen(
                 exerciseToEdit = null
             },
             onDelete = {
-                editedExercises = editedExercises.filterNot { it.name.equals(currentEx.name, ignoreCase = true) }
+                editedExercises = editedExercises.filterNot { it.uid == currentEx.uid }
                 exerciseToEdit = null
             }
         )
@@ -381,7 +381,7 @@ fun ActiveWorkoutScreen(
             },
             onAddSetToExercise = { targetEx ->
                 editedExercises = editedExercises.map { ex ->
-                    if (ex.name == targetEx.name) {
+                    if (ex.uid == targetEx.uid) {
                         val lastSet = ex.sets.lastOrNull()
                         val newSet = lastSet?.copy()
                             ?: ParsedSet(
@@ -396,7 +396,7 @@ fun ActiveWorkoutScreen(
                 }
             },
             onDeleteExercise = { targetEx ->
-                editedExercises = editedExercises.filterNot { it.name == targetEx.name }
+                editedExercises = editedExercises.filterNot { it.uid == targetEx.uid }
             },
             onAssignLine = { line ->
                 val failureMatch = Regex("^(.*?)[\\s:]+(\\d{1,2})\\s*(?:f|al fallo|fallo)$", RegexOption.IGNORE_CASE).find(line.rawText)

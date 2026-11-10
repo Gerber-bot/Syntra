@@ -32,13 +32,25 @@ class MutablePairSet(
     isAssisted: Boolean = false,
     isDumbbell: Boolean = false
 ) {
-    var loadValue by mutableStateOf(weight)
-    var reps by mutableStateOf(repetitions)
+    var loadText by mutableStateOf(if (unit.uppercase() == "BW") "" else UnitConverter.formatRawForInput(weight))
+    var repsText by mutableStateOf(if (repetitions <= 0) "" else repetitions.toString())
     var unit by mutableStateOf(unit)
     var toFailure by mutableStateOf(toFailure)
     var note by mutableStateOf(note)
     var isAssisted by mutableStateOf(isAssisted)
     var isDumbbell by mutableStateOf(isDumbbell)
+
+    val parsedLoad: Double?
+        get() = if (unit.uppercase() == "BW") 0.0 else loadText.trim().replace(',', '.').toDoubleOrNull()
+
+    val isLoadValid: Boolean
+        get() = unit.uppercase() == "BW" || (parsedLoad != null && UnitConverter.isValidLoad(parsedLoad!!, unit))
+
+    val parsedReps: Int?
+        get() = repsText.trim().toIntOrNull()
+
+    val isRepsValid: Boolean
+        get() = parsedReps != null && parsedReps!! in 1..200
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -179,8 +191,8 @@ fun EditExercisePreviewDialog(
                     SyntraSecondaryButton(
                         text = "+ Serie",
                         onClick = {
-                            val lastWeight = sets.lastOrNull()?.loadValue ?: 20.0
-                            val lastReps = sets.lastOrNull()?.reps ?: 10
+                            val lastWeight = sets.lastOrNull()?.parsedLoad ?: 20.0
+                            val lastReps = sets.lastOrNull()?.parsedReps ?: 10
                             val lastUnit = sets.lastOrNull()?.unit ?: "KG"
                             sets.add(MutablePairSet(lastWeight, lastReps, lastUnit, false))
                         },
@@ -220,17 +232,17 @@ fun EditExercisePreviewDialog(
                                 // Load field
                                 if (setItem.unit != "BW") {
                                     OutlinedTextField(
-                                        value = if (setItem.loadValue == 0.0) "" else setItem.loadValue.toString().removeSuffix(".0"),
-                                        onValueChange = { input ->
-                                            setItem.loadValue = input.toDoubleOrNull() ?: 0.0
-                                        },
+                                        value = setItem.loadText,
+                                        onValueChange = { setItem.loadText = it },
                                         label = { Text("Carga") },
+                                        isError = !setItem.isLoadValid,
                                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                                         singleLine = true,
                                         modifier = Modifier.weight(1.1f),
                                         colors = OutlinedTextFieldDefaults.colors(
                                             focusedBorderColor = SyntraColors.NeonMint,
-                                            unfocusedBorderColor = SyntraColors.BorderSubtle
+                                            unfocusedBorderColor = if (!setItem.isLoadValid) SyntraColors.Error else SyntraColors.BorderSubtle,
+                                            errorBorderColor = SyntraColors.Error
                                         )
                                     )
                                 } else {
@@ -247,6 +259,7 @@ fun EditExercisePreviewDialog(
                                     onClick = {
                                         val nextIdx = (availableUnits.indexOf(setItem.unit) + 1) % availableUnits.size
                                         setItem.unit = availableUnits[nextIdx]
+                                        if (setItem.unit == "BW") setItem.loadText = ""
                                     },
                                     colors = ButtonDefaults.buttonColors(containerColor = SyntraColors.SurfaceHighlight),
                                     contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
@@ -262,17 +275,17 @@ fun EditExercisePreviewDialog(
 
                                 // Reps field
                                 OutlinedTextField(
-                                    value = if (setItem.reps == 0) "" else setItem.reps.toString(),
-                                    onValueChange = { input ->
-                                        setItem.reps = input.toIntOrNull() ?: 0
-                                    },
+                                    value = setItem.repsText,
+                                    onValueChange = { setItem.repsText = it },
                                     label = { Text("Reps") },
+                                    isError = !setItem.isRepsValid,
                                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                                     singleLine = true,
                                     modifier = Modifier.weight(1.0f),
                                     colors = OutlinedTextFieldDefaults.colors(
                                         focusedBorderColor = SyntraColors.NeonMint,
-                                        unfocusedBorderColor = SyntraColors.BorderSubtle
+                                        unfocusedBorderColor = if (!setItem.isRepsValid) SyntraColors.Error else SyntraColors.BorderSubtle,
+                                        errorBorderColor = SyntraColors.Error
                                     )
                                 )
 
@@ -355,6 +368,9 @@ fun EditExercisePreviewDialog(
                         Spacer(Modifier.width(1.dp))
                     }
 
+                    val allSetsValid = sets.isNotEmpty() && sets.all { it.isLoadValid && it.isRepsValid }
+                    val canSave = allSetsValid && (isCreatingNew || name.isNotBlank())
+
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         SyntraSecondaryButton(
                             text = "Cancelar",
@@ -362,18 +378,22 @@ fun EditExercisePreviewDialog(
                         )
                         SyntraButton(
                             text = if (isCreatingNew) "Agregar" else "Guardar cambios",
+                            enabled = canSave,
                             onClick = {
+                                if (!canSave) return@SyntraButton
                                 val newSets = sets.map {
-                                    val grams = UnitConverter.toGrams(it.loadValue, it.unit)
+                                    val safeLoad = it.parsedLoad ?: 0.0
+                                    val safeReps = it.parsedReps ?: 1
+                                    val grams = UnitConverter.toGrams(safeLoad, it.unit)
                                     ParsedSet(
                                         weightGrams = grams,
-                                        repetitions = it.reps,
+                                        repetitions = safeReps,
                                         isAssisted = it.isAssisted,
                                         isDumbbell = it.isDumbbell,
                                         isToFailure = it.toFailure,
                                         loadUnit = it.unit,
-                                        rawLoadValue = it.loadValue,
-                                        note = if (it.toFailure && !it.note.contains("[FALLO]")) "[FALLO] ${it.note}".trim() else it.note
+                                        rawLoadValue = safeLoad,
+                                        note = it.note.trim()
                                     )
                                 }
                                 val updated = exercise.copy(

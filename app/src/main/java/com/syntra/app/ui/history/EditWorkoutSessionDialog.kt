@@ -551,15 +551,8 @@ private fun EditIndividualSetDialog(
     onSave: (WorkoutSetEntity) -> Unit
 ) {
     val initialRaw = UnitConverter.toRawValue(targetSet.loadGrams, targetSet.loadUnit)
-    var loadText by remember {
-        mutableStateOf(
-            if (targetSet.loadUnit.uppercase() == "BW") ""
-            else {
-                val rounded = (initialRaw * 10.0).roundToInt() / 10.0
-                if (rounded % 1.0 == 0.0) rounded.toInt().toString() else rounded.toString()
-            }
-        )
-    }
+    val initialLoadText = if (targetSet.loadUnit.uppercase() == "BW") "" else UnitConverter.formatRawForInput(initialRaw)
+    var loadText by remember { mutableStateOf(initialLoadText) }
     var selectedUnit by remember { mutableStateOf(targetSet.loadUnit.ifBlank { "KG" }) }
     var repsText by remember { mutableStateOf(targetSet.repetitions.toString()) }
     var isToFailure by remember { mutableStateOf(targetSet.isToFailure) }
@@ -720,11 +713,17 @@ private fun EditIndividualSetDialog(
                         enabled = canSave,
                         onClick = {
                             if (!canSave) return@SyntraButton
-                            val safeLoad = parsedLoad ?: 0.0
-                            val safeReps = parsedReps ?: 1
-                            val loadGrams = UnitConverter.toGrams(safeLoad, selectedUnit)
+                            val safeReps = parsedReps ?: targetSet.repetitions
+                            val isUnitUnchanged = selectedUnit.equals(targetSet.loadUnit, ignoreCase = true)
+                            val isTextUnchanged = loadText.trim().replace(',', '.') == initialLoadText.replace(',', '.')
+                            val finalLoadGrams = if (isUnitUnchanged && isTextUnchanged) {
+                                targetSet.loadGrams
+                            } else {
+                                val safeLoad = parsedLoad ?: 0.0
+                                UnitConverter.toGrams(safeLoad, selectedUnit)
+                            }
                             val updated = targetSet.copy(
-                                loadGrams = loadGrams,
+                                loadGrams = finalLoadGrams,
                                 repetitions = safeReps,
                                 loadUnit = selectedUnit,
                                 isToFailure = isToFailure,
