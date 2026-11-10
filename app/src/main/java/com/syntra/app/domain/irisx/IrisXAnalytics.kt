@@ -507,6 +507,21 @@ object IrisXAnalytics {
         }
 
         val recent = modalityHistory.takeLast(STAGNATION_THRESHOLD_SESSIONS)
+        val distinctUnits = recent.map { it.unit }.distinct()
+        if (distinctUnits.size > 1) {
+            val allKgOrLb = distinctUnits.all { it == "KG" || it == "LBS" }
+            if (!allKgOrLb) {
+                return StagnationReport(
+                    isStagnant = false,
+                    consecutiveSessionsWithoutProgress = 0,
+                    modality = modality,
+                    criteriaUsed = criterion,
+                    explanation = "No es posible evaluar estancamiento en $exerciseName: la ventana contiene unidades no comparables (${distinctUnits.joinToString()}) sin equivalencia definida.",
+                    dataQuality = MetricDataQuality.INSUFFICIENT_DATA
+                )
+            }
+        }
+
         val baseline = recent.first()
         var progressedInWindow = false
 
@@ -525,8 +540,8 @@ object IrisXAnalytics {
         }
 
         val explanation = if (isStagnant) {
-            val kg = SportsMetricsCalculator.formatKg(baseline.topLoadGrams / 1000.0)
-            "Estancamiento detectado en $exerciseName (${modality.displayName}): $STAGNATION_THRESHOLD_SESSIONS sesiones sin superar la marca de $kg × ${baseline.topLoadReps} reps."
+            val loadStr = com.syntra.app.domain.UnitConverter.formatDisplay(baseline.topLoadGrams, baseline.unit)
+            "Estancamiento detectado en $exerciseName (${modality.displayName}): $STAGNATION_THRESHOLD_SESSIONS sesiones sin superar la marca de $loadStr × ${baseline.topLoadReps} reps."
         } else {
             "Sin estancamiento en $exerciseName: se registró progresión dentro de las últimas $STAGNATION_THRESHOLD_SESSIONS sesiones."
         }

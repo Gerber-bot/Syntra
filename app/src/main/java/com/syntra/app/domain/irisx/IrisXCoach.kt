@@ -198,8 +198,9 @@ object IrisXCoach {
                     val normTarget = IrisXAnalytics.normalize(targetExerciseOrMuscle)
                     val normName = IrisXAnalytics.normalize(ex.displayName)
                     val normMuscle = IrisXAnalytics.normalize(ex.muscleGroup)
-                    normName.contains(normTarget) || normTarget.contains(normName) ||
-                        normMuscle.contains(normTarget) || normTarget.contains(normMuscle)
+                    normName == normTarget || normMuscle == normTarget ||
+                        learnedAliases[normTarget] == ex.displayName ||
+                        learnedAliases[normTarget] == ex.normalizedName
                 }
             }
 
@@ -217,18 +218,28 @@ object IrisXCoach {
 
             val lastPoint = modHistory.last()
             val prevPoint = modHistory[modHistory.size - 2]
-            val lastKgStr = SportsMetricsCalculator.formatKg(lastPoint.topLoadGrams / 1000.0)
+
+            // If units differ, they cannot be quantitatively compared without defined equivalence
+            if (lastPoint.unit != prevPoint.unit) continue
+
+            val lastLoadStr = com.syntra.app.domain.UnitConverter.formatDisplay(lastPoint.topLoadGrams, lastPoint.unit)
+            val prevLoadStr = com.syntra.app.domain.UnitConverter.formatDisplay(prevPoint.topLoadGrams, prevPoint.unit)
 
             // Case A: Stagnation detected (>= 3 sessions without improvement)
             if (report.stagnation.isStagnant) {
+                val microIncStr = when {
+                    modality == LoadModality.MACHINE_BLOCKS || lastPoint.unit in listOf("BLOQUES", "PLACAS") -> "+1 bloque/placa"
+                    lastPoint.unit == "LBS" -> "+2,5 a +5 lb"
+                    else -> "+1,25 a +2,5 kg"
+                }
                 recommendations.add(
                     CoachRecommendation(
                         id = "rec_stagnation_${ex.id}",
                         category = RecommendationCategory.STAGNATION_BREAKER,
-                        proposal = "En ${ex.displayName}, mantener la carga de $lastKgStr buscando sumar +1 repetición en la primera serie, o realizar un micro-incremento de +1,25 a +2,5 kg dentro del rango objetivo.",
+                        proposal = "En ${ex.displayName}, mantener la carga de $lastLoadStr buscando sumar +1 repetición en la primera serie, o realizar un micro-incremento de $microIncStr dentro del rango objetivo.",
                         dataUsed = listOf(
                             "Ejercicio: ${ex.displayName} (${modality.displayName})",
-                            "Últimas ${report.stagnation.consecutiveSessionsWithoutProgress} sesiones estables en $lastKgStr × ${lastPoint.topLoadReps} reps",
+                            "Últimas ${report.stagnation.consecutiveSessionsWithoutProgress} sesiones estables en $lastLoadStr × ${lastPoint.topLoadReps} reps",
                             "Objetivo personal: $goal"
                         ),
                         reason = report.stagnation.explanation,
@@ -245,40 +256,51 @@ object IrisXCoach {
                 lastPoint.topLoadGrams == prevPoint.topLoadGrams &&
                 modality != LoadModality.BODYWEIGHT && modality != LoadModality.ASSISTED_BODYWEIGHT
             ) {
-                val suggestedIncrementKg = if (modality == LoadModality.DUMBBELL_PER_ARM || modality == LoadModality.UNILATERAL) 1.0 else 2.5
-                val nextKg = (lastPoint.topLoadGrams / 1000.0) + suggestedIncrementKg
-                val nextKgStr = SportsMetricsCalculator.formatKg(nextKg)
+                val nextLoadGrams = when {
+                    modality == LoadModality.MACHINE_BLOCKS || lastPoint.unit in listOf("BLOQUES", "PLACAS") -> {
+                        lastPoint.topLoadGrams + 1000 // 1 block / 1 placa
+                    }
+                    lastPoint.unit == "LBS" -> {
+                        lastPoint.topLoadGrams + com.syntra.app.domain.UnitConverter.toGrams(5.0, "LBS")
+                    }
+                    modality == LoadModality.DUMBBELL_PER_ARM || modality == LoadModality.UNILATERAL -> {
+                        lastPoint.topLoadGrams + 1000
+                    }
+                    else -> {
+                        lastPoint.topLoadGrams + 2500
+                    }
+                }
+                val nextLoadStr = com.syntra.app.domain.UnitConverter.formatDisplay(nextLoadGrams, lastPoint.unit)
                 recommendations.add(
                     CoachRecommendation(
                         id = "rec_prog_${ex.id}",
                         category = RecommendationCategory.LOAD_PROGRESSION,
-                        proposal = "Probar incremento progresivo en ${ex.displayName} a $nextKgStr manteniendo técnica controlada (rango 8–10 reps).",
+                        proposal = "Probar incremento progresivo en ${ex.displayName} a $nextLoadStr manteniendo técnica controlada (rango 8–10 reps).",
                         dataUsed = listOf(
-                            "Dos sesiones alcanzando ≥10 reps con $lastKgStr (${prevPoint.topLoadReps} y ${lastPoint.topLoadReps} reps)",
+                            "Dos sesiones alcanzando ≥10 reps con $lastLoadStr (${prevPoint.topLoadReps} y ${lastPoint.topLoadReps} reps)",
                             "Modalidad: ${modality.displayName}",
                             "Objetivo: $goal"
                         ),
                         reason = "Se consolidó el extremo superior de repeticiones con la misma carga en sesiones consecutivas.",
                         certaintyLevel = MetricDataQuality.MEASURED,
                         certaintyAndLimitations = "Basado en registros medidos de carga y repeticiones. Sujeto a sensación de esfuerzo percibido (RIR) del día.",
-                        optionalAction = "Actualizar carga sugerida de ${ex.displayName} a $nextKgStr en tu rutina."
+                        optionalAction = "Actualizar carga sugerida de ${ex.displayName} a $nextLoadStr en tu rutina."
                     )
                 )
             } else if (report.status == ProgressionStatus.REGRESSING) {
-                val prevKgStr = SportsMetricsCalculator.formatKg(prevPoint.topLoadGrams / 1000.0)
                 recommendations.add(
                     CoachRecommendation(
                         id = "rec_consolidate_${ex.id}",
                         category = RecommendationCategory.LOAD_PROGRESSION,
-                        proposal = "Consolidar la carga actual ($lastKgStr) en ${ex.displayName} durante la próxima sesión antes de subir peso.",
+                        proposal = "Consolidar la carga actual ($lastLoadStr) en ${ex.displayName} durante la próxima sesión antes de subir peso.",
                         dataUsed = listOf(
-                            "Sesión previa: $prevKgStr × ${prevPoint.topLoadReps} reps",
-                            "Última sesión: $lastKgStr × ${lastPoint.topLoadReps} reps"
+                            "Sesión previa: $prevLoadStr × ${prevPoint.topLoadReps} reps",
+                            "Última sesión: $lastLoadStr × ${lastPoint.topLoadReps} reps"
                         ),
                         reason = "Se observó una disminución puntual de rendimiento respecto a la sesión inmediata anterior.",
                         certaintyLevel = MetricDataQuality.ESTIMATED,
                         certaintyAndLimitations = "Limitación importante: una baja puntual de repeticiones o carga NO demuestra fatiga muscular acumulada (puede deberse al orden de ejercicios o descanso entre series). No constituye diagnóstico médico.",
-                        optionalAction = "Mantener carga de $lastKgStr en la siguiente sesión."
+                        optionalAction = "Mantener carga de $lastLoadStr en la siguiente sesión."
                     )
                 )
             }

@@ -771,8 +771,23 @@ abstract class AppDatabase : RoomDatabase() {
 
                 db.execSQL("""
                     INSERT INTO `workout_sessions_new` (`id`, `title`, `startedAtMillis`, `finishedAtMillis`, `notes`, `category`, `sessionUuid`)
-                    SELECT `id`, `title`, `startedAtMillis`, `finishedAtMillis`, `notes`, `category`, CASE WHEN `sessionUuid` = '' THEN NULL ELSE `sessionUuid` END
-                    FROM `workout_sessions`
+                    SELECT 
+                        s.id, 
+                        s.title, 
+                        s.startedAtMillis, 
+                        s.finishedAtMillis, 
+                        s.notes, 
+                        s.category,
+                        CASE 
+                            WHEN trim(s.sessionUuid) = '' THEN NULL
+                            WHEN s.id = (
+                                SELECT min(d.id) 
+                                FROM workout_sessions d 
+                                WHERE trim(d.sessionUuid) = trim(s.sessionUuid)
+                            ) THEN trim(s.sessionUuid)
+                            ELSE trim(s.sessionUuid) || '_dup_' || s.id
+                        END
+                    FROM `workout_sessions` s
                 """.trimIndent())
 
                 db.execSQL("DROP TABLE `workout_sessions`")

@@ -301,7 +301,10 @@ object BackupSerializer {
         // WeighIns validation
         val weighInsList = mutableListOf<WeighInBackupDto>()
         val weighInIds = mutableSetOf<Long>()
-        if (root.has("weighIns") && !root.isNull("weighIns")) {
+        if (root.has("weighIns")) {
+            if (root.isNull("weighIns")) {
+                return BackupValidationResult.Error("El campo 'weighIns' no puede ser nulo.")
+            }
             val arr = root.optJSONArray("weighIns")
                 ?: return BackupValidationResult.Error("El campo 'weighIns' debe ser una lista.")
             for (i in 0 until arr.length()) {
@@ -440,12 +443,23 @@ object BackupSerializer {
 
         // IrisX Memories validation
         val memoriesList = mutableListOf<IrisxMemoryBackupDto>()
+        val memoryIds = mutableSetOf<Long>()
         if (root.has("irisxMemories")) {
+            if (root.isNull("irisxMemories")) {
+                return BackupValidationResult.Error("El campo 'irisxMemories' no puede ser nulo.")
+            }
             val arr = root.optJSONArray("irisxMemories")
                 ?: return BackupValidationResult.Error("El campo 'irisxMemories' debe ser una lista.")
             for (i in 0 until arr.length()) {
                 val item = arr.optJSONObject(i)
                     ?: return BackupValidationResult.Error("Memoria en posición $i inválida.")
+                val id = item.optLong("id", 0L)
+                if (id <= 0L) {
+                    return BackupValidationResult.Error("Memoria en posición $i tiene identificador no positivo (ID: $id).")
+                }
+                if (!memoryIds.add(id)) {
+                    return BackupValidationResult.Error("El respaldo contiene memorias con identificador duplicado (ID: $id).")
+                }
                 val key = item.optString("sourceKey", "").trim()
                 val value = item.optString("targetValue", "").trim()
                 if (key.isEmpty() || value.isEmpty()) {
@@ -453,7 +467,7 @@ object BackupSerializer {
                 }
                 memoriesList.add(
                     IrisxMemoryBackupDto(
-                        id = item.optLong("id", 0L),
+                        id = id,
                         memoryType = item.optString("memoryType", "ALIAS"),
                         sourceKey = key,
                         targetValue = value,
@@ -663,8 +677,9 @@ object BackupSerializer {
             if (!sessionIds.add(s.id)) {
                 return BackupValidationResult.Error("El respaldo contiene sesiones con identificador duplicado (ID: ${s.id}).")
             }
-            if (s.sessionUuid.isNotBlank()) {
-                if (!sessionUuids.add(s.sessionUuid)) {
+            val normUuid = s.sessionUuid.trim()
+            if (normUuid.isNotEmpty()) {
+                if (!sessionUuids.add(normUuid)) {
                     return BackupValidationResult.Error("El respaldo contiene sesiones con sessionUuid duplicado ('${s.sessionUuid}').")
                 }
             }
@@ -772,11 +787,28 @@ object BackupSerializer {
             }
         }
 
-        // Verify mandatory core athletic sections present according to formatVersion
-        val mandatoryCoreSections = listOf("exercises", "workoutSessions", "workoutSets")
-        for (section in mandatoryCoreSections) {
-            if (!root.has(section) || root.isNull(section)) {
+        // Verify mandatory sections present according to formatVersion
+        val mandatorySections = mutableListOf(
+            "exercises",
+            "workoutSessions",
+            "workoutSets",
+            "weighIns",
+            "exerciseAliases",
+            "irisxMemories"
+        )
+        if (formatVersion >= 2) {
+            mandatorySections.addAll(listOf("routines", "routineExercises", "irisxConversations", "irisxMessages"))
+        }
+        if (formatVersion >= 3) {
+            mandatorySections.add("workoutCategories")
+        }
+
+        for (section in mandatorySections) {
+            if (!root.has(section)) {
                 return BackupValidationResult.Error("El respaldo no contiene la sección obligatoria '$section' requerida para el formato v$formatVersion.")
+            }
+            if (root.isNull(section)) {
+                return BackupValidationResult.Error("El respaldo contiene un valor nulo en la sección obligatoria '$section' requerida para el formato v$formatVersion.")
             }
         }
 

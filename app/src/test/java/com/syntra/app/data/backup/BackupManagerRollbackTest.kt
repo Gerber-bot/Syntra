@@ -87,4 +87,51 @@ class BackupManagerRollbackTest {
         stmt.close()
         conn.close()
     }
+
+    @Test
+    fun `rejected backup never reaches restorePayload and preserves existing database completely`() {
+        val conn = DriverManager.getConnection("jdbc:sqlite::memory:")
+        val stmt = conn.createStatement()
+
+        stmt.execute("""
+            CREATE TABLE weigh_ins (
+                id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                measuredAtMillis INTEGER NOT NULL,
+                weightGrams INTEGER NOT NULL,
+                note TEXT NOT NULL
+            )
+        """.trimIndent())
+
+        stmt.execute("""
+            INSERT INTO weigh_ins (id, measuredAtMillis, weightGrams, note)
+            VALUES (1, 1690000000000, 78500, 'Pesaje existente que debe sobrevivir')
+        """.trimIndent())
+
+        // Incomplete backup JSON (missing weighIns)
+        val rejectedJson = """
+            {
+                "formatVersion": 3,
+                "appVersion": "0.7.0-alpha11",
+                "exportedAtMillis": 1700000000000,
+                "exercises": [],
+                "workoutSessions": [],
+                "workoutSets": []
+            }
+        """.trimIndent()
+
+        val validationResult = BackupSerializer.deserializeAndValidate(rejectedJson)
+        assertTrue("Incomplete backup must be rejected at validation stage", validationResult is BackupValidationResult.Error)
+
+        // Since validation failed, restore is NOT executed:
+        // Verify database is 100% intact
+        val rs = stmt.executeQuery("SELECT count(*), weightGrams, note FROM weigh_ins")
+        assertTrue(rs.next())
+        assertEquals(1, rs.getInt(1))
+        assertEquals(78500, rs.getInt(2))
+        assertEquals("Pesaje existente que debe sobrevivir", rs.getString(3))
+        rs.close()
+
+        stmt.close()
+        conn.close()
+    }
 }

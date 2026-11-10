@@ -223,7 +223,15 @@ class DataIntegrityAuditTest {
                 ],
                 "workoutSets": [
                     {"id": 1, "sessionId": 1, "exerciseId": 1, "loadGrams": 70000, "repetitions": 10}
-                ]
+                ],
+                "weighIns": [],
+                "exerciseAliases": [],
+                "irisxMemories": [],
+                "routines": [],
+                "routineExercises": [],
+                "irisxConversations": [],
+                "irisxMessages": [],
+                "workoutCategories": []
             }
         """.trimIndent()
 
