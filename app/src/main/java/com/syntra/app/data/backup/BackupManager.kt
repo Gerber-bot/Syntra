@@ -193,7 +193,7 @@ class BackupManager(private val db: AppDatabase) {
 
         SyntraBackupPayload(
             formatVersion = BackupSerializer.CURRENT_FORMAT_VERSION,
-            appVersion = "0.7.0-alpha15",
+            appVersion = "0.7.0-alpha16",
             exportedAtMillis = System.currentTimeMillis(),
             profile = profileDto,
             weighIns = weighIns,

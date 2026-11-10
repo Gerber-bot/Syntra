@@ -143,9 +143,7 @@ class LlamaCppInferenceEngine(
             LLamaAndroid.instance().nlen = maxTok
             LLamaAndroid.instance().send(prompt, maxTokens = maxTok, formatChat = true).collect { piece ->
                 if (isCancelled) {
-                    emit(GenerationChunk(text = "", isComplete = true, errorMessage = "Inferencia cancelada por el usuario."))
-                    state = EngineState.READY
-                    return@collect
+                    throw kotlinx.coroutines.CancellationException("Inferencia cancelada por el usuario.")
                 }
 
                 val cleanPiece = IrisXContextBuilder.stripChatMlTokens(piece, trim = false)
@@ -164,6 +162,8 @@ class LlamaCppInferenceEngine(
             }
 
             if (isCancelled) {
+                state = EngineState.READY
+                emit(GenerationChunk(text = "", isComplete = true, errorMessage = "Inferencia cancelada por el usuario."))
                 return@flow
             }
 
@@ -176,6 +176,12 @@ class LlamaCppInferenceEngine(
             )
             emit(GenerationChunk(text = "", isComplete = true, tokensGenerated = tokenCount, elapsedMillis = totalElapsed))
             state = EngineState.READY
+        } catch (_: kotlinx.coroutines.CancellationException) {
+            state = EngineState.READY
+            emit(GenerationChunk(text = "", isComplete = true, errorMessage = "Inferencia cancelada por el usuario."))
+        } catch (_: java.util.concurrent.CancellationException) {
+            state = EngineState.READY
+            emit(GenerationChunk(text = "", isComplete = true, errorMessage = "Inferencia cancelada por el usuario."))
         } catch (e: Throwable) {
             state = EngineState.ERROR
             emit(GenerationChunk(text = "", isComplete = true, errorMessage = "Error en inferencia nativa llama.cpp: ${e.message}"))

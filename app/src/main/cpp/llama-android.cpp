@@ -6,6 +6,7 @@
 #include <mutex>
 #include <string>
 #include <unistd.h>
+#include <vector>
 #include "llama.h"
 #include "common.h"
 
@@ -13,7 +14,8 @@
 #define LOGi(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 #define LOGe(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
-static std::atomic<bool> g_is_cancelled{false};
+static std::atomic<uint64_t> g_active_generation_id{0};
+static std::atomic<uint64_t> g_cancelled_generation_id{0};
 static std::mutex g_token_chars_mutex;
 static std::string cached_token_chars;
 
@@ -52,6 +54,77 @@ bool is_valid_utf8(const char * string) {
     }
 
     return true;
+}
+
+// Converts standard UTF-8 string to a Java jstring using UTF-16 representation,
+// preventing JNI Modified UTF-8 issues with 4-byte characters (e.g. emojis).
+static jstring create_java_string_from_utf8(JNIEnv *env, const std::string &utf8_str) {
+    if (utf8_str.empty()) {
+        jchar empty_char = 0;
+        return env->NewString(&empty_char, 0);
+    }
+
+    std::vector<jchar> utf16;
+    utf16.reserve(utf8_str.size());
+
+    const unsigned char *p = reinterpret_cast<const unsigned char *>(utf8_str.data());
+    const unsigned char *end = p + utf8_str.size();
+
+    while (p < end) {
+        uint32_t cp = 0;
+        int len = 0;
+
+        if (*p < 0x80) {
+            cp = *p;
+            len = 1;
+        } else if ((*p & 0xE0) == 0xC0) {
+            cp = *p & 0x1F;
+            len = 2;
+        } else if ((*p & 0xF0) == 0xE0) {
+            cp = *p & 0x0F;
+            len = 3;
+        } else if ((*p & 0xF8) == 0xF0) {
+            cp = *p & 0x07;
+            len = 4;
+        } else {
+            // Invalid byte, skip
+            p++;
+            continue;
+        }
+
+        if (p + len > end) {
+            // Incomplete byte sequence at tail
+            break;
+        }
+
+        bool valid = true;
+        for (int i = 1; i < len; ++i) {
+            if ((p[i] & 0xC0) != 0x80) {
+                valid = false;
+                break;
+            }
+            cp = (cp << 6) | (p[i] & 0x3F);
+        }
+
+        if (!valid) {
+            p++;
+            continue;
+        }
+
+        p += len;
+
+        if (cp <= 0xFFFF) {
+            utf16.push_back(static_cast<jchar>(cp));
+        } else if (cp <= 0x10FFFF) {
+            cp -= 0x10000;
+            jchar high = static_cast<jchar>(0xD800 + (cp >> 10));
+            jchar low = static_cast<jchar>(0xDC00 + (cp & 0x3FF));
+            utf16.push_back(high);
+            utf16.push_back(low);
+        }
+    }
+
+    return env->NewString(utf16.data(), static_cast<jsize>(utf16.size()));
 }
 
 static void log_callback(ggml_log_level level, const char * fmt, void * data) {
@@ -293,11 +366,15 @@ Java_android_llama_cpp_LLamaAndroid_free_1sampler(JNIEnv *, jobject, jlong sampl
 
 extern "C"
 JNIEXPORT void JNICALL
-Java_android_llama_cpp_LLamaAndroid_cancel_1generation(JNIEnv *, jobject) {
-    g_is_cancelled.store(true);
+Java_android_llama_cpp_LLamaAndroid_cancel_1generation(JNIEnv *, jobject, jlong gen_id) {
+    if (gen_id <= 0) {
+        g_cancelled_generation_id.store(g_active_generation_id.load());
+    } else {
+        g_cancelled_generation_id.store(static_cast<uint64_t>(gen_id));
+    }
     std::lock_guard<std::mutex> lock(g_token_chars_mutex);
     cached_token_chars.clear();
-    LOGi("cancel_generation() called from JNI");
+    LOGi("cancel_generation() called from JNI for gen_id %llu", (unsigned long long)gen_id);
 }
 
 extern "C"
@@ -319,21 +396,36 @@ Java_android_llama_cpp_LLamaAndroid_completion_1init(
         jobject,
         jlong context_pointer,
         jlong batch_pointer,
+        jlong sampler_pointer,
         jstring jtext,
         jboolean format_chat,
-        jint n_len
+        jint n_len,
+        jlong gen_id
     ) {
 
     {
         std::lock_guard<std::mutex> lock(g_token_chars_mutex);
         cached_token_chars.clear();
     }
-    g_is_cancelled.store(false);
+
+    g_active_generation_id.store(static_cast<uint64_t>(gen_id));
+
+    if (g_cancelled_generation_id.load() >= static_cast<uint64_t>(gen_id)) {
+        LOGi("completion_init: generation %llu was cancelled prior to initialization", (unsigned long long)gen_id);
+        env->ThrowNew(env->FindClass("java/util/concurrent/CancellationException"),
+                      "Generación cancelada antes de inicializar");
+        return -1;
+    }
 
     if (!context_pointer || !batch_pointer || !jtext) {
         LOGe("completion_init: invalid null pointers passed");
         env->ThrowNew(env->FindClass("java/lang/IllegalArgumentException"), "Punteros nulos pasados a completion_init");
         return -1;
+    }
+
+    // Reset sampler state across generations to avoid penalty/state contamination
+    if (sampler_pointer) {
+        llama_sampler_reset(reinterpret_cast<llama_sampler *>(sampler_pointer));
     }
 
     const auto text = env->GetStringUTFChars(jtext, 0);
@@ -354,7 +446,9 @@ Java_android_llama_cpp_LLamaAndroid_completion_1init(
     if (tokens_list.empty()) {
         LOGe("completion_init: prompt produced 0 tokens");
         env->ReleaseStringUTFChars(jtext, text);
-        return 0;
+        env->ThrowNew(env->FindClass("java/lang/IllegalArgumentException"),
+                      "El prompt no produjo tokens válidos");
+        return -1;
     }
 
     if (tokens_list.size() >= n_ctx || n_kv_req > n_ctx) {
@@ -366,10 +460,12 @@ Java_android_llama_cpp_LLamaAndroid_completion_1init(
         return -1;
     }
 
-    if (g_is_cancelled.load()) {
+    if (g_cancelled_generation_id.load() >= static_cast<uint64_t>(gen_id)) {
         LOGi("completion_init: aborted due to cancellation");
         env->ReleaseStringUTFChars(jtext, text);
-        return 0;
+        env->ThrowNew(env->FindClass("java/util/concurrent/CancellationException"),
+                      "Inferencia cancelada durante la preparación");
+        return -1;
     }
 
     for (auto id : tokens_list) {
@@ -409,15 +505,23 @@ Java_android_llama_cpp_LLamaAndroid_completion_1loop(
         jlong batch_pointer,
         jlong sampler_pointer,
         jint n_len,
-        jint n_cur
+        jint n_cur,
+        jlong gen_id
 ) {
-    if (g_is_cancelled.load()) {
-        LOGi("completion_loop: generation was cancelled cooperatively");
+    if (g_cancelled_generation_id.load() >= static_cast<uint64_t>(gen_id) ||
+        static_cast<uint64_t>(gen_id) != g_active_generation_id.load()) {
+        LOGi("completion_loop: generation %llu was cancelled cooperatively", (unsigned long long)gen_id);
+        std::lock_guard<std::mutex> lock(g_token_chars_mutex);
+        cached_token_chars.clear();
+        env->ThrowNew(env->FindClass("java/util/concurrent/CancellationException"),
+                      "Inferencia cancelada por el usuario");
         return nullptr;
     }
 
     if (!context_pointer || !batch_pointer || !sampler_pointer) {
         LOGe("completion_loop: invalid null pointers passed");
+        env->ThrowNew(env->FindClass("java/lang/IllegalArgumentException"),
+                      "Punteros nativos nulos en completion_loop");
         return nullptr;
     }
 
@@ -430,12 +534,20 @@ Java_android_llama_cpp_LLamaAndroid_completion_1loop(
     // sample the most likely token
     const auto new_token_id = llama_sampler_sample(sampler, context, -1);
 
-    if (g_is_cancelled.load()) {
+    if (g_cancelled_generation_id.load() >= static_cast<uint64_t>(gen_id) ||
+        static_cast<uint64_t>(gen_id) != g_active_generation_id.load()) {
         LOGi("completion_loop: cancelled after sampling");
+        std::lock_guard<std::mutex> lock(g_token_chars_mutex);
+        cached_token_chars.clear();
+        env->ThrowNew(env->FindClass("java/util/concurrent/CancellationException"),
+                      "Inferencia cancelada por el usuario");
         return nullptr;
     }
 
     if (llama_vocab_is_eog(vocab, new_token_id) || n_cur >= n_len) {
+        // COMPLETED cleanly. Clear buffer and return nullptr without exception.
+        std::lock_guard<std::mutex> lock(g_token_chars_mutex);
+        cached_token_chars.clear();
         return nullptr;
     }
 
@@ -447,11 +559,11 @@ Java_android_llama_cpp_LLamaAndroid_completion_1loop(
         cached_token_chars += new_token_chars;
 
         if (is_valid_utf8(cached_token_chars.c_str())) {
-            new_token = env->NewStringUTF(cached_token_chars.c_str());
+            new_token = create_java_string_from_utf8(env, cached_token_chars);
             LOGi("cached: %s, new_token_chars: `%s`, id: %d", cached_token_chars.c_str(), new_token_chars.c_str(), new_token_id);
             cached_token_chars.clear();
         } else {
-            new_token = env->NewStringUTF("");
+            new_token = create_java_string_from_utf8(env, "");
         }
     }
 
@@ -461,6 +573,10 @@ Java_android_llama_cpp_LLamaAndroid_completion_1loop(
     if (llama_decode(context, *batch) != 0) {
         LOGe("llama_decode() failed during generation loop");
         llama_kv_self_clear(context);
+        std::lock_guard<std::mutex> lock(g_token_chars_mutex);
+        cached_token_chars.clear();
+        env->ThrowNew(env->FindClass("java/lang/IllegalStateException"),
+                      "llama_decode() falló durante la generación");
         return nullptr;
     }
 

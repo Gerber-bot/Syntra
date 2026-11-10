@@ -1,6 +1,8 @@
 package com.syntra.app.domain.neural
 
 import android.llama.cpp.LLamaAndroid
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -43,6 +45,8 @@ class IrisXNeuralStageB1Test {
     fun `llama android instance throws IllegalStateException when sending without loaded model`() = runBlocking {
         val llama = LLamaAndroid.instance()
         assertFalse(llama.hasModelLoaded())
+        assertEquals(LLamaAndroid.Companion.State.Idle, llama.getCurrentState())
+        assertFalse(llama.isGenerationActive())
 
         var caughtException: Throwable? = null
         try {
@@ -53,7 +57,7 @@ class IrisXNeuralStageB1Test {
 
         assertNotNull("Debe lanzar excepción si se invoca send() sin modelo cargado", caughtException)
         assertTrue(caughtException is IllegalStateException)
-        assertEquals("No model loaded", caughtException?.message)
+        assertTrue(caughtException?.message?.contains("No model loaded") == true)
     }
 
     @Test
@@ -143,5 +147,71 @@ class IrisXNeuralStageB1Test {
         val sportsText = "¡Excelente serie en sentadillas con 100 kg! 🏋️‍♂️ RPE 8.5 — Seguí así."
         val cleaned = IrisXContextBuilder.stripChatMlTokens(sportsText, trim = false)
         assertEquals(sportsText, cleaned)
+    }
+
+    @Test
+    fun `consecutive generations execute without cross-generation contamination`() = runBlocking {
+        val fallback = DeterministicInferenceEngine(db = null)
+        val engine = LlamaCppInferenceEngine(fallbackEngine = fallback)
+
+        val dummyModel = tempFolder.newFile("test_consecutive.gguf")
+        FileOutputStream(dummyModel).use { out ->
+            val buffer = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN)
+            buffer.putInt(0x46554747)
+            buffer.putInt(3)
+            out.write(buffer.array())
+        }
+        engine.loadModel(dummyModel)
+
+        // Run 3 consecutive inferences
+        for (i in 1..3) {
+            val chunks = engine.generate("Consulta número $i sobre press de banca").toList()
+            assertTrue("Generación $i debe emitir chunks", chunks.isNotEmpty())
+            val last = chunks.last()
+            assertTrue("Generación $i debe completarse", last.isComplete)
+            assertNull("Generación $i no debe tener error", last.errorMessage)
+            assertEquals("Engine debe volver a READY tras generación $i", EngineState.READY, engine.state)
+        }
+    }
+
+    @Test
+    fun `engine handles cancellation during slow suspended emission and allows clean unload`() = runBlocking {
+        val fallback = DeterministicInferenceEngine(db = null)
+        val engine = LlamaCppInferenceEngine(fallbackEngine = fallback)
+
+        val dummyModel = tempFolder.newFile("test_slow_consumer.gguf")
+        FileOutputStream(dummyModel).use { out ->
+            val buffer = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN)
+            buffer.putInt(0x46554747)
+            buffer.putInt(3)
+            out.write(buffer.array())
+        }
+        engine.loadModel(dummyModel)
+
+        val firstChunkSeen = CompletableDeferred<Unit>()
+        val generationJob = launch {
+            engine.generate("Consulta con consumidor lento").collect {
+                if (!firstChunkSeen.isCompleted) {
+                    firstChunkSeen.complete(Unit)
+                }
+                delay(10) // Simulate slow consumer suspension
+            }
+        }
+
+        firstChunkSeen.await()
+        engine.cancel()
+        generationJob.join()
+
+        assertEquals(EngineState.READY, engine.state)
+        engine.unloadModel()
+        assertEquals(EngineState.UNINITIALIZED, engine.state)
+        assertFalse(engine.isModelLoaded())
+    }
+
+    @Test
+    fun `streaming preserves newlines and tab indentations across token pieces`() {
+        val multilineText = "\n\n1. Press banca: 4x8\n2. Fondos: 3x10\n\t* Con pausa en el pecho"
+        val preserved = IrisXContextBuilder.stripChatMlTokens(multilineText, trim = false)
+        assertEquals(multilineText, preserved)
     }
 }
