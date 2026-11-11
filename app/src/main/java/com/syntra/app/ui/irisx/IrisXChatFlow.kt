@@ -73,3 +73,43 @@ class IrisXReplyAccumulator {
     val isPersistable: Boolean
         get() = errorMessage == null && finalText().isNotBlank()
 }
+
+/**
+ * Single-flight coordinator for one conversational turn.
+ *
+ * Every send receives a unique [turnId]. Only one turn may own the console at a time, so a
+ * double tap or a recomposition cannot start two generations for the same tap. A turn that was
+ * cancelled or superseded stops being [isActive], which prevents it from appending or persisting
+ * anything. Sending the same text again later is allowed: a new turn gets a new identifier.
+ */
+class IrisXTurnLedger {
+
+    private var activeTurnId: String? = null
+
+    val hasActiveTurn: Boolean
+        get() = activeTurnId != null
+
+    /** @return the new turn identifier, or null when another turn is still in flight. */
+    fun beginTurn(): String? {
+        if (activeTurnId != null) return null
+        val id = UUID.randomUUID().toString()
+        activeTurnId = id
+        return id
+    }
+
+    fun isActive(turnId: String?): Boolean = turnId != null && activeTurnId == turnId
+
+    /** @return true when [turnId] was the active turn and the console has been released. */
+    fun finishTurn(turnId: String): Boolean {
+        if (activeTurnId != turnId) return false
+        activeTurnId = null
+        return true
+    }
+
+    /** Releases the active turn (cancellation) and returns its identifier, if any. */
+    fun cancelActive(): String? {
+        val current = activeTurnId
+        activeTurnId = null
+        return current
+    }
+}

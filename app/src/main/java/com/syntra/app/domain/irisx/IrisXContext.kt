@@ -88,6 +88,30 @@ object IrisXContextResolver {
         return null
     }
 
+    /**
+     * Distinguishes a general training question ("qué hacer un día de piernas") from a
+     * recommendation about the athlete's own records ("recomendaciones para mejorar mi press").
+     *
+     * General requests must not demand history: the answer is generic guidance, never invented
+     * personal data. Explicit personal references always win over general vocabulary.
+     */
+    fun isGeneralRecommendationRequest(normInput: String): Boolean {
+        if (personalRecommendationMarkers.any { normInput.contains(it) }) return false
+        return generalRecommendationMarkers.any { normInput.contains(it) }
+    }
+
+    private val personalRecommendationMarkers = listOf(
+        "mi progreso", "mi progresion", "mis sesiones", "mis datos", "mi historial",
+        "mi ultimo", "mi ultima", "segun mi", "mi rutina", "mi entrenamiento",
+        "para mejorar mi", "mejorar mis", "mi marca", "mis marcas", "mis cargas"
+    )
+
+    private val generalRecommendationMarkers = listOf(
+        "general", "generales", "guia", "principiante", "principiantes",
+        "que hacer", "que hago", "que ejercicios", "como entrenar",
+        "dia de", "rutina para", "armar una rutina", "planificar"
+    )
+
     fun detectExerciseReference(
         normInput: String,
         knownExerciseNames: List<String>,

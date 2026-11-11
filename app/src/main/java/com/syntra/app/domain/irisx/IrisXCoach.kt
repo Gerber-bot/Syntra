@@ -15,6 +15,7 @@ enum class RecommendationCategory(val displayName: String) {
     MUSCLE_BALANCE("Equilibrio muscular"),
     FREQUENCY_AND_RECOVERY("Frecuencia y recuperación"),
     GOAL_ALIGNMENT("Alineación con objetivo personal"),
+    GENERAL_GUIDANCE("Guía general"),
     DATA_COLLECTION("Datos iniciales requeridos")
 }
 
@@ -49,6 +50,58 @@ object IrisXCoach {
     private const val DAY_MILLIS = 86_400_000L
 
     /**
+     * General guidance that does NOT need training history and never invents personal data.
+     * Used when the athlete asks what to do for a muscle group, not how their own records evolved.
+     */
+    fun generateGeneralRecommendations(
+        targetMuscleOrExercise: String?,
+        goal: String = "Seguimiento general"
+    ): List<CoachRecommendation> {
+        val muscle = targetMuscleOrExercise?.trim()?.takeIf { it.isNotBlank() }
+        val plan = generalPlans[muscle] ?: generalPlans["__default"]!!
+        val targetLabel = muscle ?: "todo el cuerpo"
+
+        return listOf(
+            CoachRecommendation(
+                id = "rec_general_${(muscle ?: "full_body").lowercase()}",
+                category = RecommendationCategory.GENERAL_GUIDANCE,
+                proposal = plan,
+                dataUsed = listOf(
+                    "Sin datos personales: esta guía no usa tu historial",
+                    "Objetivo declarado en perfil: $goal"
+                ),
+                reason = "Estructura general de entrenamiento de fuerza para $targetLabel, " +
+                    "basada en volumen semanal y rangos de repeticiones habitualmente recomendados.",
+                certaintyLevel = MetricDataQuality.ESTIMATED,
+                certaintyAndLimitations = "Recomendación general no personalizada: no analiza tus sesiones, " +
+                    "cargas, recuperación ni progresión. No sustituye una evaluación individual ni constituye " +
+                    "indicación médica.",
+                optionalAction = "Registrar una sesión de $targetLabel para habilitar recomendaciones " +
+                    "basadas en tus datos reales."
+            )
+        )
+    }
+
+    private val generalPlans = mapOf(
+        "Piernas" to "Planificar 1–2 sesiones semanales de tren inferior con 6–12 series efectivas, " +
+            "combinando un movimiento de rodilla (sentadilla o prensa), uno de cadera (peso muerto rumano) " +
+            "y trabajo accesorio de femoral y gemelos, en rangos de 6–12 repeticiones.",
+        "Glúteos" to "Incluir 1–2 bloques semanales de 4–8 series con extensión de cadera (puente, hip thrust " +
+            "o peso muerto rumano) y abducción, priorizando rango completo y control en la fase excéntrica.",
+        "Pecho" to "Distribuir 6–10 series semanales de empuje horizontal y en ligera inclinación " +
+            "(press banca, mancuernas o máquina), en rangos de 6–12 repeticiones con 1–3 repeticiones en reserva.",
+        "Espalda" to "Incluir 8–12 series semanales combinando tracción vertical (jalón o dominadas) y " +
+            "horizontal (remo), priorizando el control escapular sobre la carga máxima.",
+        "Hombros" to "Sumar 6–10 series semanales de empuje vertical (press militar o máquina) y elevaciones " +
+            "laterales, evitando llevarlas al fallo en todos los bloques.",
+        "Brazos" to "Añadir 4–8 series semanales de bíceps y tríceps como trabajo accesorio, después de los " +
+            "movimientos principales y en rangos de 8–15 repeticiones.",
+        "__default" to "Estructurar 2–3 sesiones semanales de cuerpo completo con 1 ejercicio de empuje, " +
+            "1 de tracción y 1 de tren inferior por sesión, en rangos de 6–12 repeticiones y con progresión " +
+            "gradual de carga."
+    )
+
+    /**
      * Generates deterministic, rule-based sports recommendations based on history, profile goals,
      * training frequency, load/rep evolution, volume distribution, and elapsed recovery time.
      * Never emits medical diagnoses or assumes fatigue from isolated rep drops.
@@ -77,7 +130,8 @@ object IrisXCoach {
                     reason = "El motor determinista requiere historial medido para calcular tendencias sin inventar estimaciones.",
                     certaintyLevel = MetricDataQuality.INSUFFICIENT_DATA,
                     certaintyAndLimitations = "Datos insuficientes. No existen registros previos en SQLite.",
-                    optionalAction = "Podés usar el Analizador o aplicar una rutina desde la pestaña Rutinas."
+                    optionalAction = "Podés usar el Analizador o aplicar una rutina desde la pestaña Rutinas. " +
+                        "Para una guía general sin historial, pedí 'recomendaciones generales de piernas'."
                 )
             )
             return recommendations

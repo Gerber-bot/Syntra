@@ -397,7 +397,10 @@ class IrisXCore(
         ) {
             val muscleRef = IrisXContextResolver.detectMuscleReference(norm)
             val afterPreposition = Regex("(?:en|para|sobre)\\s+(.+)$").find(norm)?.groupValues?.get(1)?.trim()
-            return IrisXIntent.QueryRecommendations(targetSubject = muscleRef ?: afterPreposition)
+            return IrisXIntent.QueryRecommendations(
+                targetSubject = muscleRef ?: afterPreposition,
+                general = IrisXContextResolver.isGeneralRecommendationRequest(norm)
+            )
         }
 
         // 14. Progression / Analytics queries: e.g. "¿Cómo progresé en espalda?", "progreso sentadilla", "récord press de banca", "estancamiento"
@@ -442,10 +445,14 @@ class IrisXCore(
      */
     suspend fun ask(
         input: String,
-        referenceTimeMillis: Long = System.currentTimeMillis()
+        referenceTimeMillis: Long = System.currentTimeMillis(),
+        conversation: IrisxConversationEntity? = null
     ): IrisXResponse {
-        val activeConv = repository.getOrCreateActiveConversation()
-        if (contextState.conversationId == 0L) {
+        // Persisting to the conversation the user is looking at is mandatory: resolving the
+        // "active" conversation again could write into another chat (it is ordered by
+        // updatedAtMillis, which this very method bumps).
+        val activeConv = conversation ?: repository.getOrCreateActiveConversation()
+        if (contextState.conversationId != activeConv.id) {
             contextState = activeConv.toState()
         }
 
@@ -510,7 +517,7 @@ class IrisXCore(
             is IrisXIntent.ClassifySession -> handleClassifySession(intent.sessionTitle, intent.exerciseNames)
             is IrisXIntent.QueryProgression -> handleQueryProgression(intent.targetSubject, intent.periodScope, referenceTimeMillis)
             is IrisXIntent.FollowUpQuery -> handleFollowUpQuery(intent, referenceTimeMillis)
-            is IrisXIntent.QueryRecommendations -> handleQueryRecommendations(intent.targetSubject, referenceTimeMillis)
+            is IrisXIntent.QueryRecommendations -> handleQueryRecommendations(intent.targetSubject, intent.general, referenceTimeMillis)
             is IrisXIntent.SavePreference -> handleSavePreference(intent.key, intent.value, intent.confirmed)
             is IrisXIntent.QueryPreferences -> handleQueryPreferences()
             is IrisXIntent.QueryRoutines -> handleQueryRoutines()
@@ -951,15 +958,39 @@ class IrisXCore(
 
     private suspend fun handleQueryRecommendations(
         targetSubject: String?,
+        general: Boolean,
         referenceTimeMillis: Long
     ): IrisXResponse {
         val profile = repository.getProfile()
+        val prefs = repository.getConfirmedPreferences()
+        val goal = prefs["objetivo"] ?: profile?.goal ?: "Seguimiento general"
+
+        // A general question ("qué hacer un día de piernas") must not ask for history:
+        // it is answered with generic guidance, never with invented personal data.
+        if (general) {
+            val recommendations = IrisXCoach.generateGeneralRecommendations(targetSubject, goal)
+            contextState = contextState.copy(lastQueryDomain = "RECOMMENDATION_GENERAL")
+
+            val text = buildString {
+                append("🧭 IrisX Coach — Guía general (sin datos personales)\n\n")
+                recommendations.forEachIndexed { idx, rec ->
+                    if (idx > 0) append("\n\n---\n\n")
+                    append(rec.formatForDisplay())
+                }
+            }
+
+            return IrisXResponse.Success(
+                message = text,
+                actionTaken = "QUERY_RECOMMENDATIONS_GENERAL",
+                payload = recommendations
+            )
+        }
+
         val sessions = repository.getAllSessions()
         val allSets = repository.getAllSets()
         val exercises = repository.getAllExercises()
         val aliases = repository.getLearnedAliases()
         val overrides = repository.getMuscleOverrides()
-        val prefs = repository.getConfirmedPreferences()
 
         val effectiveTarget = targetSubject ?: contextState.activeExerciseName ?: contextState.activeMuscleGroup
         val recommendations = IrisXCoach.generateRecommendations(

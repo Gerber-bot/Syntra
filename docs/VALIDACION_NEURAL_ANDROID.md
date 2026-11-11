@@ -354,3 +354,78 @@ Checklist manual en el teléfono (sin autorización no se instala nada):
 
 No se declara B.1 cerrada: falta ejecutar este checklist en el dispositivo.
 
+## 11. Duplicación de turnos y recomendaciones generales (2026-11-11)
+
+Auditoría de `IrisXConsoleDialog` → `IrisXChatFlow` → `IrisXCore.ask` → `RoomIrisXRepository`
+→ `IrisxConversationDao` / `IrisxMessageEntity`. Tres causas independientes explicaban la
+duplicación observada; ninguna era un fallo de Room.
+
+| # | Causa verificada | Consecuencia |
+|---|---|---|
+| 1 | `IrisXCore.ask()` ya persiste el turno USER y la respuesta IRISX, y el diálogo volvía a persistir ambos en el camino determinista | 4 filas por turno (2 USER + 2 IRISX idénticas) |
+| 2 | `ask()` resolvía la conversación con `getOrCreateActiveConversation()`, ordenada por `updatedAtMillis DESC` y modificada por la propia llamada | La respuesta podía escribirse en otra conversación que la visible |
+| 3 | La carga inicial (`LaunchedEffect`) y el primer `sendMessage` llamaban en paralelo a `getOrCreateActiveConversation()` y la carga hacía `messages.clear()` | Podían crearse dos conversaciones y el reload tardío borraba la burbuja viva, repintando las filas duplicadas |
+
+Las duplicaciones estaban **persistidas**, no sólo en pantalla: la UI agrega una burbuja por
+turno, por lo que los pares visibles aparecían al releer filas duplicadas tras un cambio de
+conversación, reapertura o recomposición.
+
+Correcciones aplicadas (sin cambio de esquema ni migración; DB v8 intacta):
+
+- `IrisXConsoleDialog.kt`: un único escritor por turno. En el camino determinista `ask()` es
+  el único que persiste USER + IRISX; el diálogo sólo persiste el USER en el camino neuronal,
+  donde `ask()` no participa. `ask()` recibe la conversación visible
+  (`ask(input, referenceTimeMillis, conversation)`), no la resuelve por `updatedAtMillis`.
+- `IrisXConsoleDialog.kt`: `Mutex` + `ensureConversationLoaded()` serializan
+  resolver→leer→limpiar→renderizar contra el envío; la burbuja del usuario se agrega después
+  de la carga, bajo el mismo candado lógico. `loadedConversationId` se marca recién al
+  terminar el render, así una carga cancelada se reintenta en vez de dejar el chat vacío.
+- `IrisXChatFlow.kt`: `IrisXTurnLedger` reemplaza `activeGenerationToken` como autoridad
+  single-flight. Cada envío recibe un `turnId`; un segundo envío concurrente obtiene `null`.
+  Un turno cancelado o reemplazado deja de estar activo y no puede agregar ni persistir nada.
+  Reenviar el mismo texto más tarde es válido porque genera un turno nuevo.
+- `IrisXModels.kt` / `IrisXContext.kt` / `IrisXCore.kt` / `IrisXCoach.kt`: se separa
+  recomendación **general** de recomendación **personalizada**. `QueryRecommendations` gana
+  `general: Boolean`; `IrisXContextResolver.isGeneralRecommendationRequest` clasifica con
+  marcadores generales («general», «qué hacer», «día de», «qué ejercicios»…) que las marcas
+  personales («mi progreso», «mi rutina», «para mejorar mi»…) anulan.
+  `IrisXCoach.generateGeneralRecommendations` responde con estructura genérica
+  (`GENERAL_GUIDANCE`, `QUERY_RECOMMENDATIONS_GENERAL`) sin leer sesiones ni series, y declara
+  explícitamente que no usa datos personales. «recomendaciones» sin contexto sigue siendo
+  personalizada y, si no hay historial, sugiere pedir «recomendaciones generales de …».
+
+Pruebas de regresión agregadas:
+
+- `IrisXTurnLedgerTest` (7): envío simultáneo rechazado, turno obsoleto no libera el candado,
+  cancelación y reenvío, mismo texto permitido como turno nuevo, recomposición y reapertura.
+- `IrisXTurnPersistenceAndRoutingTest` (6): un turno determinista persiste exactamente 1 USER
+  + 1 IRISX; dos turnos iguales persisten 2+2 sin duplicar; `ask()` escribe en la conversación
+  visible aunque `getOrCreateActiveConversation()` apunte a otra; consulta general no lee
+  historial (`QUERY_RECOMMENDATIONS_GENERAL`); consulta personal sí lo hace
+  (`QUERY_RECOMMENDATIONS`); «recomendaciones» aislado conserva el comportamiento personalizado.
+
+Resultado JVM de esta corrida:
+
+```
+.\gradlew.bat --offline --no-daemon :app:testDebugUnitTest
+234 tests, 0 fallos, 0 errores, 0 omitidos (32 suites)
+```
+
+APK de laboratorio reconstruido para el mismo checklist:
+
+```
+app/build/outputs/apk/lab/app-lab.apk
+18.236.208 bytes · SHA-256 6600ADA378C39B09…
+app/build/outputs/apk/androidTest/lab/app-lab-androidTest.apk
+1.291.517 bytes · SHA-256 FFEB8BAD02C1C118…
+```
+
+Riesgos pendientes:
+
+- Las filas duplicadas ya escritas en la base de datos de laboratorio no se deduplican
+  automáticamente: deduplicar a ciegas ocultaría repeticiones legítimas. Hay que borrar la
+  conversación afectada desde «💬 Chats» o reinstalar los datos de laboratorio.
+- Falta ejecutar el checklist manual (envío simultáneo, cambio de conversación, cierre y
+  reapertura) en el dispositivo; no se instaló nada sin autorización.
+
+

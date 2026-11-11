@@ -39,7 +39,11 @@ sealed class IrisXIntent {
         val targetSubject: String? = null,
         val rawText: String
     ) : IrisXIntent()
-    data class QueryRecommendations(val targetSubject: String? = null) : IrisXIntent()
+    data class QueryRecommendations(
+        val targetSubject: String? = null,
+        /** True when the user asks for general guidance instead of advice based on their history. */
+        val general: Boolean = false
+    ) : IrisXIntent()
     data class SavePreference(val key: String, val value: String, val confirmed: Boolean = false) : IrisXIntent()
     object QueryPreferences : IrisXIntent()
     object QueryRoutines : IrisXIntent()

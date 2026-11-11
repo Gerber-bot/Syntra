@@ -32,6 +32,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -66,12 +68,13 @@ fun IrisXConsoleDialog(
     var conversationToRename by remember { mutableStateOf<IrisxConversationEntity?>(null) }
 
     var isGenerating by remember { mutableStateOf(false) }
-    // Blocks a second send while the turn is being routed/persisted, without flashing "Parar".
-    var isSending by remember { mutableStateOf(false) }
     var currentGenerationJob by remember { mutableStateOf<Job?>(null) }
-    // Identifies the generation that owns the console. A cancelled or superseded turn must
-    // never overwrite a newer reply nor persist into a different conversation.
-    var activeGenerationToken by remember { mutableStateOf<String?>(null) }
+    // Single-flight authority for the console: one turn owns the dialog at a time, and a
+    // cancelled/superseded turn can no longer append or persist anything.
+    val turnLedger = remember { IrisXTurnLedger() }
+    // Serializes "resolve conversation + read stored messages + render" against a new send,
+    // so the initial load can never wipe a live bubble nor create a second conversation.
+    val conversationMutex = remember { Mutex() }
     var streamingMessageId by remember { mutableStateOf<String?>(null) }
     // Visible, non-persisted diagnosis for model loading problems: a silent degradation to
     // the deterministic engine is indistinguishable from "IrisX no funciona".
@@ -88,12 +91,11 @@ fun IrisXConsoleDialog(
     }
 
     fun stopGeneration(markAsStopped: Boolean = true) {
-        activeGenerationToken = null
+        turnLedger.cancelActive()
         currentGenerationJob?.cancel()
         currentGenerationJob = null
         effectiveNeuralEngine.cancel()
         isGenerating = false
-        isSending = false
         val streamingId = streamingMessageId
         streamingMessageId = null
         if (markAsStopped && streamingId != null) {
@@ -145,13 +147,20 @@ fun IrisXConsoleDialog(
         }
     }
 
-    // Load active conversation & messages
+    // Load active conversation & messages.
     var loadedConversationId by remember { mutableStateOf<Long?>(null) }
-    LaunchedEffect(activeConversation?.id) {
+
+    /**
+     * Resolves the conversation on screen and renders its stored turns exactly once.
+     *
+     * Everything runs under [conversationMutex] so a send that starts while the first load is
+     * still in flight waits for it instead of creating a second conversation or losing its
+     * live bubble to a late `messages.clear()`.
+     */
+    suspend fun ensureConversationLoaded(): IrisxConversationEntity = conversationMutex.withLock {
         val conv = activeConversation ?: repo.getOrCreateActiveConversation().also { activeConversation = it }
-        // Creating the conversation on demand (first message) must not wipe the live bubble.
-        if (loadedConversationId == conv.id) return@LaunchedEffect
-        loadedConversationId = conv.id
+        if (loadedConversationId == conv.id) return@withLock conv
+
         val stored = repo.getMessages(conv.id)
         messages.clear()
         if (stored.isEmpty()) {
@@ -180,9 +189,17 @@ fun IrisXConsoleDialog(
             }
         }
         activeTopicLabel = conv.activeExerciseName ?: conv.activeMuscleGroup
+        // Mark as loaded only after the turns are rendered: a cancelled load must be retried,
+        // never leave the console empty.
+        loadedConversationId = conv.id
         if (messages.isNotEmpty()) {
             listState.scrollToItem(messages.size - 1)
         }
+        conv
+    }
+
+    LaunchedEffect(activeConversation?.id) {
+        ensureConversationLoaded()
     }
 
     fun loadConversations() {
@@ -228,12 +245,17 @@ fun IrisXConsoleDialog(
     suspend fun appendDeterministicReply(
         conversation: IrisxConversationEntity,
         userMessage: String,
-        neuralAvailable: Boolean
+        neuralAvailable: Boolean,
+        turnId: String
     ) {
+        if (!turnLedger.isActive(turnId)) return
+
         var replyText: String
         var failed = false
         try {
-            val resp = irisXCore.ask(userMessage)
+            // IrisXCore.ask() is the single writer of deterministic turns: it persists the USER
+            // message and the IRISX reply. Persisting here too created the duplicated pairs.
+            val resp = irisXCore.ask(userMessage, conversation = conversation)
             replyText = when (resp) {
                 is IrisXResponse.Success -> resp.message
                 is IrisXResponse.RequiresConfirmation -> "${resp.question}\nPara confirmar escribí: ${resp.confirmCommand}"
@@ -252,23 +274,22 @@ fun IrisXConsoleDialog(
             replyText = "No pude procesar la consulta: ${e.message ?: e::class.simpleName}"
         }
 
+        if (!turnLedger.isActive(turnId)) return
         messages.add(
             ChatMessage(
                 text = replyText,
                 kind = if (failed) ChatMessageKind.ERROR else ChatMessageKind.ASSISTANT
             )
         )
-        if (!failed) {
-            persistTurn(conversation.id, "IRISX", replyText)
-        }
     }
 
     suspend fun streamNeuralReply(
         conversation: IrisxConversationEntity,
         userMessage: String,
         history: List<Pair<String, String>>,
-        token: String
+        turnId: String
     ) {
+        if (!turnLedger.isActive(turnId)) return
         val messageId = UUID.randomUUID().toString()
         streamingMessageId = messageId
         messages.add(
@@ -288,7 +309,7 @@ fun IrisXConsoleDialog(
             )
 
             effectiveNeuralEngine.generate(prompt, InferenceParams(maxTokens = 256)).collect { chunk ->
-                if (activeGenerationToken != token) {
+                if (!turnLedger.isActive(turnId)) {
                     throw CancellationException("Generación reemplazada por otra más reciente.")
                 }
                 accumulator.append(chunk)
@@ -302,7 +323,7 @@ fun IrisXConsoleDialog(
                 replaceMessage(messageId) { it.copy(text = visible) }
             }
 
-            if (activeGenerationToken != token) return
+            if (!turnLedger.isActive(turnId)) return
 
             val metrics = effectiveNeuralEngine.metrics
             val footer = if (metrics.tokensPerSecond > 0.0) {
@@ -371,29 +392,26 @@ fun IrisXConsoleDialog(
 
     fun sendMessage(text: String) {
         val trimmed = text.trim()
-        if (trimmed.isBlank() || isGenerating || isSending) return
+        if (trimmed.isBlank()) return
 
-        // History is captured BEFORE appending the new turn: buildPrompt renders the history
-        // and then the current question, so including it here would duplicate it.
-        val historyForPrompt = IrisXChatHistory.forPrompt(messages)
+        // Single-flight: a double tap, a recomposition or a repeated click cannot start two
+        // turns for the same send. Sending identical text later is allowed because that
+        // would be a brand new turn with its own identifier.
+        val turnId = turnLedger.beginTurn() ?: return
 
-        messages.add(ChatMessage(text = trimmed, isUser = true))
         inputText = ""
-        isSending = true
 
         currentGenerationJob = scope.launch {
-            var startedToken: String? = null
             try {
-                // The conversation is created on demand: the first message must never be
-                // dropped just because the initial load has not finished yet.
-                val conversation = activeConversation ?: run {
-                    val created = repo.getOrCreateActiveConversation()
-                    loadedConversationId = created.id
-                    activeConversation = created
-                    created
-                }
+                // Resolve + render under the same lock the initial load uses, so the first
+                // message is never dropped nor duplicated by a late reload.
+                val conversation = ensureConversationLoaded()
+                if (!turnLedger.isActive(turnId)) return@launch
 
-                persistTurn(conversation.id, "USER", trimmed)
+                // History is captured BEFORE appending the new turn: buildPrompt renders the
+                // history and then the current question, so including it here would duplicate it.
+                val historyForPrompt = IrisXChatHistory.forPrompt(messages)
+                messages.add(ChatMessage(text = trimmed, isUser = true))
 
                 val neuralReady = ensureNeuralReady()
                 val guardian = if (neuralReady) {
@@ -409,30 +427,32 @@ fun IrisXConsoleDialog(
                 val isKnownDeterministic = neuralReady && !guardianBlocked &&
                     irisXCore.parseInput(trimmed) !is com.syntra.app.domain.irisx.IrisXIntent.GeneralQuery
 
+                if (!turnLedger.isActive(turnId)) return@launch
+
                 if (neuralReady && !guardianBlocked && !isKnownDeterministic) {
-                    val token = UUID.randomUUID().toString()
-                    startedToken = token
-                    activeGenerationToken = token
+                    // ask() is not involved on the neural path, so the USER turn is stored here.
+                    persistTurn(conversation.id, "USER", trimmed)
                     isGenerating = true
-                    streamNeuralReply(conversation, trimmed, historyForPrompt, token)
+                    streamNeuralReply(conversation, trimmed, historyForPrompt, turnId)
                 } else {
-                    appendDeterministicReply(conversation, trimmed, neuralReady)
+                    // ask() persists the USER turn and the IRISX reply: single writer per turn.
+                    appendDeterministicReply(conversation, trimmed, neuralReady, turnId)
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (e: Throwable) {
-                messages.add(
-                    ChatMessage(
-                        text = "Error inesperado en IrisX: ${e.message ?: e::class.simpleName}",
-                        kind = ChatMessageKind.ERROR
+                if (turnLedger.isActive(turnId)) {
+                    messages.add(
+                        ChatMessage(
+                            text = "Error inesperado en IrisX: ${e.message ?: e::class.simpleName}",
+                            kind = ChatMessageKind.ERROR
+                        )
                     )
-                )
+                }
             } finally {
-                isSending = false
                 // Never leave the console locked in "Parar" mode, and never let a stale turn
                 // release the lock of a newer generation.
-                if (startedToken != null && activeGenerationToken == startedToken) {
-                    activeGenerationToken = null
+                if (turnLedger.finishTurn(turnId)) {
                     streamingMessageId = null
                     isGenerating = false
                 }
