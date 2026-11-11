@@ -1,0 +1,8 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <!-- Isolated validation build: same code and JNI as the product, different applicationId. -->
+    <application
+        android:allowBackup="false"
+        android:label="Syntra Lab"
+        tools:replace="android:label" />
+</manifest>

@@ -41,7 +41,20 @@ android {
         release {
             isMinifyEnabled = false
         }
+        // Isolated validation build. It shares the JNI/llama.cpp sources with the product
+        // build but has its own applicationId, so Android gives it a separate UID and data
+        // directory. It is not a product release and must not replace the user's install.
+        create("lab") {
+            initWith(getByName("debug"))
+            applicationIdSuffix = ".lab"
+            versionNameSuffix = "-lab"
+            isDebuggable = true
+        }
     }
+
+    // Instrumented tests are built for `debug` by default. The lab suite is compiled and run
+    // with -Psyntra.testBuildType=lab, which keeps the normal debug workflow untouched.
+    testBuildType = (project.findProperty("syntra.testBuildType") as String?) ?: "debug"
     buildFeatures {
         compose = true
     }
@@ -62,6 +75,7 @@ dependencies {
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.compose.ui:ui-tooling-preview")
     debugImplementation("androidx.compose.ui:ui-tooling")
+    add("labImplementation", "androidx.compose.ui:ui-test-manifest")
     implementation("androidx.activity:activity-compose:1.13.0")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.11.0")
     implementation("androidx.room:room-runtime:2.8.5")
