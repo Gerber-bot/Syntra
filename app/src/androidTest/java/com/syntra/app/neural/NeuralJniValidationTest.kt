@@ -56,12 +56,18 @@ class NeuralJniValidationTest {
         engine = LlamaCppInferenceEngine()
     }
 
+    // Block body on purpose: JUnit 4 requires a JVM `void` return for @Before/@After.
+    // With an expression body, the `catch` branch returns the Int from Log.w, so
+    // runBlocking would be inferred as Any and the method would compile to
+    // `()Ljava/lang/Object;`, which makes the runner reject the class.
     @After
-    fun tearDown() = runBlocking {
-        try {
-            withTimeout(120_000) { engine.unloadModel() }
-        } catch (t: Throwable) {
-            android.util.Log.w(NeuralLabReport.LOG_TAG, "tearDown unload: ${t.javaClass.simpleName}")
+    fun tearDown() {
+        runBlocking {
+            try {
+                withTimeout(120_000) { engine.unloadModel() }
+            } catch (t: Throwable) {
+                android.util.Log.w(NeuralLabReport.LOG_TAG, "tearDown unload: ${t.javaClass.simpleName}")
+            }
         }
     }
 
@@ -88,7 +94,8 @@ class NeuralJniValidationTest {
             if (model == null) "SKIP" else "INFO",
             mapOf(
                 "modelName" to (model?.name ?: "none"),
-                "modelBytes" to (model?.length() ?: 0L)
+                "modelBytes" to (model?.length() ?: 0L),
+                "searchedDirs" to LabModelLocator.describeDirectories(context)
             ),
             if (model == null) "No hay modelo GGUF en el laboratorio" else null
         )
@@ -159,6 +166,8 @@ class NeuralJniValidationTest {
                 "modelFound" to (model != null),
                 "modelName" to (model?.name ?: "none"),
                 "modelBytes" to (model?.length() ?: 0L),
+                "modelPath" to (model?.absolutePath ?: "none"),
+                "searchedDirs" to LabModelLocator.describeDirectories(context),
                 "engineState" to engine.state.name
             )
         )

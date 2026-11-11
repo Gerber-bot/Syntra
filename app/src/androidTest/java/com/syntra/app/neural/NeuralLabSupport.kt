@@ -108,22 +108,53 @@ object LabModelLocator {
 
     const val ARG_MODEL_PATH = "neuralModelPath"
 
+    /**
+     * Subdirectories of the lab app's own storage searched for a GGUF file.
+     * `models` is the canonical import target of ModelManager; `neural-lab` is the
+     * report directory, which operators also use to drop a model without moving it.
+     */
+    private val MODEL_SUBDIRECTORIES = listOf("models", "neural-lab")
+
+    /**
+     * Every directory inspected by [find], in resolution order:
+     * internal storage first, then each app-specific external volume (primary
+     * storage and every removable volume such as an SD card, which Android
+     * exposes as a separate `/storage/XXXX-XXXX` root).
+     */
+    fun searchDirectories(context: Context): List<File> {
+        val directories = linkedSetOf<File>()
+        MODEL_SUBDIRECTORIES.forEach { directories += File(context.filesDir, it) }
+        context.getExternalFilesDirs(null)
+            .filterNotNull()
+            .forEach { root -> MODEL_SUBDIRECTORIES.forEach { directories += File(root, it) } }
+        return directories.toList()
+    }
+
     fun find(context: Context): File? {
         InstrumentationRegistry.getArguments()
             .getString(ARG_MODEL_PATH)
             ?.let { path -> File(path).takeIf { it.isFile && isUsable(it) } }
             ?.let { return it }
 
-        val directories = buildList {
-            add(File(context.filesDir, "models"))
-            context.getExternalFilesDir("models")?.let { add(it) }
-        }
-        val candidates = directories.flatMap { dir ->
-            dir.listFiles()?.filter { it.isFile && it.extension.equals("gguf", ignoreCase = true) } ?: emptyList()
-        }
-        return candidates
+        return searchDirectories(context)
+            .flatMap { dir ->
+                dir.listFiles()?.filter { it.isFile && it.extension.equals("gguf", ignoreCase = true) }
+                    ?: emptyList()
+            }
             .filter { isUsable(it) }
             .maxByOrNull { it.length() }
+    }
+
+    /** Search path with the GGUF count per directory, recorded in the JSONL report. */
+    fun describeDirectories(context: Context): String = try {
+        searchDirectories(context).joinToString("; ") { dir ->
+            val count = dir.listFiles()
+                ?.count { it.isFile && it.extension.equals("gguf", ignoreCase = true) }
+                ?: 0
+            "${dir.absolutePath}[$count]"
+        }
+    } catch (t: Throwable) {
+        "error:${t.javaClass.simpleName}"
     }
 
     private fun isUsable(file: File): Boolean =

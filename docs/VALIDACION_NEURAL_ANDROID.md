@@ -4,9 +4,11 @@ Documento de la Etapa B.1.3. Prepara un entorno Android aislado para ejecutar el
 JNI real (llama.cpp ARM64) y las validaciones de integridad pendientes de la Etapa A,
 sin tocar la instalación ni los datos personales de Syntra.
 
-> Estado: **preparado y compilado**. Las pruebas instrumentadas **no se ejecutaron** todavía
-> porque no había un dispositivo conectado al preparar esta entrega. Ningún resultado de este
-> documento debe interpretarse como una prueba superada.
+> Estado: **preparado, compilado y con la corrección de infraestructura aplicada**. La primera
+> ejecución real (Redmi Note 13 4G) falló al inicializar `NeuralJniValidationTest` con
+> `InvalidTestClassError: Method tearDown() should be void`; la causa está corregida y
+> verificada en bytecode. Los escenarios neuronales **todavía no produjeron resultados**.
+> Ningún resultado de este documento debe interpretarse como una prueba superada.
 
 ## 1. Aislamiento de Syntra Lab
 
@@ -113,10 +115,38 @@ El modelo debe quedar dentro del sandbox del laboratorio. Opciones, en orden de 
      com.syntra.app.lab.test/androidx.test.runner.AndroidJUnitRunner
    ```
 
-El localizador sólo acepta archivos con cabecera GGUF válida y elige el de mayor tamaño.
-No busca en `/sdcard/Download` ni en el almacenamiento de otras aplicaciones.
+Rutas que inspecciona `LabModelLocator`, en este orden:
+
+1. el argumento de instrumentación `-e neuralModelPath <ruta absoluta>`;
+2. `<filesDir>/models` y `<filesDir>/neural-lab` (almacenamiento interno);
+3. `<externalFilesDir>/models` y `<externalFilesDir>/neural-lab` de **cada volumen externo
+   propio de la app** (`getExternalFilesDirs(null)`): almacenamiento primario y microSD.
+
+En un dispositivo sin almacenamiento adoptado, la ruta primaria esperada es:
+
+```
+/storage/emulated/0/Android/data/com.syntra.app.lab/files/models/Qwen3-0.6B-Q4_K_M.gguf
+```
+
+Un modelo en `.../files/neural-lab/` —la carpeta de reportes, también en la microSD— **sí se
+encuentra** desde esta corrección y no hace falta moverlo. Si el volumen no está montado
+cuando arranca el proceso de pruebas, usar `-e neuralModelPath` con la ruta exacta.
+
+Sólo se aceptan archivos con cabecera GGUF válida (magic y versión 1..4) y se elige el de
+mayor tamaño. No se busca en `/sdcard/Download` ni en el almacenamiento de otras
+aplicaciones. La línea `preflight` del reporte incluye `modelPath` y `searchedDirs`, con el
+conteo de `.gguf` por directorio, para diagnosticar la búsqueda sin adivinar.
 
 ## 5. Ejecución de las pruebas
+
+Sólo el preflight (no genera texto; informa disponibilidad JNI, estado nativo, ruta y tamaño
+del modelo, y los directorios inspeccionados):
+
+```powershell
+adb shell am instrument -w `
+  -e class "com.syntra.app.neural.NeuralJniValidationTest#test01_preflight_reports_native_and_model" `
+  com.syntra.app.lab.test/androidx.test.runner.AndroidJUnitRunner
+```
 
 Suite neuronal completa:
 
@@ -226,3 +256,27 @@ adb shell am instrument -w `
   prueba siempre valida integridad UTF-8, aunque no garantiza que el modelo emita emojis.
 - Limitación principal: **las pruebas todavía no se ejecutaron**. Falta un dispositivo ARM64
   con el modelo cargado para producir el reporte real y cerrar B.1.
+
+## 9. Historial de ejecución real
+
+### 2026-11-11 — Redmi Note 13 4G
+
+Primera ejecución instrumentada. El runner no pudo inicializar la clase:
+
+```
+InvalidTestClassError: Method tearDown() should be void
+com.syntra.app.neural.NeuralJniValidationTest
+```
+
+Causa: `tearDown()` se declaró con cuerpo de expresión (`= runBlocking { … }`). El `catch`
+terminaba en `Log.w(...)`, que devuelve `Int`, así que `runBlocking` se infería como `Any` y
+el método compilaba como `()Ljava/lang/Object;`. JUnit 4 exige `()V` en `@Before`/`@After`.
+
+Corrección: cuerpo de bloque explícito, conservando la misma lógica de `unloadModel()` con
+`withTimeout(120_000)`.
+
+Verificación estática de las 74 clases compiladas del APK de pruebas (36 métodos `@Before`,
+`@After` y `@Test`): todos son `public`, sin argumentos y `void`. El chequeo se validó con un
+control negativo que reproduce el descriptor defectuoso.
+
+Sin resultados de escenarios: los 13 tests neuronales siguen pendientes de ejecución.
