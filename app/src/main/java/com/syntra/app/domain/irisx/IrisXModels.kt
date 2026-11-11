@@ -52,6 +52,11 @@ sealed class IrisXIntent {
     data class QueryLastExerciseLoad(val exerciseName: String? = null) : IrisXIntent()
     data class QueryExerciseAlternatives(val exerciseName: String? = null) : IrisXIntent()
     data class QueryLastSessionByCategory(val categoryOrMuscle: String) : IrisXIntent()
+    data class QueryExerciseHistory(
+        val exerciseName: String? = null,
+        /** True when the user explicitly asked to compare sessions, not just to list them. */
+        val requireComparison: Boolean = false
+    ) : IrisXIntent()
     data class GeneralQuery(val text: String) : IrisXIntent()
 }
 

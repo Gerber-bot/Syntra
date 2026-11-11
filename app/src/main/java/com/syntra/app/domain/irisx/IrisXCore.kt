@@ -13,6 +13,12 @@ import com.syntra.app.domain.ExerciseCatalog
 import com.syntra.app.domain.RoutineManager
 import com.syntra.app.domain.RoutineWithExercises
 import com.syntra.app.domain.SportsMetricsCalculator
+import com.syntra.app.domain.irisx.tools.IrisXLocalTools
+import com.syntra.app.domain.irisx.tools.LocalToolOutcome
+import com.syntra.app.domain.irisx.tools.LocalToolPresenter
+import com.syntra.app.domain.irisx.tools.LocalToolRequest
+import com.syntra.app.domain.irisx.tools.LocalToolExerciseHistory
+import com.syntra.app.domain.irisx.tools.LocalToolExerciseSnapshot
 import java.text.DateFormat
 import java.text.Normalizer
 import java.util.Date
@@ -374,6 +380,34 @@ class IrisXCore(
             return IrisXIntent.QueryRoutines
         }
 
+        // 10b. Exercise history: "historial de sentadilla", "sesiones anteriores de press banca",
+        //      "comparar sentadilla". Kept after the chat-history command and before the generic
+        //      progression branch so "borrar historial de chat" and "comparar mi progreso" keep
+        //      their previous meaning.
+        val isExplicitComparison = norm.startsWith("comparar ") ||
+            norm.contains("comparar sesiones") || norm.contains("comparar el historial") ||
+            norm.contains("comparacion de")
+        val isExerciseHistoryPattern = norm.contains("historial") ||
+            norm.contains("sesiones anteriores") || norm.contains("sesiones previas") ||
+            norm.contains("ultimas sesiones") || isExplicitComparison
+        if (isExerciseHistoryPattern) {
+            val historySubject = Regex(
+                "(?:historial(?:\\s+(?:de|del|en))?" +
+                    "|sesiones\\s+(?:anteriores|previas)(?:\\s+(?:de|del))?" +
+                    "|ultimas\\s+sesiones(?:\\s+(?:de|del))?" +
+                    "|comparar\\s+el\\s+historial(?:\\s+(?:de|del))?" +
+                    "|comparar(?:\\s+(?:las\\s+)?sesiones)?(?:\\s+(?:de|del))?" +
+                    "|comparacion(?:\\s+(?:de|del))?)\\s+(.+)$"
+            ).find(norm)?.groupValues?.get(1)
+                ?.replace(Regex("\\b(?:para|y)\\s+comparar\\b.*$"), "")
+                ?.trim()
+                ?.takeIf { it.isNotBlank() }
+            return IrisXIntent.QueryExerciseHistory(
+                exerciseName = historySubject,
+                requireComparison = isExplicitComparison
+            )
+        }
+
         // 11. Query exercise info: "ejercicio sentadilla" or "info sentadilla" or "buscar sentadilla"
         val exerciseQueryRegex = Regex("^(?:ejercicio|info|buscar)\\s+(.+)$", RegexOption.IGNORE_CASE)
         val exerciseMatch = exerciseQueryRegex.find(trimmed)
@@ -525,6 +559,7 @@ class IrisXCore(
             is IrisXIntent.QueryLastExerciseLoad -> handleQueryLastExerciseLoad(intent.exerciseName)
             is IrisXIntent.QueryExerciseAlternatives -> handleQueryExerciseAlternatives(intent.exerciseName)
             is IrisXIntent.QueryLastSessionByCategory -> handleQueryLastSessionByCategory(intent.categoryOrMuscle)
+            is IrisXIntent.QueryExerciseHistory -> handleQueryExerciseHistory(intent)
             is IrisXIntent.GeneralQuery -> handleGeneralQuery(intent.text, referenceTimeMillis)
         }
     }
@@ -540,67 +575,62 @@ class IrisXCore(
                 message = "Indicame qué ejercicio querés consultar (por ejemplo: '¿cuánto levanté la última vez en sentadilla?')."
             )
 
-        val sessions = repository.getAllSessions()
-        val allSets = repository.getAllSets()
-        val exercises = repository.getAllExercises()
-        val aliases = repository.getLearnedAliases()
+        val outcome = IrisXLocalTools(repository)
+            .execute(LocalToolRequest.LastExerciseSession(effectiveExercise))
+        val presentation = LocalToolPresenter.present(outcome)
 
-        val report = IrisXAnalytics.analyzeExerciseProgression(
-            exerciseName = effectiveExercise,
-            sessions = sessions,
-            allSets = allSets,
-            exercises = exercises,
-            learnedAliases = aliases
-        )
-
-        val lastPerf = report.history.lastOrNull()
-            ?: return IrisXResponse.Success(
-                message = "Todavía no tenés series registradas en '${report.exerciseName}'.",
-                actionTaken = "QUERY_LAST_EXERCISE_LOAD_EMPTY"
+        val snapshot = (outcome as? LocalToolOutcome.Success)?.data as? LocalToolExerciseSnapshot
+        if (snapshot != null) {
+            contextState = contextState.copy(
+                activeExerciseName = snapshot.exerciseName,
+                activeSessionId = snapshot.sessionId,
+                lastQueryDomain = "LAST_EXERCISE_LOAD"
             )
-
-        val sessionSets = allSets
-            .filter { it.sessionId == lastPerf.sessionId }
-            .filter { set ->
-                val exName = exercises.firstOrNull { it.id == set.exerciseId }?.displayName.orEmpty()
-                normalize(exName) == normalize(report.exerciseName) ||
-                    normalize(aliases[normalize(exName)] ?: exName) == normalize(report.exerciseName)
-            }
-            .sortedWith(compareBy<WorkoutSetEntity> { it.executionOrder }.thenBy { it.id })
-
-        val dateStr = DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(lastPerf.timestampMillis))
-        val topFormatted = com.syntra.app.domain.UnitConverter.formatDisplay(lastPerf.topLoadGrams, lastPerf.unit)
-        val setsSummary = if (sessionSets.isNotEmpty()) {
-            sessionSets.joinToString(", ") { s ->
-                val loadStr = com.syntra.app.domain.UnitConverter.formatDisplay(s.loadGrams, s.loadUnit)
-                val mod = when {
-                    s.isAssisted -> " asist."
-                    s.isDumbbell -> " c/u"
-                    else -> ""
-                }
-                "$loadStr$mod × ${s.repetitions}"
-            }
-        } else {
-            "$topFormatted × ${lastPerf.topLoadReps} reps (${lastPerf.setsCount} series)"
-        }
-
-        contextState = contextState.copy(
-            activeExerciseName = report.exerciseName,
-            activeSessionId = lastPerf.sessionId,
-            lastQueryDomain = "LAST_EXERCISE_LOAD"
-        )
-
-        val msg = buildString {
-            append("🏋️ Último registro en ${report.exerciseName} ($dateStr):\n")
-            append("• Mejor serie: $topFormatted × ${lastPerf.topLoadReps} reps\n")
-            append("• Series ejecutadas (${lastPerf.setsCount}): $setsSummary")
         }
 
         return IrisXResponse.Success(
-            message = msg,
-            actionTaken = "QUERY_LAST_EXERCISE_LOAD",
-            payload = lastPerf
+            message = presentation.text,
+            actionTaken = actionFor(outcome),
+            payload = snapshot ?: outcome
         )
+    }
+
+    private suspend fun handleQueryExerciseHistory(intent: IrisXIntent.QueryExerciseHistory): IrisXResponse {
+        val effectiveExercise = intent.exerciseName?.takeIf { it.isNotBlank() }
+            ?: contextState.activeExerciseName
+            ?: return IrisXResponse.Unrecognized(
+                message = "Indicame de qué ejercicio querés ver el historial " +
+                    "(por ejemplo: 'historial de sentadilla')."
+            )
+
+        val outcome = IrisXLocalTools(repository).execute(
+            LocalToolRequest.ExerciseHistory(
+                exerciseName = effectiveExercise,
+                requireComparison = intent.requireComparison
+            )
+        )
+        val presentation = LocalToolPresenter.present(outcome)
+
+        val history = (outcome as? LocalToolOutcome.Success)?.data as? LocalToolExerciseHistory
+        if (history != null) {
+            contextState = contextState.copy(
+                activeExerciseName = history.exerciseName,
+                lastQueryDomain = "EXERCISE_HISTORY"
+            )
+        }
+
+        return IrisXResponse.Success(
+            message = presentation.text,
+            actionTaken = actionFor(outcome),
+            payload = history ?: outcome
+        )
+    }
+
+    private fun actionFor(outcome: LocalToolOutcome<*>): String = when (outcome) {
+        is LocalToolOutcome.Success -> outcome.toolId.actionPrefix
+        is LocalToolOutcome.NoData -> "${outcome.toolId.actionPrefix}_NO_DATA"
+        is LocalToolOutcome.InsufficientData -> "${outcome.toolId.actionPrefix}_INSUFFICIENT_DATA"
+        is LocalToolOutcome.QueryError -> "${outcome.toolId.actionPrefix}_ERROR"
     }
 
     private suspend fun handleQueryExerciseAlternatives(requestedExercise: String?): IrisXResponse {

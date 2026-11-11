@@ -50,3 +50,55 @@
 - Sprint 6: coach algorítmico y, posteriormente, LLM local opcional con benchmarks.
 
 La secuencia puede cambiar si las pruebas del dispositivo revelan restricciones.
+
+## Herramientas locales de consulta (Etapa B.2)
+
+IrisX responde preguntas sobre datos deportivos reales mediante una capa de **herramientas
+locales tipadas y de sólo lectura** (`com.syntra.app.domain.irisx.tools`). No hay SQL libre
+generado por el modelo, no hay escrituras automáticas y no hay acceso a Internet.
+
+Cadena de responsabilidades, en este orden y sin solapamientos:
+
+| Etapa | Responsable | Regla |
+|---|---|---|
+| Interpretación de intención | `IrisXCore.parseInput` → `IrisXIntent` | Determinista; normaliza acentos y puntuación |
+| Selección de herramienta | `IrisXCore` (`when` sobre la intención) | Una intención → una herramienta |
+| Consulta a datos | `IrisXLocalTools` sobre `IrisXRepository` | Única fuente: Room o un doble de prueba |
+| Cálculo determinista | `IrisXAnalytics` / `SportsMetricsCalculator` | Nunca mezcla modalidades de carga incompatibles |
+| Presentación | `LocalToolPresenter` | Sólo repite el payload; no inventa números |
+| Redacción opcional | Qwen3 (camino neuronal) | Puede reformular, nunca aportar cifras nuevas |
+
+Herramientas disponibles:
+
+- `LastWorkout`: sesión más reciente con su conteo real de series y ejercicios.
+- `LastExerciseSession`: última sesión que contiene un ejercicio, con series, mejor serie,
+  repeticiones totales y sesión anterior comparable.
+- `ExerciseHistory`: sesiones anteriores del ejercicio, de la más nueva a la más vieja, con
+  `requireComparison` para distinguir «mostrame» de «compará».
+
+Resultados tipados (`LocalToolOutcome`), deliberadamente separados porque la conversación debe
+poder decir cosas distintas:
+
+- `Success<T>`: payload verificado + lista de hechos derivados sólo de él.
+- `NoData`: el ejercicio o el entrenamiento no existe en la base local.
+- `InsufficientData`: existe, pero no alcanza para responder (sesión sin series, una sola
+  sesión para comparar, modalidades incompatibles).
+- `QueryError`: petición ambigua/irresoluble o fallo de lectura recuperable.
+
+Reglas de resolución de nombres (`ExerciseNameResolver`):
+
+1. Un alias aprendido se normaliza y se traduce a su nombre canónico.
+2. El nombre (crudo o canónico) debe coincidir exactamente con `displayName` o
+   `normalizedName` de un ejercicio.
+3. No hay coincidencia aproximada: «press banca inclinado» nunca resuelve a «press de banca».
+4. Dos filas con el mismo nombre normalizado producen ambigüedad explícita, no una elección
+   silenciosa.
+
+Los fallos también se devuelven como `IrisXResponse.Success` con un `actionTaken` propio
+(`..._NO_DATA`, `..._INSUFFICIENT_DATA`, `..._ERROR`) para que la consola muestre el mensaje
+recuperable sin tratarlo como excepción. La cancelación del chat se propaga
+(`CancellationException`), nunca se convierte en error de consulta.
+
+Esta capa no modifica el esquema (DB v8 intacta) y vive en el código compartido entre la
+variante `debug` y `lab`, por lo que es reutilizable tal cual cuando exista una única APK
+`com.syntra.app`.

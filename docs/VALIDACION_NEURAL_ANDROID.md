@@ -428,4 +428,70 @@ Riesgos pendientes:
 - Falta ejecutar el checklist manual (envío simultáneo, cambio de conversación, cierre y
   reapertura) en el dispositivo; no se instaló nada sin autorización.
 
+## 12. Herramientas locales de consulta — Etapa B.2 (2026-11-11)
+
+Se incorporó la capa de herramientas locales tipadas descrita en
+`ARQUITECTURA_Y_REGLAS.md` (§ «Herramientas locales de consulta»). Continúa sobre `78a0fda`,
+sin cambio de esquema (DB v8) y sin tocar los datos de `com.syntra.app`.
+
+Componentes reutilizados: `IrisXCore.parseInput`/`execute`, `IrisXAnalytics.analyzeExerciseProgression`
+(agregación por modalidad), `SportsMetricsCalculator.classifySetModality`, `UnitConverter.formatDisplay`,
+`IrisXRepository` y la consola `IrisXConsoleDialog` con su `IrisXTurnLedger` y su mutex de B.1.
+
+Archivos nuevos:
+
+```
+app/src/main/java/com/syntra/app/domain/irisx/tools/LocalToolContracts.kt
+app/src/main/java/com/syntra/app/domain/irisx/tools/ExerciseNameResolver.kt
+app/src/main/java/com/syntra/app/domain/irisx/tools/IrisXLocalTools.kt
+app/src/main/java/com/syntra/app/domain/irisx/tools/LocalToolPresenter.kt
+app/src/test/java/com/syntra/app/domain/irisx/IrisXLocalToolsAndHistoryTest.kt
+```
+
+Archivos modificados: `IrisXModels.kt` (intención `QueryExerciseHistory`),
+`IrisXCore.kt` (rama de parseo `10b`, despacho, `handleQueryExerciseHistory`,
+`handleQueryLastExerciseLoad` delegado a la herramienta con `actionFor`).
+
+Decisiones:
+
+- La rama de parseo de historial se ubica **después** del borrado de historial de chat y de
+  rutinas, y **antes** de la progresión genérica: «borrar historial de chat» y «quiero comparar
+  mi progreso» conservan su significado previo (cubierto por prueba).
+- `handleQueryLastWorkout` no se modificó para no alterar el comportamiento ya aprobado; la
+  herramienta `LastWorkout` existe y está probada de forma independiente.
+- `handleQueryLastExerciseLoad` ahora delega en la herramienta, manteniendo el estilo y los
+  valores aprobados (`95 kg`, nombre del ejercicio) y sumando la línea de sesión anterior sólo
+  cuando existe una comparable.
+
+Cobertura de pruebas (20 casos en `IrisXLocalToolsAndHistoryTest`): historial vacío, sesión sin
+series, última sesión, una y múltiples sesiones, ejercicio repetido en fechas distintas, alias,
+nombre similar, nombre duplicado ambiguo, conteo de series y repeticiones desde filas, datos
+insuficientes para comparar, modalidades incompatibles, fallo de repositorio, conversaciones
+concurrentes sin mezclar kg, cancelación, integridad de la respuesta (ningún kg inventado),
+parseo/enrutamiento y códigos `actionTaken` de éxito, sin datos, insuficiente y error.
+
+Resultado JVM de esta corrida:
+
+```
+.\gradlew.bat --offline --no-daemon :app:testDebugUnitTest
+254 tests, 0 fallos, 0 errores, 0 omitidos (33 suites)
+```
+
+APK de laboratorio reconstruido (sin instalar):
+
+```
+app/build/outputs/apk/lab/app-lab.apk
+18.464.926 bytes · SHA-256 C28C94763B78573A…
+```
+
+Limitaciones y riesgos pendientes:
+
+- Las preguntas de historial siguen siendo deterministas: Qwen3 no participa en la redacción de
+  esta consulta, por lo que la respuesta es correcta pero de estilo fijo.
+- `ExerciseHistory` limita a 5 sesiones por consulta; no hay paginación ni filtros por fecha.
+- No hay pruebas instrumentadas nuevas para B.2; falta validar en el dispositivo y ejecutar
+  `test06b`/`test12` de B.1.
+- La deduplicación de filas IrisX preexistentes sigue siendo manual (ver § 11).
+- No se declara B.2 cerrada: falta validación en dispositivo.
+
 
