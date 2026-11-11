@@ -1,5 +1,6 @@
 package com.syntra.app.ui.irisx
 
+import com.syntra.app.domain.irisx.IrisXIntent
 import com.syntra.app.domain.neural.GenerationChunk
 import com.syntra.app.domain.neural.IrisXContextBuilder
 import java.util.UUID
@@ -111,5 +112,26 @@ class IrisXTurnLedger {
         val current = activeTurnId
         activeTurnId = null
         return current
+    }
+}
+
+/** Where a user turn in [IrisXConsoleDialog] is dispatched. */
+enum class IrisXTurnRoute { DETERMINISTIC, NEURAL }
+
+/**
+ * Authoritative routing rule between the deterministic tool/core layer and Qwen3.
+ *
+ * Recognized intents (including all read-only local data queries) always run on [DETERMINISTIC]
+ * even when Qwen3 is loaded, so the neural model never invents sets, loads or workout dates.
+ */
+object IrisXTurnRouter {
+    fun resolveRoute(
+        intent: IrisXIntent,
+        neuralReady: Boolean,
+        guardianBlocked: Boolean
+    ): IrisXTurnRoute = if (neuralReady && !guardianBlocked && intent is IrisXIntent.GeneralQuery) {
+        IrisXTurnRoute.NEURAL
+    } else {
+        IrisXTurnRoute.DETERMINISTIC
     }
 }

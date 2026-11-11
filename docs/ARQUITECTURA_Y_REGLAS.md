@@ -71,6 +71,8 @@ Cadena de responsabilidades, en este orden y sin solapamientos:
 Herramientas disponibles:
 
 - `LastWorkout`: sesión más reciente con su conteo real de series y ejercicios.
+- `RecentWorkouts`: listado de las sesiones recientes (más nuevas primero) con fecha, título,
+  conteo real de series y ejercicios ejecutados.
 - `LastExerciseSession`: última sesión que contiene un ejercicio, con series, mejor serie,
   repeticiones totales y sesión anterior comparable.
 - `ExerciseHistory`: sesiones anteriores del ejercicio, de la más nueva a la más vieja, con

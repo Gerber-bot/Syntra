@@ -9,6 +9,7 @@ package com.syntra.app.domain.irisx.tools
  */
 enum class LocalToolId(val actionPrefix: String) {
     LAST_WORKOUT("QUERY_LAST_WORKOUT_TOOL"),
+    RECENT_WORKOUTS("QUERY_RECENT_WORKOUTS"),
     LAST_EXERCISE_SESSION("QUERY_LAST_EXERCISE_SESSION"),
     EXERCISE_HISTORY("QUERY_EXERCISE_HISTORY")
 }
@@ -16,6 +17,9 @@ enum class LocalToolId(val actionPrefix: String) {
 sealed interface LocalToolRequest {
     /** Last recorded workout, newest session first. */
     data object LastWorkout : LocalToolRequest
+
+    /** Recent recorded workouts, newest session first. */
+    data class RecentWorkouts(val maxSessions: Int = 5) : LocalToolRequest
 
     /** Last session containing the requested exercise. */
     data class LastExerciseSession(val exerciseName: String?) : LocalToolRequest
@@ -53,6 +57,21 @@ data class LocalToolWorkout(
     val totalSets: Int,
     val sets: List<LocalToolSet>,
     val exerciseNames: List<String>
+)
+
+/** Verified summary of one stored workout session. */
+data class LocalToolWorkoutSummary(
+    val sessionId: Long,
+    val title: String,
+    val startedAtMillis: Long,
+    val totalSets: Int,
+    val exerciseNames: List<String>
+)
+
+/** Result of [LocalToolRequest.RecentWorkouts]. */
+data class LocalToolRecentWorkouts(
+    val workouts: List<LocalToolWorkoutSummary>,
+    val totalRecordedSessions: Int
 )
 
 /** Result of [LocalToolRequest.LastExerciseSession]. */

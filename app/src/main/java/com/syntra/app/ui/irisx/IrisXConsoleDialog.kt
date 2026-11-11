@@ -424,12 +424,15 @@ fun IrisXConsoleDialog(
                     neuralNotice = "IrisX Guardian: inferencia neuronal pausada por protección del dispositivo (${guardian.reason}). Respondiendo con el motor determinista."
                 }
 
-                val isKnownDeterministic = neuralReady && !guardianBlocked &&
-                    irisXCore.parseInput(trimmed) !is com.syntra.app.domain.irisx.IrisXIntent.GeneralQuery
+                val route = IrisXTurnRouter.resolveRoute(
+                    intent = irisXCore.parseInput(trimmed),
+                    neuralReady = neuralReady,
+                    guardianBlocked = guardianBlocked
+                )
 
                 if (!turnLedger.isActive(turnId)) return@launch
 
-                if (neuralReady && !guardianBlocked && !isKnownDeterministic) {
+                if (route == IrisXTurnRoute.NEURAL) {
                     // ask() is not involved on the neural path, so the USER turn is stored here.
                     persistTurn(conversation.id, "USER", trimmed)
                     isGenerating = true

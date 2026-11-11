@@ -16,6 +16,7 @@ object LocalToolPresenter {
         is LocalToolOutcome.Success -> LocalToolPresentation(
             text = when (val data = outcome.data) {
                 is LocalToolWorkout -> renderWorkout(data)
+                is LocalToolRecentWorkouts -> renderRecentWorkouts(data)
                 is LocalToolExerciseSnapshot -> renderExerciseSnapshot(data)
                 is LocalToolExerciseHistory -> renderHistory(data)
                 else -> "Consulta completada."
@@ -52,6 +53,26 @@ object LocalToolPresenter {
             byExercise.forEach { (exerciseName, sets) ->
                 append("• $exerciseName: ${sets.joinToString(", ") { formatSet(it) }}\n")
             }
+        }
+    }.trim()
+
+    private fun renderRecentWorkouts(recent: LocalToolRecentWorkouts): String = buildString {
+        append(
+            "📅 Entrenamientos recientes (${recent.workouts.size} de " +
+                "${recent.totalRecordedSessions} registrados)\n"
+        )
+        recent.workouts.forEach { w ->
+            val detail = if (w.totalSets == 0) {
+                "sin series registradas"
+            } else {
+                val exList = if (w.exerciseNames.isNotEmpty()) {
+                    ": ${w.exerciseNames.joinToString(", ")}"
+                } else {
+                    ""
+                }
+                "${w.totalSets} series$exList"
+            }
+            append("• ${formatDate(w.startedAtMillis)} — ${w.title} ($detail)\n")
         }
     }.trim()
 

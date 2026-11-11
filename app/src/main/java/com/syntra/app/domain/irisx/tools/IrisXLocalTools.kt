@@ -26,6 +26,7 @@ class IrisXLocalTools(private val repository: IrisXRepository) {
         return try {
             when (request) {
                 LocalToolRequest.LastWorkout -> lastWorkout()
+                is LocalToolRequest.RecentWorkouts -> recentWorkouts(request.maxSessions)
                 is LocalToolRequest.LastExerciseSession -> lastExerciseSession(request.exerciseName)
                 is LocalToolRequest.ExerciseHistory -> exerciseHistory(request)
             }
@@ -85,6 +86,56 @@ class IrisXLocalTools(private val repository: IrisXRepository) {
                 "Series registradas: ${sets.size}",
                 "Ejercicios: ${exerciseNames.joinToString(", ")}"
             )
+        )
+    }
+
+    private suspend fun recentWorkouts(maxSessions: Int): LocalToolOutcome<LocalToolRecentWorkouts> {
+        val sessions = repository.getAllSessions()
+        if (sessions.isEmpty()) {
+            return LocalToolOutcome.NoData(
+                toolId = LocalToolId.RECENT_WORKOUTS,
+                subject = null,
+                reason = "Todavía no hay entrenamientos registrados."
+            )
+        }
+
+        val sorted = sessions.sortedWith(
+            compareByDescending<WorkoutSessionEntity> { it.startedAtMillis }.thenByDescending { it.id }
+        )
+        val selected = sorted.take(maxSessions.coerceAtLeast(1))
+        val exercisesById = repository.getAllExercises().associateBy { it.id }
+
+        val summaries = selected.map { session ->
+            val rawSets = repository.getSetsForSession(session.id).sortedWith(setOrder())
+            val exerciseNames = rawSets.map { it.toToolSet(exercisesById).exerciseName }.distinct()
+            LocalToolWorkoutSummary(
+                sessionId = session.id,
+                title = session.title,
+                startedAtMillis = session.startedAtMillis,
+                totalSets = rawSets.size,
+                exerciseNames = exerciseNames
+            )
+        }
+
+        val data = LocalToolRecentWorkouts(
+            workouts = summaries,
+            totalRecordedSessions = sessions.size
+        )
+
+        return LocalToolOutcome.Success(
+            toolId = LocalToolId.RECENT_WORKOUTS,
+            data = data,
+            facts = buildList {
+                add("Sesiones totales: ${sessions.size}")
+                summaries.forEach { w ->
+                    val summary = if (w.totalSets == 0) {
+                        "sin series registradas"
+                    } else {
+                        "${w.totalSets} series (${w.exerciseNames.joinToString(", ")})"
+                    }
+                    add("${formatDate(w.startedAtMillis)} — ${w.title}: $summary")
+                }
+            }
         )
     }
 
@@ -351,6 +402,7 @@ class IrisXLocalTools(private val repository: IrisXRepository) {
 
     private fun LocalToolRequest.toolId(): LocalToolId = when (this) {
         LocalToolRequest.LastWorkout -> LocalToolId.LAST_WORKOUT
+        is LocalToolRequest.RecentWorkouts -> LocalToolId.RECENT_WORKOUTS
         is LocalToolRequest.LastExerciseSession -> LocalToolId.LAST_EXERCISE_SESSION
         is LocalToolRequest.ExerciseHistory -> LocalToolId.EXERCISE_HISTORY
     }

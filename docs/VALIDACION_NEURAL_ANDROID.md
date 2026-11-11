@@ -494,4 +494,51 @@ Limitaciones y riesgos pendientes:
 - La deduplicación de filas IrisX preexistentes sigue siendo manual (ver § 11).
 - No se declara B.2 cerrada: falta validación en dispositivo.
 
+## 13. Consolidación de Etapa B.2 (2026-11-11)
+
+Auditoría de integración entre `IrisXConsoleDialog` → `IrisXTurnRouter` → `IrisXCore` →
+`IrisXLocalTools` → Room.
+
+Defectos comprobados y corregidos:
+
+1. `handleQueryLastWorkout()` seguía ejecutando lógica heredada sobre el repositorio en vez
+   de delegar en la herramienta tipada `LocalToolRequest.LastWorkout` (pudiendo responder
+   `0.0 kg` ante sesiones sin series en lugar de `InsufficientData`). Ahora delega en
+   `IrisXLocalTools` + `LocalToolPresenter` (`QUERY_LAST_WORKOUT_TOOL`).
+2. `IrisXCore.parseInput` derivaba a `GeneralQuery` (y con Qwen3 cargado, hacia inferencia
+   neuronal) consultas naturales clave como `¿Cuántas series de sentadilla hice la última vez?`
+   (no contemplaba `cuántas series` ni la preposición `de` seguida del verbo `hice`) y
+   `¿Con cuánto peso hice sentadilla?` (no contemplaba `cuánto peso` sin `último peso`).
+   Además, `¿Qué hice la última vez en sentadilla?` era capturado por `QueryLastWorkout`
+   en lugar de `QueryLastExerciseLoad`. Se corrigió el extractor de ejercicio para limpiar
+   verbos y marcadores temporales al final/medio de la frase sin recurrir a coincidencias difusas.
+3. `¿Qué entrenamientos hice recientemente?`, `entrenamientos recientes`, `últimos entrenamientos`,
+   `historial de entrenamientos` y `últimas sesiones` (sin ejercicio) no tenían herramienta ni
+   intención dedicada. Se agregó `LocalToolRequest.RecentWorkouts` / `IrisXIntent.QueryRecentWorkouts`
+   (`QUERY_RECENT_WORKOUTS`), respetando `últimas sesiones de <ejercicio>` hacia
+   `QueryExerciseHistory` y `borrar historial de chat` hacia `ClearConversationHistory`.
+4. La decisión de enrutamiento entre vía determinista y vía neuronal se extrajo a
+   `IrisXTurnRouter.resolveRoute` en `IrisXChatFlow.kt`, usada por `IrisXConsoleDialog.kt`,
+   preservando `IrisXTurnLedger` (single-flight), `conversationMutex` y persistencia única
+   por turno.
+
+Pruebas agregadas y resultados reales:
+
+- `IrisXB2ConsolidationTest` (5 pruebas JVM con SQLite JDBC real v8 + `IrisXTurnRouter` +
+  `IrisXTurnLedger`): cobertura completa de las 5 preguntas objetivo tanto con `neuralReady = true`
+  como `false`, desambiguación de variantes, base vacía sin datos inventados, sesiones sin series
+  y propagación de cancelación.
+- `IrisXB2RoomInstrumentedTest` (`androidTest` con Room en memoria sobre `AppDatabase` v8 real).
+- Suite JVM completa (`.\gradlew.bat --offline --no-daemon :app:testDebugUnitTest`):
+  **259 tests, 0 fallos, 0 errores, 0 omitidos (34 suites)**.
+- Variante `lab` compilada sin instalar:
+  - `app/build/outputs/apk/lab/app-lab.apk` (`18.238.142 bytes`, SHA-256 `CC047217…`)
+  - `app/build/outputs/apk/androidTest/lab/app-lab-androidTest.apk` (`1.291.517 bytes`, SHA-256 `B03B5D9A…`)
+
+Limitaciones pendientes:
+
+- Falta ejecutar `IrisXB2RoomInstrumentedTest` y la validación manual conversacional en el
+  teléfono físico; no se declara B.2 cerrada ni se instalan APKs sin autorización.
+
+
 

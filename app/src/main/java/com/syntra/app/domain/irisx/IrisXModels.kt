@@ -26,6 +26,7 @@ data class IrisXMemoryItem(
 sealed class IrisXIntent {
     data class ClassifySession(val sessionTitle: String, val exerciseNames: List<String>) : IrisXIntent()
     object QueryLastWorkout : IrisXIntent()
+    data class QueryRecentWorkouts(val maxSessions: Int = 5) : IrisXIntent()
     data class QueryExercise(val exerciseName: String) : IrisXIntent()
     data class LearnAlias(val alias: String, val canonical: String, val force: Boolean = false) : IrisXIntent()
     data class DeleteAlias(val alias: String) : IrisXIntent()

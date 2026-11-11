@@ -19,6 +19,8 @@ import com.syntra.app.domain.irisx.tools.LocalToolPresenter
 import com.syntra.app.domain.irisx.tools.LocalToolRequest
 import com.syntra.app.domain.irisx.tools.LocalToolExerciseHistory
 import com.syntra.app.domain.irisx.tools.LocalToolExerciseSnapshot
+import com.syntra.app.domain.irisx.tools.LocalToolRecentWorkouts
+import com.syntra.app.domain.irisx.tools.LocalToolWorkout
 import java.text.DateFormat
 import java.text.Normalizer
 import java.util.Date
@@ -281,27 +283,41 @@ class IrisXCore(
             }
         }
 
-        if (norm.contains("ultimo entreno") || norm.contains("ultima sesion") ||
-            norm.contains("ultimo entrenamiento") || norm == "resumen" || norm == "ultimo" ||
-            norm.contains("que hice la ultima vez") || norm.contains("que entrene la ultima vez") ||
-            norm.contains("que hice el ultimo entreno") || norm.contains("que hice hoy") ||
-            norm.contains("mi ultimo entreno") || norm.contains("mi ultima sesion") ||
-            norm.contains("que entrene hoy")
+        val hasExercisePrepositionAfterUltimaVez = Regex("ultima\\s+vez\\s+(?:en|con|de)\\s+\\S").containsMatchIn(norm)
+        if (!hasExercisePrepositionAfterUltimaVez && (
+                norm.contains("ultimo entreno") || norm.contains("ultima sesion") ||
+                    norm.contains("ultimo entrenamiento") || norm == "resumen" || norm == "ultimo" ||
+                    norm.contains("que hice la ultima vez") || norm.contains("que entrene la ultima vez") ||
+                    norm.contains("que hice el ultimo entreno") || norm.contains("que hice hoy") ||
+                    norm.contains("mi ultimo entreno") || norm.contains("mi ultima sesion") ||
+                    norm.contains("que entrene hoy")
+                )
         ) {
             return IrisXIntent.QueryLastWorkout
         }
 
-        // 1b. Query last load in an exercise: e.g. "¿cuánto levanté la última vez en sentadilla?", "última carga en press de banca"
-        val isLastLoadPattern = (norm.contains("cuanto levante") || norm.contains("cuanto hice") ||
-            norm.contains("ultima carga") || norm.contains("ultimo peso") ||
-            (norm.contains("ultima vez") && (norm.contains("en ") || norm.contains("con "))))
+        // 1b. Query last load/sets in an exercise:
+        // e.g. "¿cuánto levanté la última vez en sentadilla?", "¿cuántas series de sentadilla hice la última vez?",
+        // "¿con cuánto peso hice sentadilla?", "última carga en press de banca"
+        val mentionsLastAction = norm.contains("ultima vez") ||
+            norm.contains("hice") || norm.contains("levante") ||
+            norm.contains("use") || norm.contains("movi") ||
+            norm.contains("cargue") || norm.contains("ultima carga") ||
+            norm.contains("ultimo peso")
+        val isNotAdviceQuestion = !norm.contains("recomend") && !norm.contains("consejo")
+        val isLastLoadPattern = isNotAdviceQuestion && (
+            norm.contains("cuanto levante") ||
+                norm.contains("cuanto hice") ||
+                norm.contains("ultima carga") ||
+                norm.contains("ultimo peso") ||
+                ((norm.contains("cuanto peso") || norm.contains("que peso") || norm.contains("cuantos kilos")) &&
+                    (mentionsLastAction || norm.contains("en ") || norm.contains("de "))) ||
+                ((norm.contains("cuantas series") || norm.contains("cuantas repeticiones") || norm.contains("cuantas reps")) &&
+                    mentionsLastAction) ||
+                (norm.contains("ultima vez") && (norm.contains("en ") || norm.contains("con ") || norm.contains("de ")))
+            )
         if (isLastLoadPattern) {
-            val exAfterPrep = Regex("(?:ultima\\s+vez\\s+(?:en|con)|levante\\s+(?:en|con)|hice\\s+(?:en|con)|carga\\s+(?:en|de)|peso\\s+(?:en|de)|en)\\s+(.+)$")
-                .find(norm)?.groupValues?.get(1)
-                ?.replace("la ultima vez", "")
-                ?.trim()
-                ?.takeIf { it.isNotBlank() && it != "este" && it != "este ejercicio" }
-            return IrisXIntent.QueryLastExerciseLoad(exerciseName = exAfterPrep)
+            return IrisXIntent.QueryLastExerciseLoad(exerciseName = extractLastExerciseTarget(norm))
         }
 
         // 1c. Query exercise alternatives: e.g. "¿qué ejercicio puedo hacer en lugar de este?", "alternativa a press de banca", "reemplazo de sentadilla"
@@ -378,6 +394,26 @@ class IrisXCore(
         // 10. Query routines
         if (norm == "rutinas" || norm == "mis rutinas" || norm.contains("ver rutinas")) {
             return IrisXIntent.QueryRoutines
+        }
+
+        // 10a. Recent workouts list: "¿Qué entrenamientos hice recientemente?", "últimos entrenamientos",
+        //      "sesiones recientes", "historial de entrenamientos", or bare "últimas sesiones" without exercise target.
+        val hasExerciseAfterSessions = Regex("(?:ultimas\\s+sesiones|sesiones\\s+recientes)\\s+(?:de|del)\\s+\\S").containsMatchIn(norm)
+        val isRecentWorkoutsPattern = (
+            norm.contains("entrenamientos hice recientemente") ||
+                norm.contains("sesiones hice recientemente") ||
+                norm.contains("entrenamientos recientes") ||
+                norm.contains("sesiones recientes") ||
+                norm.contains("ultimos entrenamientos") ||
+                norm.contains("ultimos entrenos") ||
+                norm.contains("entrene ultimamente") ||
+                norm.contains("hice ultimamente") ||
+                norm.contains("historial de entrenamientos") ||
+                norm.contains("historial de sesiones") ||
+                (norm.contains("ultimas sesiones") && !hasExerciseAfterSessions)
+            )
+        if (isRecentWorkoutsPattern) {
+            return IrisXIntent.QueryRecentWorkouts()
         }
 
         // 10b. Exercise history: "historial de sentadilla", "sesiones anteriores de press banca",
@@ -473,6 +509,31 @@ class IrisXCore(
         return IrisXIntent.GeneralQuery(trimmed)
     }
 
+    private fun extractLastExerciseTarget(norm: String): String? {
+        val nounBeforeVerb = Regex(
+            "(?:cuantas\\s+(?:series|repeticiones|reps)|(?:con\\s+)?(?:cuanto|que)\\s+peso|cuantos\\s+kilos)\\s+(?:de|en)\\s+(.+?)\\s+(?:hice|hiciste|realice|use|levante|tire|movi)(?:\\s+.*)?$"
+        ).find(norm)?.groupValues?.get(1)
+
+        val afterPrep = Regex(
+            "(?:ultima\\s+vez\\s+(?:en|con|de)|(?:con\\s+)?(?:cuanto|que)\\s+peso\\s+(?:hice|use|levante|movi|cargue)\\s*(?:en|con|de)?|(?:levante|hice|use|movi|cargue)|ultima\\s+carga\\s+(?:en|de)|ultimo\\s+peso\\s+(?:en|de)|(?:series|reps|repeticiones)\\s+(?:en|de)|en)\\s+(.+)$"
+        ).find(norm)?.groupValues?.get(1)
+
+        val candidate = (nounBeforeVerb ?: afterPrep)
+            ?.replace(Regex("\\b(?:la\\s+ultima\\s+vez|en\\s+el\\s+ultimo\\s+entreno|el\\s+ultimo\\s+entreno|en\\s+la\\s+ultima\\s+sesion|la\\s+ultima\\s+sesion|ayer|hoy)\\b"), "")
+            ?.trim()
+            ?.replace(Regex("^(?:en|con|de)\\s+"), "")
+            ?.replace(Regex("\\s+(?:hice|hiciste|realice|use|levante|tire|movi)$"), "")
+            ?.trim()
+
+        return candidate?.takeIf {
+            it.isNotBlank() &&
+                it != "este" &&
+                it != "este ejercicio" &&
+                it != "la ultima vez" &&
+                it != "hice"
+        }
+    }
+
     /**
      * Full conversational entry point: parses input, executes intent with current context,
      * and persists user/assistant messages and updated context in SQLite.
@@ -544,6 +605,7 @@ class IrisXCore(
     ): IrisXResponse {
         return when (intent) {
             is IrisXIntent.QueryLastWorkout -> handleQueryLastWorkout()
+            is IrisXIntent.QueryRecentWorkouts -> handleQueryRecentWorkouts(intent.maxSessions)
             is IrisXIntent.LearnAlias -> handleLearnAlias(intent.alias, intent.canonical, intent.force)
             is IrisXIntent.DeleteAlias -> handleDeleteAlias(intent.alias)
             is IrisXIntent.UpdateExerciseMuscle -> handleUpdateExerciseMuscle(intent.exerciseName, intent.muscleGroup)
@@ -775,46 +837,51 @@ class IrisXCore(
     }
 
     private suspend fun handleQueryLastWorkout(): IrisXResponse {
-        val latest = repository.getLatestSession()
-            ?: return IrisXResponse.Success("No tenés entrenamientos registrados todavía.")
+        val outcome = IrisXLocalTools(repository).execute(LocalToolRequest.LastWorkout)
+        val presentation = LocalToolPresenter.present(outcome)
 
-        val sets = repository.getSetsForSession(latest.id)
-        val exercises = repository.getExerciseNameMap()
-        val dateStr = DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT)
-            .format(Date(latest.startedAtMillis))
-
-        val exerciseNames = sets.map { exercises[it.exerciseId] ?: "Ejercicio #${it.exerciseId}" }.distinct()
-        val learnedAliases = getLearnedAliases()
-        val muscleOverrides = repository.getMuscleOverrides()
-        val classification = IrisXClassifier.classifyWorkout(latest.title, exerciseNames, learnedAliases, muscleOverrides)
-        val metrics = SportsMetricsCalculator.calculateSessionVolume(
-            sets = sets,
-            exerciseNamesById = exercises
-        )
-
-        contextState = contextState.copy(
-            activeSessionId = latest.id,
-            activeMuscleGroup = classification.primaryCategory.displayName.takeIf { it != "Otras / Sin clasificar" },
-            lastQueryDomain = "LAST_WORKOUT"
-        )
-
-        val summaryText = buildString {
-            append("Última sesión: ${latest.title} ($dateStr)\n")
-            append("Categoría: ${classification.primaryCategory.displayName} (${classification.sessionType})\n")
-            append("Series totales: ${sets.size} | Carga externa: ${String.format(Locale.ROOT, "%.1f", metrics.totalExternalKg)} kg\n")
-            if (metrics.dumbbellSetsCount > 0 || metrics.assistedSetsCount > 0 || metrics.unilateralSetsCount > 0 || metrics.weightedBodyweightSetsCount > 0) {
-                append("(${metrics.regularSetsCount} barra/máq., ${metrics.dumbbellSetsCount} mancuernas [c/u], ${metrics.unilateralSetsCount} unilat., ${metrics.assistedSetsCount} asistidas)\n")
-            }
-            append("Ejercicios:\n")
-            exerciseNames.forEach { ex ->
-                append("• $ex\n")
-            }
+        val workout = (outcome as? LocalToolOutcome.Success)?.data as? LocalToolWorkout
+        if (workout != null) {
+            val learnedAliases = getLearnedAliases()
+            val muscleOverrides = repository.getMuscleOverrides()
+            val classification = IrisXClassifier.classifyWorkout(
+                workout.title,
+                workout.exerciseNames,
+                learnedAliases,
+                muscleOverrides
+            )
+            contextState = contextState.copy(
+                activeSessionId = workout.sessionId,
+                activeMuscleGroup = classification.primaryCategory.displayName.takeIf { it != "Otras / Sin clasificar" },
+                lastQueryDomain = "LAST_WORKOUT"
+            )
         }
 
         return IrisXResponse.Success(
-            message = summaryText.trim(),
-            actionTaken = "QUERY_LAST_WORKOUT",
-            payload = latest
+            message = presentation.text,
+            actionTaken = actionFor(outcome),
+            payload = workout ?: outcome
+        )
+    }
+
+    private suspend fun handleQueryRecentWorkouts(maxSessions: Int): IrisXResponse {
+        val outcome = IrisXLocalTools(repository)
+            .execute(LocalToolRequest.RecentWorkouts(maxSessions = maxSessions))
+        val presentation = LocalToolPresenter.present(outcome)
+
+        val recent = (outcome as? LocalToolOutcome.Success)?.data as? LocalToolRecentWorkouts
+        val latest = recent?.workouts?.firstOrNull()
+        if (latest != null) {
+            contextState = contextState.copy(
+                activeSessionId = latest.sessionId,
+                lastQueryDomain = "RECENT_WORKOUTS"
+            )
+        }
+
+        return IrisXResponse.Success(
+            message = presentation.text,
+            actionTaken = actionFor(outcome),
+            payload = recent ?: outcome
         )
     }
 
