@@ -1,12 +1,37 @@
 package com.syntra.app.domain.neural
 
 import android.llama.cpp.LLamaAndroid
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
 import java.io.File
+
+/**
+ * Internal seam over the native engine. Production uses [LlamaAndroidNativeAccess], which
+ * delegates to the existing JNI wrapper unchanged. JVM tests inject an in-memory boundary
+ * so the engine state machine can be exercised without the ARM64 library.
+ */
+internal interface NeuralNativeAccess {
+    fun isAvailable(): Boolean
+    fun isModelLoaded(): Boolean
+    suspend fun load(path: String)
+    suspend fun unload()
+    fun send(prompt: String, maxTokens: Int): Flow<String>
+    fun cancel()
+}
+
+internal object LlamaAndroidNativeAccess : NeuralNativeAccess {
+    override fun isAvailable(): Boolean = LLamaAndroid.ensureNativeLoaded()
+    override fun isModelLoaded(): Boolean = LLamaAndroid.instance().hasModelLoaded()
+    override suspend fun load(path: String) = LLamaAndroid.instance().load(path)
+    override suspend fun unload() = LLamaAndroid.instance().unload()
+    override fun send(prompt: String, maxTokens: Int): Flow<String> =
+        LLamaAndroid.instance().send(prompt, maxTokens = maxTokens, formatChat = true)
+    override fun cancel() = LLamaAndroid.instance().cancel()
+}
 
 /**
  * Native llama.cpp adapter implementing [NeuralInferenceEngine].
@@ -27,6 +52,10 @@ class LlamaCppInferenceEngine(
         }
     }
 
+    /** Test seam. Production keeps the default access bound to [LLamaAndroid]. */
+    @Volatile
+    internal var nativeAccess: NeuralNativeAccess = LlamaAndroidNativeAccess
+
     override var state: EngineState = EngineState.UNINITIALIZED
         private set
 
@@ -36,6 +65,7 @@ class LlamaCppInferenceEngine(
     override var metrics: InferenceMetrics = InferenceMetrics()
         private set
 
+    @Volatile
     private var isCancelled = false
 
     override suspend fun loadModel(modelFile: File, threads: Int): Result<Unit> = withContext(Dispatchers.IO) {
@@ -47,34 +77,46 @@ class LlamaCppInferenceEngine(
         if (isModelLoaded() && currentModelFile?.absolutePath == modelFile.absolutePath) {
             return@withContext Result.success(Unit)
         }
-        if (isModelLoaded()) {
-            unloadModel()
-        }
 
-        // Validate GGUF format
+        // Validate before tearing anything down: an invalid file must not cost a working session.
         val validation = ModelManager.validateGgufFile(modelFile)
         if (validation.isFailure) {
             return@withContext Result.failure(validation.exceptionOrNull() ?: IllegalArgumentException("Archivo GGUF inválido"))
         }
 
-        val startTime = System.currentTimeMillis()
-        state = EngineState.LOADING
+        val native = nativeAccess
 
-        if (!isNativeAvailable()) {
+        if (!native.isAvailable()) {
             // Native lib not loaded (e.g. host JVM test environment)
             state = EngineState.READY
             currentModelFile = modelFile
             metrics = metrics.copy(
                 modelName = modelFile.name,
                 modelSizeBytes = modelFile.length(),
-                loadDurationMillis = System.currentTimeMillis() - startTime
+                loadDurationMillis = 0L
             )
             return@withContext Result.success(Unit)
         }
 
+        // The engine may not consider itself READY while llama.cpp still owns a session:
+        // a failed generation, an aborted load or a leftover session from a previous owner.
+        // Loading on top of it is rejected by the native layer ("engine is not Idle"), so the
+        // session must be released first or the engine stays stuck in ERROR forever.
+        if (native.isModelLoaded()) {
+            try {
+                unloadModel()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Throwable) {
+                // A failed release is reported by the load attempt below.
+            }
+        }
+
+        val startTime = System.currentTimeMillis()
+        state = EngineState.LOADING
+
         try {
-            LLamaAndroid.instance().nlen = 256
-            LLamaAndroid.instance().load(modelFile.absolutePath)
+            native.load(modelFile.absolutePath)
             currentModelFile = modelFile
             state = EngineState.READY
 
@@ -85,6 +127,8 @@ class LlamaCppInferenceEngine(
                 loadDurationMillis = loadDuration
             )
             Result.success(Unit)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (e: Throwable) {
             state = EngineState.ERROR
             Result.failure(e)
@@ -92,13 +136,14 @@ class LlamaCppInferenceEngine(
     }
 
     override suspend fun unloadModel() = withContext(Dispatchers.IO) {
-        if (!isNativeAvailable()) {
+        val native = nativeAccess
+        if (!native.isAvailable()) {
             currentModelFile = null
             state = EngineState.UNINITIALIZED
             return@withContext
         }
         try {
-            LLamaAndroid.instance().unload()
+            native.unload()
             currentModelFile = null
             state = EngineState.UNINITIALIZED
         } catch (e: kotlinx.coroutines.CancellationException) {
@@ -115,8 +160,8 @@ class LlamaCppInferenceEngine(
 
     override fun isModelLoaded(): Boolean {
         val ready = state == EngineState.READY && currentModelFile != null
-        return if (isNativeAvailable()) {
-            ready && LLamaAndroid.instance().hasModelLoaded()
+        return if (nativeAccess.isAvailable()) {
+            ready && nativeAccess.isModelLoaded()
         } else {
             ready
         }
@@ -124,6 +169,7 @@ class LlamaCppInferenceEngine(
 
     override fun generate(prompt: String, params: InferenceParams): Flow<GenerationChunk> = flow {
         isCancelled = false
+        val native = nativeAccess
 
         if (state != EngineState.READY) {
             if (fallbackEngine != null) {
@@ -135,14 +181,21 @@ class LlamaCppInferenceEngine(
             return@flow
         }
 
-        if (!isNativeAvailable()) {
+        if (!native.isAvailable()) {
             // Fallback for JVM unit tests without native binary
             if (fallbackEngine != null) {
                 val clean = IrisXContextBuilder.extractUserMessage(prompt)
                 fallbackEngine.generate(clean, params).collect { emit(it) }
                 return@flow
             }
-            emit(GenerationChunk(text = "IrisX: [Simulación JVM host — Biblioteca nativa no compilada]. Consulta: ${IrisXContextBuilder.extractUserMessage(prompt)}", isComplete = true))
+            // Never present a simulated answer as if it came from the model.
+            emit(
+                GenerationChunk(
+                    text = "",
+                    isComplete = true,
+                    errorMessage = "Biblioteca nativa no disponible: ${getNativeLoadError() ?: "sin detalle"}"
+                )
+            )
             return@flow
         }
 
@@ -152,10 +205,9 @@ class LlamaCppInferenceEngine(
 
         try {
             val maxTok = params.maxTokens.coerceIn(16, 512)
-            LLamaAndroid.instance().nlen = maxTok
-            LLamaAndroid.instance().send(prompt, maxTokens = maxTok, formatChat = true).collect { piece ->
+            native.send(prompt, maxTok).collect { piece ->
                 if (isCancelled) {
-                    throw kotlinx.coroutines.CancellationException("Inferencia cancelada por el usuario.")
+                    throw CancellationException("Inferencia cancelada por el usuario.")
                 }
 
                 val cleanPiece = IrisXContextBuilder.stripChatMlTokens(piece, trim = false)
@@ -188,23 +240,23 @@ class LlamaCppInferenceEngine(
             )
             emit(GenerationChunk(text = "", isComplete = true, tokensGenerated = tokenCount, elapsedMillis = totalElapsed))
             state = EngineState.READY
-        } catch (_: kotlinx.coroutines.CancellationException) {
-            state = EngineState.READY
-            emit(GenerationChunk(text = "", isComplete = true, errorMessage = "Inferencia cancelada por el usuario."))
-        } catch (_: java.util.concurrent.CancellationException) {
+        } catch (cancelled: CancellationException) {
             state = EngineState.READY
             emit(GenerationChunk(text = "", isComplete = true, errorMessage = "Inferencia cancelada por el usuario."))
         } catch (e: Throwable) {
-            state = EngineState.ERROR
+            // One failed turn must not disable a healthy native session: context overflow, a
+            // rejected concurrent call or a tokenizer error leave llama.cpp fully usable.
+            state = if (native.isModelLoaded()) EngineState.READY else EngineState.ERROR
             emit(GenerationChunk(text = "", isComplete = true, errorMessage = "Error en inferencia nativa llama.cpp: ${e.message}"))
         }
     }.flowOn(Dispatchers.IO)
 
     override fun cancel() {
         isCancelled = true
-        if (isNativeAvailable()) {
+        val native = nativeAccess
+        if (native.isAvailable()) {
             try {
-                LLamaAndroid.instance().cancel()
+                native.cancel()
             } catch (_: Throwable) {}
         }
         fallbackEngine?.cancel()

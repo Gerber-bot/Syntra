@@ -28,19 +28,15 @@ import com.syntra.app.domain.irisx.IrisXResponse
 import com.syntra.app.domain.irisx.RoomIrisXRepository
 import com.syntra.app.domain.neural.*
 import com.syntra.app.ui.theme.*
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
-
-data class ChatMessage(
-    val id: String = UUID.randomUUID().toString(),
-    val text: String,
-    val isUser: Boolean,
-    val timestampMillis: Long = System.currentTimeMillis()
-)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -70,37 +66,92 @@ fun IrisXConsoleDialog(
     var conversationToRename by remember { mutableStateOf<IrisxConversationEntity?>(null) }
 
     var isGenerating by remember { mutableStateOf(false) }
+    // Blocks a second send while the turn is being routed/persisted, without flashing "Parar".
+    var isSending by remember { mutableStateOf(false) }
     var currentGenerationJob by remember { mutableStateOf<Job?>(null) }
+    // Identifies the generation that owns the console. A cancelled or superseded turn must
+    // never overwrite a newer reply nor persist into a different conversation.
+    var activeGenerationToken by remember { mutableStateOf<String?>(null) }
+    var streamingMessageId by remember { mutableStateOf<String?>(null) }
+    // Visible, non-persisted diagnosis for model loading problems: a silent degradation to
+    // the deterministic engine is indistinguishable from "IrisX no funciona".
+    var neuralNotice by remember { mutableStateOf<String?>(null) }
 
     fun refreshContextBadge() {
         val st = irisXCore.getCurrentContextState()
         activeTopicLabel = st.activeExerciseName ?: st.activeMuscleGroup
     }
 
-    // Auto-load preferred neural model if not loaded yet
-    LaunchedEffect(Unit) {
-        if (!effectiveNeuralEngine.isModelLoaded()) {
-            val prefModelName = ModelManager.getActiveModelPreference(context)
-            val installed = ModelManager.listInstalledModels(context)
-            val modelToLoad = if (!prefModelName.isNullOrBlank()) {
-                installed.firstOrNull { it.fileName == prefModelName }?.file
-            } else {
-                installed.firstOrNull()?.file
-            }
-            if (modelToLoad != null && modelToLoad.exists()) {
-                val guardian = IrisXGuardian.evaluateResources(context, modelToLoad.length())
-                if (guardian.canProceed) {
-                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                        effectiveNeuralEngine.loadModel(modelToLoad, threads = 4)
-                    }
+    fun replaceMessage(id: String, update: (ChatMessage) -> ChatMessage) {
+        val index = messages.indexOfFirst { it.id == id }
+        if (index >= 0) messages[index] = update(messages[index])
+    }
+
+    fun stopGeneration(markAsStopped: Boolean = true) {
+        activeGenerationToken = null
+        currentGenerationJob?.cancel()
+        currentGenerationJob = null
+        effectiveNeuralEngine.cancel()
+        isGenerating = false
+        isSending = false
+        val streamingId = streamingMessageId
+        streamingMessageId = null
+        if (markAsStopped && streamingId != null) {
+            replaceMessage(streamingId) { msg ->
+                if (msg.text.isBlank() || msg.text == IrisXReplyAccumulator.PLACEHOLDER) {
+                    msg.copy(text = "⏹ Generación detenida por el usuario.", kind = ChatMessageKind.NOTICE)
+                } else {
+                    msg
                 }
             }
         }
     }
 
+    // Keep the streamed answer visible while it grows.
+    LaunchedEffect(messages.size, messages.lastOrNull()?.text) {
+        if (messages.isNotEmpty()) {
+            listState.scrollToItem(messages.lastIndex)
+        }
+    }
+
+    // Auto-load preferred neural model if not loaded yet
+    LaunchedEffect(Unit) {
+        if (effectiveNeuralEngine.isModelLoaded()) return@LaunchedEffect
+
+        val prefModelName = ModelManager.getActiveModelPreference(context)
+        val installed = ModelManager.listInstalledModels(context)
+        val modelToLoad = if (!prefModelName.isNullOrBlank()) {
+            installed.firstOrNull { it.fileName == prefModelName }?.file
+                ?: installed.firstOrNull()?.file
+        } else {
+            installed.firstOrNull()?.file
+        } ?: return@LaunchedEffect
+
+        if (!modelToLoad.exists()) return@LaunchedEffect
+
+        val guardian = IrisXGuardian.evaluateResources(context, modelToLoad.length())
+        if (!guardian.canProceed) {
+            neuralNotice = "IrisX Guardian: inferencia neuronal pausada (${guardian.reason}). " +
+                "IrisX responde con el motor determinista."
+            return@LaunchedEffect
+        }
+
+        val result = withContext(Dispatchers.IO) {
+            effectiveNeuralEngine.loadModel(modelToLoad, threads = 4)
+        }
+        if (result.isFailure) {
+            val reason = result.exceptionOrNull()?.message ?: "causa desconocida"
+            neuralNotice = "No se pudo cargar ${modelToLoad.name}: $reason"
+        }
+    }
+
     // Load active conversation & messages
+    var loadedConversationId by remember { mutableStateOf<Long?>(null) }
     LaunchedEffect(activeConversation?.id) {
         val conv = activeConversation ?: repo.getOrCreateActiveConversation().also { activeConversation = it }
+        // Creating the conversation on demand (first message) must not wipe the live bubble.
+        if (loadedConversationId == conv.id) return@LaunchedEffect
+        loadedConversationId = conv.id
         val stored = repo.getMessages(conv.id)
         messages.clear()
         if (stored.isEmpty()) {
@@ -141,11 +192,14 @@ fun IrisXConsoleDialog(
     }
 
     fun switchConversation(target: IrisxConversationEntity) {
+        // A running generation belongs to the conversation being left behind.
+        stopGeneration(markAsStopped = false)
         activeConversation = target
         showConversationsDialog = false
     }
 
     fun startNewConversation() {
+        stopGeneration(markAsStopped = false)
         scope.launch {
             val count = repo.getAllConversations().size
             val created = repo.createNewConversation("Conversación #${count + 1}")
@@ -154,156 +208,234 @@ fun IrisXConsoleDialog(
         }
     }
 
+    suspend fun persistTurn(conversationId: Long, role: String, content: String) {
+        try {
+            repo.appendMessage(
+                IrisxMessageEntity(
+                    conversationId = conversationId,
+                    senderRole = role,
+                    content = content,
+                    createdAtMillis = System.currentTimeMillis()
+                )
+            )
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Throwable) {
+            // A storage failure must not swallow the reply the user already sees.
+        }
+    }
+
+    suspend fun appendDeterministicReply(
+        conversation: IrisxConversationEntity,
+        userMessage: String,
+        neuralAvailable: Boolean
+    ) {
+        var replyText: String
+        var failed = false
+        try {
+            val resp = irisXCore.ask(userMessage)
+            replyText = when (resp) {
+                is IrisXResponse.Success -> resp.message
+                is IrisXResponse.RequiresConfirmation -> "${resp.question}\nPara confirmar escribí: ${resp.confirmCommand}"
+                is IrisXResponse.Unrecognized ->
+                    if (neuralAvailable) {
+                        resp.message
+                    } else {
+                        "No entendí la consulta '$userMessage'. El motor neuronal no está cargado (podés activarlo en tu Perfil). Escribí 'ayuda' para ver comandos deterministas disponibles."
+                    }
+            }
+            refreshContextBadge()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (e: Throwable) {
+            failed = true
+            replyText = "No pude procesar la consulta: ${e.message ?: e::class.simpleName}"
+        }
+
+        messages.add(
+            ChatMessage(
+                text = replyText,
+                kind = if (failed) ChatMessageKind.ERROR else ChatMessageKind.ASSISTANT
+            )
+        )
+        if (!failed) {
+            persistTurn(conversation.id, "IRISX", replyText)
+        }
+    }
+
+    suspend fun streamNeuralReply(
+        conversation: IrisxConversationEntity,
+        userMessage: String,
+        history: List<Pair<String, String>>,
+        token: String
+    ) {
+        val messageId = UUID.randomUUID().toString()
+        streamingMessageId = messageId
+        messages.add(
+            ChatMessage(
+                id = messageId,
+                text = IrisXReplyAccumulator.PLACEHOLDER,
+                kind = ChatMessageKind.ASSISTANT
+            )
+        )
+
+        val accumulator = IrisXReplyAccumulator()
+        try {
+            val prompt = IrisXContextBuilder.buildPrompt(
+                userMessage = userMessage,
+                db = db,
+                conversationHistory = history
+            )
+
+            effectiveNeuralEngine.generate(prompt, InferenceParams(maxTokens = 256)).collect { chunk ->
+                if (activeGenerationToken != token) {
+                    throw CancellationException("Generación reemplazada por otra más reciente.")
+                }
+                accumulator.append(chunk)
+                val visible = accumulator.contentSoFar().let { partial ->
+                    if (partial.isBlank()) {
+                        IrisXReplyAccumulator.PLACEHOLDER
+                    } else {
+                        IrisXContextBuilder.stripChatMlTokens(partial)
+                    }
+                }
+                replaceMessage(messageId) { it.copy(text = visible) }
+            }
+
+            if (activeGenerationToken != token) return
+
+            val metrics = effectiveNeuralEngine.metrics
+            val footer = if (metrics.tokensPerSecond > 0.0) {
+                "⚡ ${String.format("%.1f", metrics.tokensPerSecond)} t/s • ${metrics.lastInferenceDurationMillis} ms • ${effectiveNeuralEngine.currentModelFile?.name}"
+            } else {
+                null
+            }
+
+            if (accumulator.isPersistable) {
+                val finalText = accumulator.finalText()
+                replaceMessage(messageId) {
+                    it.copy(text = finalText, kind = ChatMessageKind.ASSISTANT, metricsFooter = footer)
+                }
+                // Only real model output is stored; the metrics footer stays in the UI.
+                persistTurn(conversation.id, "IRISX", finalText)
+            } else {
+                // A failed turn is shown but never stored nor replayed as conversation content.
+                replaceMessage(messageId) {
+                    it.copy(
+                        text = accumulator.errorMessage ?: "IrisX no produjo una respuesta.",
+                        kind = ChatMessageKind.ERROR
+                    )
+                }
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (e: Throwable) {
+            replaceMessage(messageId) {
+                it.copy(
+                    text = "Error inesperado en IrisX: ${e.message ?: e::class.simpleName}",
+                    kind = ChatMessageKind.ERROR
+                )
+            }
+        }
+    }
+
+    /**
+     * Single recovery attempt when the native session was lost.
+     * Without it, one fatal native error degrades IrisX to the deterministic engine until the
+     * user reloads the model by hand, which reads as "IrisX stopped working".
+     */
+    suspend fun ensureNeuralReady(): Boolean {
+        if (effectiveNeuralEngine.isModelLoaded()) return true
+        if (effectiveNeuralEngine.state != EngineState.ERROR) return false
+
+        val modelFile = effectiveNeuralEngine.currentModelFile
+            ?: ModelManager.listInstalledModels(context).firstOrNull()?.file
+            ?: return false
+        if (!modelFile.exists()) return false
+
+        val guardian = IrisXGuardian.evaluateResources(context, modelFile.length())
+        if (!guardian.canProceed) return false
+
+        neuralNotice = "Motor neuronal caído. Reiniciando ${modelFile.name}…"
+        val result = withContext(Dispatchers.IO) {
+            effectiveNeuralEngine.loadModel(modelFile, threads = 4)
+        }
+        return if (result.isSuccess) {
+            neuralNotice = null
+            true
+        } else {
+            neuralNotice = "No se pudo reiniciar el motor neuronal: ${result.exceptionOrNull()?.message ?: "causa desconocida"}"
+            false
+        }
+    }
+
     fun sendMessage(text: String) {
         val trimmed = text.trim()
-        if (trimmed.isBlank() || isGenerating) return
-        val currentConv = activeConversation ?: return
+        if (trimmed.isBlank() || isGenerating || isSending) return
+
+        // History is captured BEFORE appending the new turn: buildPrompt renders the history
+        // and then the current question, so including it here would duplicate it.
+        val historyForPrompt = IrisXChatHistory.forPrompt(messages)
 
         messages.add(ChatMessage(text = trimmed, isUser = true))
         inputText = ""
+        isSending = true
 
-        scope.launch {
-            listState.animateScrollToItem(messages.size - 1)
-        }
+        currentGenerationJob = scope.launch {
+            var startedToken: String? = null
+            try {
+                // The conversation is created on demand: the first message must never be
+                // dropped just because the initial load has not finished yet.
+                val conversation = activeConversation ?: run {
+                    val created = repo.getOrCreateActiveConversation()
+                    loadedConversationId = created.id
+                    activeConversation = created
+                    created
+                }
 
-        val historyForPrompt = messages.takeLast(6).map {
-            (if (it.isUser) "user" else "assistant") to it.text
-        }
+                persistTurn(conversation.id, "USER", trimmed)
 
-        if (effectiveNeuralEngine.isModelLoaded()) {
-            // Neural Engine Path: Persist clean human turn to SQLite
-            scope.launch {
-                repo.appendMessage(
-                    IrisxMessageEntity(
-                        conversationId = currentConv.id,
-                        senderRole = "USER",
-                        content = trimmed,
-                        createdAtMillis = System.currentTimeMillis()
-                    )
-                )
-            }
+                val neuralReady = ensureNeuralReady()
+                val guardian = if (neuralReady) {
+                    IrisXGuardian.evaluateResources(context, effectiveNeuralEngine.currentModelFile?.length() ?: 0L)
+                } else {
+                    null
+                }
+                val guardianBlocked = guardian != null && !guardian.canProceed
+                if (guardianBlocked) {
+                    neuralNotice = "IrisX Guardian: inferencia neuronal pausada por protección del dispositivo (${guardian.reason}). Respondiendo con el motor determinista."
+                }
 
-            val guardian = IrisXGuardian.evaluateResources(context, effectiveNeuralEngine.currentModelFile?.length() ?: 0L)
-            if (!guardian.canProceed) {
+                val isKnownDeterministic = neuralReady && !guardianBlocked &&
+                    irisXCore.parseInput(trimmed) !is com.syntra.app.domain.irisx.IrisXIntent.GeneralQuery
+
+                if (neuralReady && !guardianBlocked && !isKnownDeterministic) {
+                    val token = UUID.randomUUID().toString()
+                    startedToken = token
+                    activeGenerationToken = token
+                    isGenerating = true
+                    streamNeuralReply(conversation, trimmed, historyForPrompt, token)
+                } else {
+                    appendDeterministicReply(conversation, trimmed, neuralReady)
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (e: Throwable) {
                 messages.add(
                     ChatMessage(
-                        text = "⚠️ IrisX Guardian: Inferencia pausada por protección del dispositivo (${guardian.reason}). Recurriendo al motor determinista...",
-                        isUser = false
+                        text = "Error inesperado en IrisX: ${e.message ?: e::class.simpleName}",
+                        kind = ChatMessageKind.ERROR
                     )
                 )
-                scope.launch {
-                    val resp = irisXCore.ask(trimmed)
-                    val reply = when (resp) {
-                        is IrisXResponse.Success -> resp.message
-                        is IrisXResponse.RequiresConfirmation -> "${resp.question}\nPara confirmar escribí: ${resp.confirmCommand}"
-                        is IrisXResponse.Unrecognized -> resp.message
-                    }
-                    messages.add(ChatMessage(text = "[Motor determinista]\n$reply", isUser = false))
-                    listState.animateScrollToItem(messages.size - 1)
+            } finally {
+                isSending = false
+                // Never leave the console locked in "Parar" mode, and never let a stale turn
+                // release the lock of a newer generation.
+                if (startedToken != null && activeGenerationToken == startedToken) {
+                    activeGenerationToken = null
+                    streamingMessageId = null
+                    isGenerating = false
                 }
-                return
-            }
-
-            // Check if deterministic response is an exact known concept/workout query
-            val deterministicCheck = irisXCore.parseInput(trimmed)
-            val isKnownDeterministic = deterministicCheck !is com.syntra.app.domain.irisx.IrisXIntent.GeneralQuery
-
-            if (isKnownDeterministic) {
-                scope.launch {
-                    val resp = irisXCore.ask(trimmed)
-                    val replyText = when (resp) {
-                        is IrisXResponse.Success -> resp.message
-                        is IrisXResponse.RequiresConfirmation -> "${resp.question}\nPara confirmar escribí: ${resp.confirmCommand}"
-                        is IrisXResponse.Unrecognized -> resp.message
-                    }
-                    refreshContextBadge()
-                    messages.add(ChatMessage(text = replyText, isUser = false))
-                    repo.appendMessage(
-                        IrisxMessageEntity(
-                            conversationId = currentConv.id,
-                            senderRole = "IRISX",
-                            content = replyText,
-                            createdAtMillis = System.currentTimeMillis()
-                        )
-                    )
-                    listState.animateScrollToItem(messages.size - 1)
-                }
-                return
-            }
-
-            // Neural progressive streaming for free queries
-            isGenerating = true
-            val botMessageId = UUID.randomUUID().toString()
-            val botMessageIndex = messages.size
-            messages.add(ChatMessage(id = botMessageId, text = "Pensando...", isUser = false))
-
-            currentGenerationJob = scope.launch {
-                val prompt = IrisXContextBuilder.buildPrompt(
-                    userMessage = trimmed,
-                    db = db,
-                    conversationHistory = historyForPrompt
-                )
-                val responseBuilder = StringBuilder()
-
-                effectiveNeuralEngine.generate(prompt, InferenceParams(maxTokens = 256)).collect { chunk ->
-                    if (chunk.errorMessage != null) {
-                        responseBuilder.append("\n[Error: ${chunk.errorMessage}]")
-                    } else {
-                        responseBuilder.append(chunk.text)
-                    }
-
-                    val currentText = if (responseBuilder.isBlank()) "Pensando..." else responseBuilder.toString()
-                    if (botMessageIndex < messages.size) {
-                        messages[botMessageIndex] = ChatMessage(id = botMessageId, text = currentText, isUser = false)
-                    }
-                }
-
-                // Clean final response and persist to SQLite
-                val cleanFinal = IrisXContextBuilder.stripChatMlTokens(responseBuilder.toString())
-                repo.appendMessage(
-                    IrisxMessageEntity(
-                        conversationId = currentConv.id,
-                        senderRole = "IRISX",
-                        content = cleanFinal,
-                        createdAtMillis = System.currentTimeMillis()
-                    )
-                )
-
-                // Add metrics footer for UI display
-                val m = effectiveNeuralEngine.metrics
-                if (m.tokensPerSecond > 0.0) {
-                    val finalMsg = "${cleanFinal.trim()}\n\n───\n⚡ ${String.format("%.1f", m.tokensPerSecond)} t/s • ${m.lastInferenceDurationMillis} ms • ${effectiveNeuralEngine.currentModelFile?.name}"
-                    if (botMessageIndex < messages.size) {
-                        messages[botMessageIndex] = ChatMessage(id = botMessageId, text = finalMsg, isUser = false)
-                    }
-                }
-
-                isGenerating = false
-                currentGenerationJob = null
-                listState.animateScrollToItem(messages.size - 1)
-            }
-        } else {
-            // Deterministic Engine Path
-            scope.launch {
-                val response = irisXCore.ask(trimmed)
-                val replyText = when (response) {
-                    is IrisXResponse.Success -> response.message
-                    is IrisXResponse.RequiresConfirmation -> "${response.question}\nPara confirmar escribí: ${response.confirmCommand}"
-                    is IrisXResponse.Unrecognized -> {
-                        "No entendí la consulta '$trimmed'. El motor neuronal no está cargado (podés activarlo en tu Perfil). Escribí 'ayuda' para ver comandos deterministas disponibles."
-                    }
-                }
-                refreshContextBadge()
-                messages.add(ChatMessage(text = replyText, isUser = false))
-                repo.appendMessage(
-                    IrisxMessageEntity(
-                        conversationId = currentConv.id,
-                        senderRole = "IRISX",
-                        content = replyText,
-                        createdAtMillis = System.currentTimeMillis()
-                    )
-                )
-                listState.animateScrollToItem(messages.size - 1)
             }
         }
     }
@@ -457,6 +589,9 @@ fun IrisXConsoleDialog(
                 Button(
                     onClick = {
                         scope.launch {
+                            if (activeConversation?.id == target.id) {
+                                stopGeneration(markAsStopped = false)
+                            }
                             repo.deleteConversation(target.id)
                             conversationToDelete = null
                             loadConversations()
@@ -482,7 +617,10 @@ fun IrisXConsoleDialog(
     }
 
     Dialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = {
+            stopGeneration(markAsStopped = false)
+            onDismiss()
+        },
         properties = DialogProperties(
             usePlatformDefaultWidth = false,
             decorFitsSystemWindows = false
@@ -550,7 +688,12 @@ fun IrisXConsoleDialog(
                         ) {
                             Text("💬 Chats", style = MaterialTheme.typography.labelSmall, color = SyntraColors.SoftMint)
                         }
-                        IconButton(onClick = onDismiss) {
+                        IconButton(
+                            onClick = {
+                                stopGeneration(markAsStopped = false)
+                                onDismiss()
+                            }
+                        ) {
                             Text("✕", color = SyntraColors.TextMuted, fontWeight = FontWeight.Bold)
                         }
                     }
@@ -560,6 +703,36 @@ fun IrisXConsoleDialog(
                     modifier = Modifier.padding(vertical = 10.dp),
                     color = SyntraColors.BorderSubtle
                 )
+
+                neuralNotice?.let { notice ->
+                    Surface(
+                        color = SyntraColors.SurfaceHighlight,
+                        shape = RoundedCornerShape(8.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, SyntraColors.Error),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 8.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text(
+                                text = "⚠ $notice",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = SyntraColors.TextSecondary,
+                                modifier = Modifier.weight(1f)
+                            )
+                            TextButton(
+                                onClick = { neuralNotice = null },
+                                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)
+                            ) {
+                                Text("OK", style = MaterialTheme.typography.labelSmall, color = SyntraColors.NeonMint)
+                            }
+                        }
+                    }
+                }
 
                 // Message List
                 LazyColumn(
@@ -624,11 +797,7 @@ fun IrisXConsoleDialog(
 
                     if (isGenerating) {
                         Button(
-                            onClick = {
-                                currentGenerationJob?.cancel()
-                                effectiveNeuralEngine.cancel()
-                                isGenerating = false
-                            },
+                            onClick = { stopGeneration() },
                             colors = ButtonDefaults.buttonColors(containerColor = SyntraColors.Error),
                             shape = RoundedCornerShape(50),
                             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
@@ -653,17 +822,31 @@ fun IrisXConsoleDialog(
 
 @Composable
 private fun ChatBubble(message: ChatMessage) {
-    val align = if (message.isUser) Alignment.End else Alignment.Start
-    val bg = if (message.isUser) SyntraColors.SurfaceHighlight else Color(0xFF071210)
-    val border = if (message.isUser) SyntraColors.BorderSubtle else SyntraColors.DarkMint
-    val textColor = if (message.isUser) SyntraColors.TextPrimary else SyntraColors.TextPrimary
+    val align = if (message.kind == ChatMessageKind.USER) Alignment.End else Alignment.Start
+    val background = when (message.kind) {
+        ChatMessageKind.USER -> SyntraColors.SurfaceHighlight
+        ChatMessageKind.ERROR -> SyntraColors.SurfaceCardElevated
+        ChatMessageKind.NOTICE -> SyntraColors.SurfaceHighlight
+        ChatMessageKind.ASSISTANT -> Color(0xFF071210)
+    }
+    val border = when (message.kind) {
+        ChatMessageKind.USER -> SyntraColors.BorderSubtle
+        ChatMessageKind.ERROR -> SyntraColors.Error
+        ChatMessageKind.NOTICE -> SyntraColors.BorderSubtle
+        ChatMessageKind.ASSISTANT -> SyntraColors.DarkMint
+    }
+    val textColor = when (message.kind) {
+        ChatMessageKind.ERROR -> SyntraColors.Error
+        ChatMessageKind.NOTICE -> SyntraColors.TextMuted
+        else -> SyntraColors.TextPrimary
+    }
 
     Column(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = align
     ) {
         Surface(
-            color = bg,
+            color = background,
             shape = RoundedCornerShape(12.dp),
             border = androidx.compose.foundation.BorderStroke(1.dp, border),
             modifier = Modifier.widthIn(max = 320.dp)
@@ -673,6 +856,15 @@ private fun ChatBubble(message: ChatMessage) {
                 style = MaterialTheme.typography.bodySmall,
                 color = textColor,
                 modifier = Modifier.padding(12.dp)
+            )
+        }
+        // UI-only decoration: never part of the text sent back to the model.
+        message.metricsFooter?.let { footer ->
+            Text(
+                text = footer,
+                style = MaterialTheme.typography.labelSmall,
+                color = SyntraColors.TextMuted,
+                modifier = Modifier.padding(top = 2.dp, start = 4.dp, end = 4.dp)
             )
         }
     }

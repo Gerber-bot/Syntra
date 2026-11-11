@@ -42,6 +42,12 @@
 - Botón flotante persistente `✦ IrisX` en la interfaz.
 - Consola conversacional local offline con burbujas de diálogo y chips de sugerencias rápidas.
 - Respuesta inmediata y determinista ejecutada directamente contra Room y SQLite.
+- Con un GGUF cargado, las consultas libres se resuelven por inferencia neuronal local en
+  streaming; las consultas reconocidas siguen resolviéndose de forma determinista.
+- Un fallo de inferencia se muestra como burbuja de error no persistida: no se guarda como
+  mensaje de IrisX, no se reenvía al modelo y la consola sigue usable.
+- El pie de métricas (`⚡ t/s`) es decoración de UI y nunca forma parte del contexto enviado
+  al modelo.
 
 ### 7. Ajustes visuales y ergonomía en Historial (`HistoryScreen`)
 - Eliminación del título redundante de la categoría (ej. "Piernas" dentro de la categoría Piernas): la fecha y hora se enfatizan como encabezado principal.

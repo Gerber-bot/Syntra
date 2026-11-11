@@ -254,8 +254,9 @@ adb shell am instrument -w `
   estructuralmente truncado puede provocar una caída nativa en algunas compilaciones.
 - La presencia de tildes o emojis en `utf8_streaming` depende de la salida del modelo; la
   prueba siempre valida integridad UTF-8, aunque no garantiza que el modelo emita emojis.
-- Limitación principal: **las pruebas todavía no se ejecutaron**. Falta un dispositivo ARM64
-  con el modelo cargado para producir el reporte real y cerrar B.1.
+- Estado de validación: **11 de 13 escenarios neuronales aprobados en dispositivo real**
+  (reporte del usuario, ver §9). `test06b` y `test12` siguen pendientes. B.1 no se cierra
+  hasta completar el flujo conversacional en la UI.
 
 ## 9. Historial de ejecución real
 
@@ -279,4 +280,77 @@ Verificación estática de las 74 clases compiladas del APK de pruebas (36 méto
 `@After` y `@Test`): todos son `public`, sin argumentos y `void`. El chequeo se validó con un
 control negativo que reproduce el descriptor defectuoso.
 
-Sin resultados de escenarios: los 13 tests neuronales siguen pendientes de ejecución.
+Segunda ejecución (reportada por el usuario, no por este agente): `test01` a `test11` de
+`NeuralJniValidationTest` aprobados individualmente con `Qwen3-0.6B-Q4_K_M.gguf` en
+Redmi Note 13 4G / Android 15. Dos corridas fueron interrumpidas por `OneKeyClean` de
+HyperOS y aprobaron al reintentarse. JNI carga y genera: la capa nativa no era la causa del
+fallo conversacional.
+
+## 10. Corrección del flujo conversacional (2026-11-11)
+
+Auditoría Compose → ViewModel/orquestación (`IrisXConsoleDialog`) → `LlamaCppInferenceEngine`
+→ `LLamaAndroid` → llama.cpp. Defectos verificados en código y corregidos:
+
+| # | Defecto | Consecuencia en dispositivo |
+|---|---|---|
+| 1 | `generate` fijaba `state = ERROR` ante cualquier `Throwable`; `isModelLoaded()` exige `READY` | Un solo error de inferencia degradaba IrisX a determinista durante toda la sesión, en silencio |
+| 2 | `loadModel` sólo liberaba la sesión nativa si `isModelLoaded()`; llama.cpp rechaza cargar sobre una sesión viva | Recargar el modelo desde Perfil fallaba con «Error al cargar»; el motor quedaba en `ERROR` |
+| 3 | `loadModel` descargaba el modelo **antes** de validar el GGUF | Un archivo inválido destruía una sesión sana |
+| 4 | `historyForPrompt` se calculaba después de agregar el turno del usuario | El turno actual se enviaba duplicado en el prompt ChatML |
+| 5 | El pie de métricas (`⚡ t/s …`) vivía dentro del texto del mensaje | Se reinyectaba al modelo como contenido del asistente |
+| 6 | El texto `[Error: …]` se persistía como mensaje IRISX | El error se reproducía en prompts posteriores |
+| 7 | `isGenerating` no se reseteaba si la corrutina fallaba | El chat quedaba bloqueado en «Parar» |
+| 8 | `sendMessage` abortaba si `activeConversation == null` | El primer mensaje se perdía en silencio al abrir el chat |
+| 9 | La generación indexaba por posición (`botMessageIndex`) y sobrevivía al cambio de conversación | La respuesta podía escribirse en otra conversación |
+| 10 | Sin librería nativa se mostraba una respuesta simulada | El usuario creía que el modelo había respondido |
+| 11 | La carga fallida del modelo no se mostraba | Degradación silenciosa a determinista |
+
+Correcciones aplicadas:
+
+- `IrisXConsoleDialog.kt`: orquestación reescrita con `try/finally`, token de generación
+  (`activeGenerationToken`) para descartar turnos obsoletos, `isSending` como guarda de
+  reentrada, reemplazo de burbujas por `id` (no por índice), creación de conversación bajo
+  demanda, burbujas `ERROR`/`NOTICE` no persistidas, aviso visible de fallo de carga y
+  auto-recuperación de una sesión nativa perdida (`ensureNeuralReady`).
+- `IrisXChatFlow.kt` (nuevo): `ChatMessageKind`, `ChatMessage` con `metricsFooter` separado,
+  `IrisXChatHistory.forPrompt` (excluye errores/avisos/placeholder, tope de 6 turnos) y
+  `IrisXReplyAccumulator` (contenido vs. error, no persistible si falló).
+- `LlamaCppInferenceEngine.kt`: frontera `NeuralNativeAccess` inyectable, validación antes de
+  descargar, liberación de sesión obsoleta, error recuperable (`READY` si la sesión nativa
+  sobrevive) y error explícito cuando falta la librería nativa.
+
+Pruebas JVM ejecutadas por este agente:
+
+```powershell
+.\gradlew.bat --offline --no-daemon :app:testDebugUnitTest
+```
+
+Resultado: **221 tests, 0 fallos, 0 errores** (202 previos + 9 de `LlamaCppEngineStateTest`
++ 10 de `IrisXChatFlowTest`). El defecto 1 se reprodujo en rojo
+(`expected:<READY> but was:<ERROR>`) revirtiendo el manejo de error y volvió a verde con la
+corrección.
+
+APK de laboratorio para validación manual:
+
+```
+app/build/outputs/apk/lab/app-lab.apk
+18.006.007 bytes · SHA-256 4C705CC740480E9D…
+app/build/outputs/apk/androidTest/lab/app-lab-androidTest.apk
+1.291.517 bytes · SHA-256 FFEB8BAD02C1C118…
+```
+
+Checklist manual en el teléfono (sin autorización no se instala nada):
+
+1. Enviar una consulta libre con el modelo cargado: la respuesta debe streamearse y terminar
+   con el pie de métricas fuera del texto de la burbuja.
+2. Pulsar «⏹ Parar» a mitad de respuesta: el botón debe volver a «Enviar» y el mensaje
+   detenido no debe quedar persistido como respuesta de IrisX.
+3. Cerrar y reabrir el chat: el historial debe mantener el turno del usuario y no duplicar el
+   pie de métricas ni errores.
+4. Cambiar de conversación durante una generación: la respuesta no debe aparecer en el chat
+   nuevo.
+5. Forzar un error (p. ej. pregunta muy larga): debe verse una burbuja de error, el chat debe
+   seguir usable y el siguiente turno debe volver a usar el motor neuronal.
+
+No se declara B.1 cerrada: falta ejecutar este checklist en el dispositivo.
+
