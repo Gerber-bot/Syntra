@@ -3,19 +3,60 @@ package android.llama.cpp
 import android.util.Log
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.CancellationException
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.concurrent.thread
+
+/**
+ * Internal seam over the JNI entry points. Production uses [LLamaAndroid.DefaultNativeBridge],
+ * which calls the existing external methods unchanged. Tests can inject an in-memory boundary
+ * without loading the Android native library.
+ */
+internal interface LlamaNativeBridge {
+    fun isAvailable(): Boolean
+    fun benchModel(context: Long, model: Long, batch: Long, pp: Int, tg: Int, pl: Int, nr: Int): String
+    fun loadModel(path: String): Long
+    fun freeModel(model: Long)
+    fun newContext(model: Long): Long
+    fun freeContext(context: Long)
+    fun newBatch(nTokens: Int, embd: Int, nSeqMax: Int): Long
+    fun freeBatch(batch: Long)
+    fun newSampler(): Long
+    fun freeSampler(sampler: Long)
+    fun completionInit(
+        context: Long,
+        batch: Long,
+        sampler: Long,
+        text: String,
+        formatChat: Boolean,
+        nLen: Int,
+        genId: Long
+    ): Int
+    fun completionLoop(
+        context: Long,
+        batch: Long,
+        sampler: Long,
+        nLen: Int,
+        nCur: Int,
+        genId: Long
+    ): String?
+    fun kvCacheClear(context: Long)
+    fun cancelGeneration(genId: Long)
+}
 
 class LLamaAndroid {
     private val tag: String? = this::class.simpleName
@@ -41,8 +82,15 @@ class LLamaAndroid {
     private var isLoadCancelled: Boolean = false
 
     private var activeUnloadDeferred: CompletableDeferred<Unit>? = null
+    private var activeLoadDeferred: CompletableDeferred<Unit>? = null
 
-    private val runLoop: CoroutineDispatcher = Executors.newSingleThreadExecutor {
+    /**
+     * Test seam. Production keeps the default bridge; JVM tests may replace it before first use.
+     */
+    @Volatile
+    internal var nativeBridge: LlamaNativeBridge = DefaultNativeBridge()
+
+    private val runLoopExecutor = Executors.newSingleThreadExecutor {
         thread(start = false, name = "Llm-RunLoop") {
             if (ensureNativeLoaded()) {
                 try {
@@ -59,7 +107,47 @@ class LLamaAndroid {
                 Log.e(tag, "Unhandled exception in Llm-RunLoop", exception)
             }
         }
-    }.asCoroutineDispatcher()
+    }
+    private val runLoop: CoroutineDispatcher = runLoopExecutor.asCoroutineDispatcher()
+
+    /**
+     * Owns teardown. It is deliberately independent from whoever calls [unload] so that
+     * cancelling that caller can never abort cleanup or drop resource ownership.
+     */
+    private val unloadScope = CoroutineScope(SupervisorJob() + runLoop)
+
+    private inner class DefaultNativeBridge : LlamaNativeBridge {
+        override fun isAvailable(): Boolean = isLibraryLoaded
+        override fun benchModel(context: Long, model: Long, batch: Long, pp: Int, tg: Int, pl: Int, nr: Int): String =
+            bench_model(context, model, batch, pp, tg, pl, nr)
+        override fun loadModel(path: String): Long = load_model(path)
+        override fun freeModel(model: Long) = free_model(model)
+        override fun newContext(model: Long): Long = new_context(model)
+        override fun freeContext(context: Long) = free_context(context)
+        override fun newBatch(nTokens: Int, embd: Int, nSeqMax: Int): Long = new_batch(nTokens, embd, nSeqMax)
+        override fun freeBatch(batch: Long) = free_batch(batch)
+        override fun newSampler(): Long = new_sampler()
+        override fun freeSampler(sampler: Long) = free_sampler(sampler)
+        override fun completionInit(
+            context: Long,
+            batch: Long,
+            sampler: Long,
+            text: String,
+            formatChat: Boolean,
+            nLen: Int,
+            genId: Long
+        ): Int = completion_init(context, batch, sampler, text, formatChat, nLen, genId)
+        override fun completionLoop(
+            context: Long,
+            batch: Long,
+            sampler: Long,
+            nLen: Int,
+            nCur: Int,
+            genId: Long
+        ): String? = completion_loop(context, batch, sampler, nLen, nCur, genId)
+        override fun kvCacheClear(context: Long) = kv_cache_clear(context)
+        override fun cancelGeneration(genId: Long) = cancel_generation(genId)
+    }
 
     fun isNativeLibraryLoaded(): Boolean = ensureNativeLoaded()
 
@@ -79,6 +167,12 @@ class LLamaAndroid {
 
     fun getCurrentState(): State = synchronized(stateLock) {
         nativeState
+    }
+
+    /** Stops background workers. Intended for isolated JVM tests only. */
+    internal fun shutdownForTest() {
+        unloadScope.cancel()
+        runLoopExecutor.shutdownNow()
     }
 
     var nlen: Int = 256
@@ -129,10 +223,11 @@ class LLamaAndroid {
     private external fun cancel_generation(genId: Long)
 
     fun cancel() {
+        val bridge = nativeBridge
         val genId = activeGenerationId
-        if (isLibraryLoaded && genId > 0) {
+        if (bridge.isAvailable() && genId > 0) {
             try {
-                cancel_generation(genId)
+                bridge.cancelGeneration(genId)
             } catch (t: Throwable) {
                 Log.w(tag, "Failed to cancel generation: ${t.message}")
             }
@@ -140,12 +235,13 @@ class LLamaAndroid {
     }
 
     suspend fun bench(pp: Int, tg: Int, pl: Int, nr: Int = 1): String {
+        val bridge = nativeBridge
         return withContext(runLoop) {
             val state = synchronized(stateLock) { nativeState }
             when (state) {
                 is State.Loaded -> {
                     Log.d(tag, "bench(): $state")
-                    bench_model(state.context, state.model, state.batch, pp, tg, pl, nr)
+                    bridge.benchModel(state.context, state.model, state.batch, pp, tg, pl, nr)
                 }
                 else -> throw IllegalStateException("No model loaded")
             }
@@ -154,8 +250,10 @@ class LLamaAndroid {
 
     suspend fun load(pathToModel: String) {
         val currentLoadId = loadIdCounter.incrementAndGet()
+        val loadDeferred = CompletableDeferred<Unit>()
+        val bridge = nativeBridge
         withContext(runLoop) {
-            if (!isLibraryLoaded) {
+            if (!bridge.isAvailable()) {
                 throw UnsatisfiedLinkError("Librería nativa llama-android no cargada")
             }
 
@@ -166,6 +264,7 @@ class LLamaAndroid {
                 isLoadCancelled = false
                 activeLoadId = currentLoadId
                 nativeState = State.Loading(currentLoadId, pathToModel)
+                activeLoadDeferred = loadDeferred
             }
 
             fun checkNotCancelled() {
@@ -180,19 +279,19 @@ class LLamaAndroid {
             var sampler: Long = 0L
 
             try {
-                model = load_model(pathToModel)
+                model = bridge.loadModel(pathToModel)
                 if (model == 0L) throw IllegalStateException("load_model() returned null")
                 checkNotCancelled()
 
-                context = new_context(model)
+                context = bridge.newContext(model)
                 if (context == 0L) throw IllegalStateException("new_context() returned null")
                 checkNotCancelled()
 
-                batch = new_batch(2048, 0, 1)
+                batch = bridge.newBatch(2048, 0, 1)
                 if (batch == 0L) throw IllegalStateException("new_batch() returned null")
                 checkNotCancelled()
 
-                sampler = new_sampler()
+                sampler = bridge.newSampler()
                 if (sampler == 0L) throw IllegalStateException("new_sampler() returned null")
                 checkNotCancelled()
 
@@ -204,17 +303,27 @@ class LLamaAndroid {
                 }
                 Log.i(tag, "Loaded model successfully: $pathToModel")
             } catch (t: Throwable) {
-                // Structured acquisition rollback: release acquired pointers in reverse order
-                if (sampler != 0L) try { free_sampler(sampler) } catch (_: Throwable) {}
-                if (batch != 0L) try { free_batch(batch) } catch (_: Throwable) {}
-                if (context != 0L) try { free_context(context) } catch (_: Throwable) {}
-                if (model != 0L) try { free_model(model) } catch (_: Throwable) {}
+                // Release only what was acquired. If any free fails, ownership is kept in
+                // Unloading so a later unload() can retry instead of leaking silently.
+                val acquired = State.Loaded(model, context, batch, sampler, pathToModel)
+                val remaining = releaseResourcesOnCurrentThread(acquired)
                 synchronized(stateLock) {
-                    if (nativeState is State.Loading && (nativeState as State.Loading).loadId == currentLoadId) {
-                        nativeState = State.Idle
+                    if (remaining == null) {
+                        if (nativeState is State.Loading && (nativeState as State.Loading).loadId == currentLoadId) {
+                            nativeState = State.Idle
+                        }
+                    } else if (nativeState is State.Loading || nativeState is State.Unloading) {
+                        nativeState = State.Unloading(remaining)
                     }
                 }
                 throw t
+            } finally {
+                synchronized(stateLock) {
+                    if (activeLoadDeferred === loadDeferred) {
+                        activeLoadDeferred = null
+                    }
+                }
+                loadDeferred.complete(Unit)
             }
         }
     }
@@ -222,6 +331,7 @@ class LLamaAndroid {
     fun send(message: String, maxTokens: Int = nlen, formatChat: Boolean = true): Flow<String> = flow {
         val genDeferred = CompletableDeferred<Unit>()
         val genId = generationIdCounter.incrementAndGet()
+        val bridge = nativeBridge
         val loadedState: State.Loaded
         val job = currentCoroutineContext()[Job]
 
@@ -241,7 +351,7 @@ class LLamaAndroid {
         }
 
         try {
-            val promptTokens = completion_init(
+            val promptTokens = bridge.completionInit(
                 loadedState.context,
                 loadedState.batch,
                 loadedState.sampler,
@@ -257,7 +367,7 @@ class LLamaAndroid {
             var ncur = promptTokens
 
             while (ncur < targetEnd) {
-                val str = completion_loop(
+                val str = bridge.completionLoop(
                     loadedState.context,
                     loadedState.batch,
                     loadedState.sampler,
@@ -276,7 +386,7 @@ class LLamaAndroid {
             }
         } finally {
             try {
-                kv_cache_clear(loadedState.context)
+                bridge.kvCacheClear(loadedState.context)
             } catch (_: Throwable) {}
 
             synchronized(stateLock) {
@@ -290,129 +400,183 @@ class LLamaAndroid {
         }
     }.flowOn(runLoop)
 
-    private data class UnloadPlan(
+    private data class UnloadTicket(
         val isOwner: Boolean,
-        val unloadDeferred: CompletableDeferred<Unit>?,
-        val stateToFree: State.Loaded?,
-        val genJobToCancel: Job?,
-        val genDeferredToAwait: CompletableDeferred<Unit>?
+        val completion: CompletableDeferred<Unit>?,
+        val generationJob: Job?,
+        val generationDone: CompletableDeferred<Unit>?,
+        val loadDone: CompletableDeferred<Unit>?
     )
 
-    suspend fun unload() {
-        val plan = synchronized(stateLock) {
-            when (val current = nativeState) {
-                is State.Idle -> {
-                    UnloadPlan(
-                        isOwner = false,
-                        unloadDeferred = null,
-                        stateToFree = null,
-                        genJobToCancel = null,
-                        genDeferredToAwait = null
-                    )
-                }
-                is State.Unloading -> {
-                    // Secondary concurrent caller: simply await ongoing single-flight unload
-                    UnloadPlan(
-                        isOwner = false,
-                        unloadDeferred = activeUnloadDeferred,
-                        stateToFree = null,
-                        genJobToCancel = null,
-                        genDeferredToAwait = null
-                    )
-                }
-                is State.Loading -> {
-                    // Cancel pending load so it aborts and rolls back
-                    isLoadCancelled = true
-                    val deferred = CompletableDeferred<Unit>()
-                    activeUnloadDeferred = deferred
-                    nativeState = State.Unloading(null)
-                    UnloadPlan(
-                        isOwner = true,
-                        unloadDeferred = deferred,
-                        stateToFree = null,
-                        genJobToCancel = null,
-                        genDeferredToAwait = null
-                    )
-                }
-                is State.Loaded -> {
-                    val deferred = CompletableDeferred<Unit>()
-                    activeUnloadDeferred = deferred
-                    nativeState = State.Unloading(current)
-                    val job = activeGenerationJob
-                    val genDef = if (isGenerating) activeGenerationDeferred else null
-                    UnloadPlan(
-                        isOwner = true,
-                        unloadDeferred = deferred,
-                        stateToFree = current,
-                        genJobToCancel = job,
-                        genDeferredToAwait = genDef
-                    )
-                }
+    /**
+     * Releases resources on the thread that already owns the native session.
+     * Every resource is attempted independently. If any free fails, the remaining pointers
+     * are returned so ownership is preserved and a later unload() can retry.
+     * The model is only released once its context is gone.
+     */
+    private fun releaseResourcesOnCurrentThread(loaded: State.Loaded): State.Loaded? {
+        val bridge = nativeBridge
+        var sampler = loaded.sampler
+        var batch = loaded.batch
+        var context = loaded.context
+        var model = loaded.model
+
+        fun freeOne(name: String, pointer: Long, free: (Long) -> Unit): Boolean {
+            if (pointer == 0L) return true
+            return try {
+                free(pointer)
+                true
+            } catch (t: Throwable) {
+                Log.w(tag, "Error freeing native $name: ${t.message}")
+                false
             }
         }
 
-        if (!plan.isOwner) {
-            plan.unloadDeferred?.await()
-            return
-        }
+        if (freeOne("sampler", sampler) { bridge.freeSampler(it) }) sampler = 0L
+        if (freeOne("batch", batch) { bridge.freeBatch(it) }) batch = 0L
+        val contextFreed = freeOne("context", context) { bridge.freeContext(it) }
+        if (contextFreed) context = 0L
+        if (contextFreed && freeOne("model", model) { bridge.freeModel(it) }) model = 0L
 
-        // --- SOLE OWNER OF UNLOAD ---
+        return if (sampler == 0L && batch == 0L && context == 0L && model == 0L) {
+            Log.i(tag, "Unloaded model and freed native resources: ${loaded.modelPath}")
+            null
+        } else {
+            State.Loaded(model, context, batch, sampler, loaded.modelPath)
+        }
+    }
+
+    /**
+     * Sole owner of one teardown attempt. Runs in [unloadScope], therefore caller cancellation
+     * never aborts it. Resources are never released before the active generation and any
+     * in-progress load have completed their own cleanup.
+     */
+    private suspend fun runUnload(ticket: UnloadTicket) {
+        val completion = ticket.completion ?: return
         try {
-            // 1. Cooperative cancellation request to native bridge
-            val genId = activeGenerationId
-            if (genId > 0) {
-                try {
-                    cancel_generation(genId)
-                } catch (_: Throwable) {}
+            val bridge = nativeBridge
+
+            if (ticket.generationJob != null) {
+                val genId = activeGenerationId
+                if (genId > 0L) {
+                    try {
+                        bridge.cancelGeneration(genId)
+                    } catch (t: Throwable) {
+                        Log.w(tag, "Failed to request native generation cancellation: ${t.message}")
+                    }
+                }
+                ticket.generationJob.cancel(CancellationException("Modelo en proceso de descarga"))
             }
 
-            // 2. Cancel the coroutine job that may be suspended in emit()
-            plan.genJobToCancel?.cancel(CancellationException("Modelo en proceso de descarga"))
-
-            // 3. Await generation cleanup with timeout to prevent deadlock
-            if (plan.genDeferredToAwait != null) {
-                withTimeoutOrNull(5000L) {
-                    plan.genDeferredToAwait.await()
-                } ?: run {
-                    Log.w(tag, "La generación activa no finalizó su limpieza dentro del tiempo límite durante unload")
+            ticket.generationDone?.let { done ->
+                val finished = withTimeoutOrNull(UNLOAD_DIAGNOSTIC_TIMEOUT_MS) {
+                    done.await()
+                    true
+                }
+                if (finished == null) {
+                    Log.w(
+                        tag,
+                        "La generación activa sigue en curso tras ${UNLOAD_DIAGNOSTIC_TIMEOUT_MS} ms; " +
+                            "se continúa esperando sin liberar recursos"
+                    )
+                    done.await()
                 }
             }
 
-            // 4. Free native resources under NonCancellable on runLoop so caller cancellation CANNOT abort cleanup
-            withContext(NonCancellable) {
-                withContext(runLoop) {
-                    val stateToFree = plan.stateToFree
-                    if (stateToFree != null) {
-                        try {
-                            free_sampler(stateToFree.sampler)
-                            free_batch(stateToFree.batch)
-                            free_context(stateToFree.context)
-                            free_model(stateToFree.model)
-                            Log.i(tag, "Unloaded model and freed native resources: ${stateToFree.modelPath}")
-                        } catch (t: Throwable) {
-                            Log.w(tag, "Error freeing native resources: ${t.message}")
-                        }
-                    }
-                    synchronized(stateLock) {
-                        nativeState = State.Idle
-                        isGenerating = false
-                        activeGenerationJob = null
-                        activeGenerationDeferred = null
+            ticket.loadDone?.await()
+
+            val snapshot = synchronized(stateLock) {
+                (nativeState as? State.Unloading)?.loadedState
+            }
+            val remaining = if (snapshot != null) {
+                withContext(NonCancellable) {
+                    withContext(runLoop) {
+                        releaseResourcesOnCurrentThread(snapshot)
                     }
                 }
+            } else {
+                null
             }
+
+            synchronized(stateLock) {
+                if (remaining == null) {
+                    nativeState = State.Idle
+                    isGenerating = false
+                    activeGenerationJob = null
+                    activeGenerationDeferred = null
+                    activeLoadDeferred = null
+                } else {
+                    nativeState = State.Unloading(remaining)
+                }
+            }
+
+            if (remaining != null) {
+                completion.completeExceptionally(
+                    IllegalStateException(
+                        "No se pudieron liberar todos los recursos nativos; se conserva Unloading para reintentar"
+                    )
+                )
+            } else {
+                completion.complete(Unit)
+            }
+        } catch (t: Throwable) {
+            completion.completeExceptionally(t)
         } finally {
             synchronized(stateLock) {
-                if (nativeState is State.Unloading) {
-                    nativeState = State.Idle
+                if (activeUnloadDeferred === completion) {
+                    activeUnloadDeferred = null
                 }
-                activeUnloadDeferred?.complete(Unit)
-                activeUnloadDeferred = null
             }
         }
     }
 
+    suspend fun unload() {
+        val ticket = synchronized(stateLock) {
+            when (val current = nativeState) {
+                is State.Idle -> UnloadTicket(false, null, null, null, null)
+                is State.Unloading -> {
+                    val inFlight = activeUnloadDeferred
+                    if (current.loadedState != null && (inFlight == null || inFlight.isCompleted)) {
+                        // A previous attempt kept ownership of remaining pointers: retry them.
+                        val completion = CompletableDeferred<Unit>()
+                        activeUnloadDeferred = completion
+                        UnloadTicket(true, completion, null, null, null)
+                    } else {
+                        UnloadTicket(false, inFlight, null, null, null)
+                    }
+                }
+                is State.Loading -> {
+                    // Abort the pending load and wait for its own rollback before publishing Idle.
+                    isLoadCancelled = true
+                    val completion = CompletableDeferred<Unit>()
+                    activeUnloadDeferred = completion
+                    nativeState = State.Unloading(null)
+                    UnloadTicket(true, completion, null, null, activeLoadDeferred)
+                }
+                is State.Loaded -> {
+                    val completion = CompletableDeferred<Unit>()
+                    activeUnloadDeferred = completion
+                    nativeState = State.Unloading(current)
+                    UnloadTicket(
+                        isOwner = true,
+                        completion = completion,
+                        generationJob = if (isGenerating) activeGenerationJob else null,
+                        generationDone = if (isGenerating) activeGenerationDeferred else null,
+                        loadDone = activeLoadDeferred
+                    )
+                }
+            }
+        }
+
+        if (ticket.isOwner) {
+            unloadScope.launch { runUnload(ticket) }
+        }
+        ticket.completion?.await()
+    }
+
     companion object {
+        private const val UNLOAD_DIAGNOSTIC_TIMEOUT_MS = 5000L
+
         @Volatile
         private var libraryLoadAttempted = false
         @Volatile

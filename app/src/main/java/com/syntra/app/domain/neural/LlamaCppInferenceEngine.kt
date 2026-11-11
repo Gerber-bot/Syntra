@@ -92,13 +92,25 @@ class LlamaCppInferenceEngine(
     }
 
     override suspend fun unloadModel() = withContext(Dispatchers.IO) {
-        if (isNativeAvailable()) {
-            try {
-                LLamaAndroid.instance().unload()
-            } catch (_: Throwable) {}
+        if (!isNativeAvailable()) {
+            currentModelFile = null
+            state = EngineState.UNINITIALIZED
+            return@withContext
         }
-        currentModelFile = null
-        state = EngineState.UNINITIALIZED
+        try {
+            LLamaAndroid.instance().unload()
+            currentModelFile = null
+            state = EngineState.UNINITIALIZED
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // Caller cancellation must not be reported as a cleanup failure; native teardown
+            // continues in its own scope and keeps ownership until it finishes.
+            throw e
+        } catch (e: Throwable) {
+            // Cleanup did not complete: keep the model reference and surface the failure
+            // instead of pretending the engine is uninitialized.
+            state = EngineState.ERROR
+            metrics = metrics.copy(modelName = currentModelFile?.name ?: metrics.modelName)
+        }
     }
 
     override fun isModelLoaded(): Boolean {
@@ -196,8 +208,7 @@ class LlamaCppInferenceEngine(
             } catch (_: Throwable) {}
         }
         fallbackEngine?.cancel()
-        if (state == EngineState.GENERATING) {
-            state = EngineState.READY
-        }
+        // Do not publish READY here: the generation flow publishes its terminal state
+        // only after native cleanup has actually completed.
     }
 }
