@@ -1,6 +1,11 @@
 package com.syntra.app.ui.workout
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
@@ -31,6 +36,11 @@ fun RestTimerBar(
     var showPermissionDialog by remember { mutableStateOf(false) }
     var pendingDurationSec by remember { mutableIntStateOf(90) }
     var permissionWarningDismissed by remember { mutableStateOf(false) }
+    var notificationPermissionRequested by remember { mutableStateOf(false) }
+
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { _ -> }
 
     // Recover active timer state from persistent storage upon mounting
     LaunchedEffect(Unit) {
@@ -55,6 +65,16 @@ fun RestTimerBar(
     }
 
     fun requestStart(durationSec: Int) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            !notificationPermissionRequested &&
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationPermissionRequested = true
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
             !RestTimerAlarmScheduler.canScheduleExactAlarms(context) &&
             !permissionWarningDismissed

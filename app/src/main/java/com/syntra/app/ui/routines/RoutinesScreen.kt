@@ -48,6 +48,7 @@ fun RoutinesScreen(
     var editingRoutine by remember { mutableStateOf<RoutineWithExercises?>(null) }
     var isCreatingNew by remember { mutableStateOf(false) }
     var routineToConfirmApply by remember { mutableStateOf<RoutineWithExercises?>(null) }
+    var isApplyingRoutine by remember { mutableStateOf(false) }
     var routineToDelete by remember { mutableStateOf<RoutineWithExercises?>(null) }
     var statusMessage by remember { mutableStateOf<String?>(null) }
 
@@ -137,62 +138,80 @@ fun RoutinesScreen(
             },
             confirmButton = {
                 Button(
+                    enabled = !isApplyingRoutine,
                     onClick = {
+                        if (isApplyingRoutine) return@Button
+                        isApplyingRoutine = true
                         scope.launch {
-                            val now = System.currentTimeMillis()
-                            val draft = RoutineManager.createSessionDraftFromRoutine(target, now)
-                            db.withTransaction {
-                                val sId = db.workoutSessionDao().insert(
-                                    WorkoutSessionEntity(
-                                        title = draft.sessionTitle,
-                                        startedAtMillis = draft.startedAtMillis,
-                                        finishedAtMillis = draft.startedAtMillis,
-                                        notes = draft.notes
-                                    )
+                            try {
+                                val now = System.currentTimeMillis()
+                                val draft = RoutineManager.createSessionDraftFromRoutine(target, now)
+                                val resolvedCategory = WorkoutCategoryClassifier.resolveSessionCategory(
+                                    explicitCategory = null,
+                                    routineCategory = target.routine.targetCategory,
+                                    title = draft.sessionTitle,
+                                    exerciseNames = draft.exercises.map { it.exerciseName },
+                                    learnedAliases = learnedAliases
                                 )
-                                var execOrder = 1
-                                draft.exercises.forEach { exDraft ->
-                                    val norm = WorkoutTextParser.normalize(exDraft.exerciseName)
-                                    var exEntity = db.exerciseDao().findByNormalizedName(norm)
-                                    if (exEntity == null) {
-                                        val newExId = db.exerciseDao().insert(
-                                            ExerciseEntity(
-                                                displayName = exDraft.exerciseName,
-                                                normalizedName = norm,
-                                                muscleGroup = "General",
-                                                createdAtMillis = now
+                                db.withTransaction {
+                                    val sId = db.workoutSessionDao().insert(
+                                        WorkoutSessionEntity(
+                                            title = draft.sessionTitle,
+                                            category = resolvedCategory,
+                                            startedAtMillis = draft.startedAtMillis,
+                                            finishedAtMillis = draft.startedAtMillis,
+                                            notes = draft.notes,
+                                            sessionUuid = java.util.UUID.randomUUID().toString()
+                                        )
+                                    )
+                                    var execOrder = 1
+                                    draft.exercises.forEach { exDraft ->
+                                        val norm = WorkoutTextParser.normalize(exDraft.exerciseName)
+                                        var exEntity = db.exerciseDao().findByNormalizedName(norm)
+                                        if (exEntity == null) {
+                                            val newExId = db.exerciseDao().insert(
+                                                ExerciseEntity(
+                                                    displayName = exDraft.exerciseName,
+                                                    normalizedName = norm,
+                                                    muscleGroup = "General",
+                                                    createdAtMillis = now
+                                                )
                                             )
-                                        )
-                                        exEntity = ExerciseEntity(
-                                            id = newExId,
-                                            displayName = exDraft.exerciseName,
-                                            normalizedName = norm,
-                                            muscleGroup = "General",
-                                            createdAtMillis = now
-                                        )
-                                    }
-                                    exDraft.executedSets.forEachIndexed { idx, setInput ->
-                                        db.workoutSetDao().insert(
-                                            WorkoutSetEntity(
-                                                sessionId = sId,
-                                                exerciseId = exEntity.id,
-                                                orderInExercise = idx + 1,
-                                                executionOrder = execOrder++,
-                                                loadGrams = setInput.loadGrams,
-                                                repetitions = setInput.repetitions,
-                                                rir = setInput.rir,
-                                                isAssisted = setInput.isAssisted,
-                                                isDumbbell = setInput.isDumbbell,
-                                                note = setInput.note,
-                                                plannedTarget = exDraft.plannedTarget
+                                            exEntity = (if (newExId > 0L) db.exerciseDao().findById(newExId) else null)
+                                                ?: db.exerciseDao().findByNormalizedName(norm)
+                                                ?: ExerciseEntity(
+                                                    id = newExId,
+                                                    displayName = exDraft.exerciseName,
+                                                    normalizedName = norm,
+                                                    muscleGroup = "General",
+                                                    createdAtMillis = now
+                                                )
+                                        }
+                                        exDraft.executedSets.forEachIndexed { idx, setInput ->
+                                            db.workoutSetDao().insert(
+                                                WorkoutSetEntity(
+                                                    sessionId = sId,
+                                                    exerciseId = exEntity.id,
+                                                    orderInExercise = idx + 1,
+                                                    executionOrder = execOrder++,
+                                                    loadGrams = setInput.loadGrams,
+                                                    repetitions = setInput.repetitions,
+                                                    rir = setInput.rir,
+                                                    isAssisted = setInput.isAssisted,
+                                                    isDumbbell = setInput.isDumbbell,
+                                                    note = setInput.note,
+                                                    plannedTarget = exDraft.plannedTarget
+                                                )
                                             )
-                                        )
+                                        }
                                     }
                                 }
+                                routineToConfirmApply = null
+                                statusMessage = "Sesión creada a partir de '${target.routine.name}'."
+                                onNavigateToHistory()
+                            } finally {
+                                isApplyingRoutine = false
                             }
-                            routineToConfirmApply = null
-                            statusMessage = "Sesión creada a partir de '${target.routine.name}'."
-                            onNavigateToHistory()
                         }
                     },
                     colors = ButtonDefaults.buttonColors(
@@ -200,7 +219,7 @@ fun RoutinesScreen(
                         contentColor = Color.Black
                     )
                 ) {
-                    Text("Confirmar registro", fontWeight = FontWeight.Bold)
+                    Text(if (isApplyingRoutine) "Guardando..." else "Confirmar registro", fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {

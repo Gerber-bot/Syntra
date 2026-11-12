@@ -33,7 +33,12 @@ fun ManageNeuralModelDialog(
     val scope = rememberCoroutineScope()
 
     var installedModels by remember {
-        mutableStateOf(ModelManager.listInstalledModels(context, engine.currentModelFile?.name))
+        mutableStateOf<List<GgufModelInfo>>(emptyList())
+    }
+    LaunchedEffect(Unit) {
+        installedModels = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            ModelManager.listInstalledModels(context, engine.currentModelFile?.name)
+        }
     }
     var isImporting by remember { mutableStateOf(false) }
     var importStatusMessage by remember { mutableStateOf<String?>(null) }

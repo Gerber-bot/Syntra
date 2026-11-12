@@ -33,7 +33,13 @@ data class UnrecognizedLine(
 )
 
 private sealed interface ValueTokenItem { val start: Int }
-private data class LoadItem(override val start: Int, val value: Double, val unit: String) : ValueTokenItem
+private data class LoadMatch(val range: IntRange, val value: Double, val unit: String, val isExplicitPlus: Boolean)
+private data class LoadItem(
+    override val start: Int,
+    val value: Double,
+    val unit: String,
+    val isExplicitPlus: Boolean = false
+) : ValueTokenItem
 private data class RepItem(override val start: Int, val reps: Int, val isFailure: Boolean) : ValueTokenItem
 
 data class ParsePreview(
@@ -114,8 +120,11 @@ object WorkoutTextParser {
                 warnings += "Línea ${lineNumber + 1}: Expresión ambigua detectada ('${ambiguousMatch.value}'). Especificá si son repeticiones asistidas, series o descansos."
             }
 
-            // 4. Locate first load match or bodyweight indicator
-            val firstLoad = loadWithUnitRegex.find(line) ?: bodyweightRegex.find(line)
+            // 4. Locate earliest load match or bodyweight indicator
+            val firstLoad = listOfNotNull(
+                loadWithUnitRegex.find(line),
+                bodyweightRegex.find(line)
+            ).minByOrNull { it.range.first }
 
             if (firstLoad == null) {
                 // Check if line has planning notation (e.g. "Remo con barra 3 de 10 a 12")
@@ -214,29 +223,28 @@ object WorkoutTextParser {
             val isNewExercise = !isKnown
 
             // Collect load matches in values
-            val loadMatches = mutableListOf<Triple<IntRange, Double, String>>()
+            val loadMatches = mutableListOf<LoadMatch>()
             for (m in loadWithUnitRegex.findAll(values)) {
                 val rawClean = m.groups[1]?.value?.replace(',', '.').orEmpty()
                 val isNegative = rawClean.startsWith("-")
                 val isPositivePlus = rawClean.startsWith("+")
                 val absVal = rawClean.removePrefix("+").removePrefix("-").toDoubleOrNull() ?: 0.0
-                val rawUnit = m.groups[2]?.value?.lowercase(Locale.ROOT).orEmpty()
                 val canonicalUnit = UnitConverter.canonicalUnit(m.groups[2]?.value)
                 val signedVal = if (isNegative) -absVal else absVal
-                loadMatches.add(Triple(m.range, signedVal, canonicalUnit))
+                loadMatches.add(LoadMatch(m.range, signedVal, canonicalUnit, isPositivePlus))
             }
             for (m in bodyweightRegex.findAll(values)) {
-                loadMatches.add(Triple(m.range, 0.0, "BW"))
+                loadMatches.add(LoadMatch(m.range, 0.0, "BW", false))
             }
-            loadMatches.sortBy { it.first.first }
-            val loadRanges = loadMatches.map { it.first }
+            loadMatches.sortBy { it.range.first }
+            val loadRanges = loadMatches.map { it.range }
 
             // Range validation: flag invalid loads
-            val outOfRangeLoad = loadMatches.firstOrNull { (_, v, u) ->
-                !UnitConverter.isValidLoad(kotlin.math.abs(v), u)
+            val outOfRangeLoad = loadMatches.firstOrNull { match ->
+                !UnitConverter.isValidLoad(kotlin.math.abs(match.value), match.unit)
             }
             if (outOfRangeLoad != null) {
-                unrecognizedLines += UnrecognizedLine(lineNumber + 1, line, "Carga fuera de rango (${outOfRangeLoad.second} ${outOfRangeLoad.third}).")
+                unrecognizedLines += UnrecognizedLine(lineNumber + 1, line, "Carga fuera de rango (${outOfRangeLoad.value} ${outOfRangeLoad.unit}).")
                 warnings += "Línea ${lineNumber + 1}: carga fuera de rango para '$cleanName'."
                 return@forEachIndexed
             }
@@ -263,7 +271,7 @@ object WorkoutTextParser {
             repMatches.sortBy { it.range.first }
 
             val allTokens = mutableListOf<ValueTokenItem>()
-            loadMatches.forEach { allTokens.add(LoadItem(it.first.first, it.second, it.third)) }
+            loadMatches.forEach { allTokens.add(LoadItem(it.range.first, it.value, it.unit, it.isExplicitPlus)) }
             repMatches.forEach { allTokens.add(RepItem(it.range.first, it.reps, it.isFailure)) }
             allTokens.sortBy { it.start }
 
@@ -281,7 +289,7 @@ object WorkoutTextParser {
                         currentRawLoad = absVal
                         currentUnit = token.unit
                         currentAssisted = isAssistedLine || isNegative
-                        currentWeightedBw = isWeightedBwLine || (token.value > 0.0 && token.unit == "KG" && values.contains("+"))
+                        currentWeightedBw = isWeightedBwLine || (token.value > 0.0 && token.isExplicitPlus)
                     }
                     is RepItem -> {
                         val weightGrams = UnitConverter.toGrams(currentRawLoad, currentUnit)

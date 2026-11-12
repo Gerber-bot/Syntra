@@ -106,54 +106,56 @@ object ModelManager {
 
             // Temporary file during copy to avoid incomplete model corruption
             val tempFile = File(targetDir, "$cleanName.tmp_${System.currentTimeMillis()}")
+            try {
+                val inputStream = resolver.openInputStream(uri)
+                    ?: return@withContext ModelImportResult.Error("No se pudo abrir el archivo seleccionado.")
 
-            val inputStream = resolver.openInputStream(uri)
-                ?: return@withContext ModelImportResult.Error("No se pudo abrir el archivo seleccionado.")
+                var copiedBytes = 0L
 
-            val totalBytes = targetDir.usableSpace
-            var copiedBytes = 0L
-
-            inputStream.use { input ->
-                FileOutputStream(tempFile).use { output ->
-                    val buffer = ByteArray(64 * 1024) // 64 KB chunk
-                    var bytesRead: Int
-                    while (input.read(buffer).also { bytesRead = it } != -1) {
-                        output.write(buffer, 0, bytesRead)
-                        copiedBytes += bytesRead
-                        onProgress(copiedBytes, -1L)
+                inputStream.use { input ->
+                    FileOutputStream(tempFile).use { output ->
+                        val buffer = ByteArray(64 * 1024) // 64 KB chunk
+                        var bytesRead: Int
+                        while (input.read(buffer).also { bytesRead = it } != -1) {
+                            output.write(buffer, 0, bytesRead)
+                            copiedBytes += bytesRead
+                            onProgress(copiedBytes, -1L)
+                        }
+                        output.flush()
                     }
-                    output.flush()
+                }
+
+                // Validate GGUF header before confirming
+                val validation = validateGgufFile(tempFile)
+                if (validation.isFailure) {
+                    return@withContext ModelImportResult.Error(
+                        validation.exceptionOrNull()?.message ?: "El archivo no es un modelo GGUF válido."
+                    )
+                }
+
+                // Atomic rename
+                if (targetFile.exists()) {
+                    targetFile.delete()
+                }
+                if (!tempFile.renameTo(targetFile)) {
+                    tempFile.copyTo(targetFile, overwrite = true)
+                }
+
+                val version = validation.getOrThrow()
+                ModelImportResult.Success(
+                    GgufModelInfo(
+                        fileName = targetFile.name,
+                        file = targetFile,
+                        sizeBytes = targetFile.length(),
+                        ggufVersion = version,
+                        isActive = true
+                    )
+                )
+            } finally {
+                if (tempFile.exists()) {
+                    tempFile.delete()
                 }
             }
-
-            // Validate GGUF header before confirming
-            val validation = validateGgufFile(tempFile)
-            if (validation.isFailure) {
-                tempFile.delete()
-                return@withContext ModelImportResult.Error(
-                    validation.exceptionOrNull()?.message ?: "El archivo no es un modelo GGUF válido."
-                )
-            }
-
-            // Atomic rename
-            if (targetFile.exists()) {
-                targetFile.delete()
-            }
-            if (!tempFile.renameTo(targetFile)) {
-                tempFile.copyTo(targetFile, overwrite = true)
-                tempFile.delete()
-            }
-
-            val version = validation.getOrThrow()
-            ModelImportResult.Success(
-                GgufModelInfo(
-                    fileName = targetFile.name,
-                    file = targetFile,
-                    sizeBytes = targetFile.length(),
-                    ggufVersion = version,
-                    isActive = true
-                )
-            )
         } catch (e: Exception) {
             ModelImportResult.Error("Error al importar modelo: ${e.message}")
         }

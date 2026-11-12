@@ -98,6 +98,12 @@ object RestTimerManager {
     private val _state = MutableStateFlow(RestTimerState())
     val state: StateFlow<RestTimerState> = _state.asStateFlow()
 
+    /** Returns false when elapsedRealtime() reset across a device reboot left a stale target timestamp. */
+    internal fun isElapsedTargetPlausible(remMillis: Long, totalSec: Int): Boolean {
+        val maxPlausibleMillis = totalSec.coerceAtLeast(1) * 1000L + 5_000L
+        return remMillis <= maxPlausibleMillis
+    }
+
     fun initFromPrefs(context: Context) {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val totalSec = prefs.getInt(KEY_TOTAL_SEC, 90)
@@ -108,7 +114,11 @@ object RestTimerManager {
         if (isRunning && targetElapsed > 0L) {
             val nowElapsed = SystemClock.elapsedRealtime()
             val remMillis = targetElapsed - nowElapsed
-            if (remMillis > 0) {
+            if (!isElapsedTargetPlausible(remMillis, totalSec)) {
+                _state.value = RestTimerState(totalSeconds = totalSec, secondsLeft = 0)
+                clearPrefs(context)
+                return
+            } else if (remMillis > 0) {
                 val remSec = ((remMillis + 999) / 1000).toInt()
                 _state.value = RestTimerState(
                     totalSeconds = totalSec,
@@ -376,7 +386,15 @@ class RestTimerReceiver : BroadcastReceiver() {
                         .setAutoCancel(true)
                         .build()
 
-                    notificationManager.notify(NOTIFICATION_ID, notification)
+                    if (notificationManager.areNotificationsEnabled()) {
+                        try {
+                            notificationManager.notify(NOTIFICATION_ID, notification)
+                        } catch (sec: SecurityException) {
+                            RestTimerDiagnostics.log("NOTIFICATION_DENIED", sec.message ?: "POST_NOTIFICATIONS denied")
+                        }
+                    } else {
+                        RestTimerDiagnostics.log("NOTIFICATION_DISABLED", "Notifications disabled by system/user")
+                    }
                 }
 
                 // 3. Update central timer state

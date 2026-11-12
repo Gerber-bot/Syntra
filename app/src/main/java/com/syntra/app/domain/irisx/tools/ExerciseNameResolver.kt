@@ -1,6 +1,7 @@
 package com.syntra.app.domain.irisx.tools
 
 import com.syntra.app.data.ExerciseEntity
+import com.syntra.app.domain.ExerciseCatalog
 import com.syntra.app.domain.irisx.IrisXAnalytics
 
 internal sealed interface ExerciseResolution {
@@ -32,9 +33,20 @@ internal object ExerciseNameResolver {
         if (normalized.isBlank()) return ExerciseResolution.NotFound
 
         val canonical = learnedAliases[normalized]?.let { IrisXAnalytics.normalize(it) }
+        // Exact catalog alias ("press banca" -> "Press de banca"). Still not fuzzy: the whole
+        // normalized input must equal a catalog name or one of its declared aliases.
+        val catalogMatch = ExerciseCatalog.DEFAULT_CATALOG.firstOrNull { entry ->
+            IrisXAnalytics.normalize(entry.displayName) == normalized ||
+                entry.normalizedName == normalized ||
+                entry.aliases.any { IrisXAnalytics.normalize(it) == normalized }
+        }
         val acceptedNames = buildSet {
             add(normalized)
             if (!canonical.isNullOrBlank()) add(canonical)
+            if (catalogMatch != null) {
+                add(IrisXAnalytics.normalize(catalogMatch.displayName))
+                add(catalogMatch.normalizedName)
+            }
         }
 
         val matches = exercises.filter { exercise ->

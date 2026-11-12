@@ -18,7 +18,10 @@ import com.syntra.app.domain.NextSessionPlan
 import com.syntra.app.ui.theme.*
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
-import java.util.Calendar
+import java.time.DayOfWeek
+import java.time.LocalDate
+import java.time.ZoneId
+import java.time.temporal.TemporalAdjusters
 import java.util.Date
 import java.util.Locale
 
@@ -44,10 +47,15 @@ fun WeekScreen(
 
     val (startMillis, endMillis) = remember(weekOffset) { getWeekRange(weekOffset) }
 
-    // Filter completed sessions strictly in the selected week range
-    val weekSessions = remember(sessions, startMillis, endMillis) {
+    val setsCountBySession = remember(allSets) {
+        allSets.groupBy { it.sessionId }.mapValues { it.value.size }
+    }
+
+    // Include completed sessions AND legacy imported sessions that have recorded sets
+    val weekSessions = remember(sessions, setsCountBySession, startMillis, endMillis) {
         sessions.filter { s ->
-            s.finishedAtMillis != null && s.startedAtMillis in startMillis..endMillis
+            val isCompleted = s.finishedAtMillis != null || (setsCountBySession[s.id] ?: 0) > 0
+            isCompleted && s.startedAtMillis in startMillis..endMillis
         }.sortedByDescending { it.startedAtMillis }
     }
 
@@ -60,10 +68,6 @@ fun WeekScreen(
 
     val categoriesTrained = remember(weekSessions) {
         weekSessions.map { it.category.trim().ifEmpty { "General" } }.distinct()
-    }
-
-    val setsCountBySession = remember(allSets) {
-        allSets.groupBy { it.sessionId }.mapValues { it.value.size }
     }
 
     val weekHeaderLabel = remember(startMillis, endMillis) {
@@ -398,25 +402,21 @@ private fun WeekSessionCard(
     }
 }
 
-private fun getWeekRange(weekOffset: Int): Pair<Long, Long> {
-    val cal = Calendar.getInstance().apply {
-        firstDayOfWeek = Calendar.MONDAY
-        add(Calendar.WEEK_OF_YEAR, weekOffset)
-        set(Calendar.DAY_OF_WEEK, Calendar.MONDAY)
-        set(Calendar.HOUR_OF_DAY, 0)
-        set(Calendar.MINUTE, 0)
-        set(Calendar.SECOND, 0)
-        set(Calendar.MILLISECOND, 0)
-    }
-    val startMillis = cal.timeInMillis
-    cal.add(Calendar.DAY_OF_WEEK, 6)
-    cal.set(Calendar.HOUR_OF_DAY, 23)
-    cal.set(Calendar.MINUTE, 59)
-    cal.set(Calendar.SECOND, 59)
-    cal.set(Calendar.MILLISECOND, 999)
-    val endMillis = cal.timeInMillis
+internal fun computeWeekRange(
+    weekOffset: Int,
+    referenceDate: LocalDate = LocalDate.now(),
+    zoneId: ZoneId = ZoneId.systemDefault()
+): Pair<Long, Long> {
+    val monday = referenceDate
+        .plusWeeks(weekOffset.toLong())
+        .with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
+    val sunday = monday.plusDays(6)
+    val startMillis = monday.atStartOfDay(zoneId).toInstant().toEpochMilli()
+    val endMillis = sunday.plusDays(1).atStartOfDay(zoneId).toInstant().toEpochMilli() - 1L
     return Pair(startMillis, endMillis)
 }
+
+private fun getWeekRange(weekOffset: Int): Pair<Long, Long> = computeWeekRange(weekOffset)
 
 private fun formatWeekLabel(startMillis: Long, endMillis: Long): String {
     val sdf = SimpleDateFormat("d MMM", Locale.forLanguageTag("es-AR"))

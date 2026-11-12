@@ -300,13 +300,15 @@ class RoomActiveWorkoutPersistencePort(
                             createdAtMillis = finishedAtMillis
                         )
                     )
-                    exEntity = db.exerciseDao().findById(newId) ?: ExerciseEntity(
-                        id = newId,
-                        displayName = ex.name,
-                        normalizedName = norm,
-                        muscleGroup = "General",
-                        createdAtMillis = finishedAtMillis
-                    )
+                    exEntity = (if (newId > 0L) db.exerciseDao().findById(newId) else null)
+                        ?: db.exerciseDao().findByNormalizedName(norm)
+                        ?: ExerciseEntity(
+                            id = newId,
+                            displayName = ex.name,
+                            normalizedName = norm,
+                            muscleGroup = "General",
+                            createdAtMillis = finishedAtMillis
+                        )
                 }
                 ex.sets.forEachIndexed { idx, s ->
                     db.workoutSetDao().insert(

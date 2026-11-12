@@ -56,12 +56,15 @@ class LlamaCppInferenceEngine(
     @Volatile
     internal var nativeAccess: NeuralNativeAccess = LlamaAndroidNativeAccess
 
+    @Volatile
     override var state: EngineState = EngineState.UNINITIALIZED
         private set
 
+    @Volatile
     override var currentModelFile: File? = null
         private set
 
+    @Volatile
     override var metrics: InferenceMetrics = InferenceMetrics()
         private set
 
@@ -159,7 +162,7 @@ class LlamaCppInferenceEngine(
     }
 
     override fun isModelLoaded(): Boolean {
-        val ready = state == EngineState.READY && currentModelFile != null
+        val ready = (state == EngineState.READY || state == EngineState.GENERATING) && currentModelFile != null
         return if (nativeAccess.isAvailable()) {
             ready && nativeAccess.isModelLoaded()
         } else {
@@ -226,7 +229,11 @@ class LlamaCppInferenceEngine(
             }
 
             if (isCancelled) {
-                state = EngineState.READY
+                state = when {
+                    native.isModelLoaded() -> EngineState.READY
+                    currentModelFile == null -> EngineState.UNINITIALIZED
+                    else -> EngineState.ERROR
+                }
                 emit(GenerationChunk(text = "", isComplete = true, errorMessage = "Inferencia cancelada por el usuario."))
                 return@flow
             }
@@ -238,10 +245,18 @@ class LlamaCppInferenceEngine(
                 tokensPerSecond = tps,
                 lastInferenceDurationMillis = totalElapsed
             )
+            state = when {
+                native.isModelLoaded() -> EngineState.READY
+                currentModelFile == null -> EngineState.UNINITIALIZED
+                else -> EngineState.ERROR
+            }
             emit(GenerationChunk(text = "", isComplete = true, tokensGenerated = tokenCount, elapsedMillis = totalElapsed))
-            state = EngineState.READY
         } catch (cancelled: CancellationException) {
-            state = EngineState.READY
+            state = when {
+                native.isModelLoaded() -> EngineState.READY
+                currentModelFile == null -> EngineState.UNINITIALIZED
+                else -> EngineState.ERROR
+            }
             emit(GenerationChunk(text = "", isComplete = true, errorMessage = "Inferencia cancelada por el usuario."))
         } catch (e: Throwable) {
             // One failed turn must not disable a healthy native session: context overflow, a

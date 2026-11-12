@@ -1,6 +1,7 @@
 package com.syntra.app.domain.irisx
 
 import com.syntra.app.data.AppDatabase
+import androidx.room.withTransaction
 import com.syntra.app.data.ExerciseAliasEntity
 import com.syntra.app.data.ExerciseEntity
 import com.syntra.app.data.IrisxConversationEntity
@@ -143,11 +144,13 @@ class RoomIrisXRepository(private val db: AppDatabase) : IrisXRepository {
             .replace(Regex("[^a-z0-9\\s]"), " ")
             .replace(Regex("\\s+"), " ")
             .trim()
-        val existing = db.irisxMemoryDao().findByTypeAndKey("ALIAS", normAlias)
-        if (existing != null) {
-            db.irisxMemoryDao().deleteById(existing.id)
+        db.withTransaction {
+            val existing = db.irisxMemoryDao().findByTypeAndKey("ALIAS", normAlias)
+            if (existing != null) {
+                db.irisxMemoryDao().deleteById(existing.id)
+            }
+            db.exerciseAliasDao().deleteByAlias(normAlias)
         }
-        db.exerciseAliasDao().deleteByAlias(normAlias)
     }
 
     override suspend fun saveMemory(memoryType: String, sourceKey: String, targetValue: String) {
@@ -235,13 +238,17 @@ class RoomIrisXRepository(private val db: AppDatabase) : IrisXRepository {
     }
 
     override suspend fun deleteConversation(conversationId: Long) {
-        db.irisxConversationDao().deleteMessagesForConversation(conversationId)
-        db.irisxConversationDao().deleteConversationById(conversationId)
+        db.withTransaction {
+            db.irisxConversationDao().deleteMessagesForConversation(conversationId)
+            db.irisxConversationDao().deleteConversationById(conversationId)
+        }
     }
 
     override suspend fun clearAllConversations() {
-        db.irisxConversationDao().deleteAllMessages()
-        db.irisxConversationDao().deleteAllConversations()
+        db.withTransaction {
+            db.irisxConversationDao().deleteAllMessages()
+            db.irisxConversationDao().deleteAllConversations()
+        }
     }
 }
 
@@ -317,7 +324,15 @@ class IrisXCore(
                 (norm.contains("ultima vez") && (norm.contains("en ") || norm.contains("con ") || norm.contains("de ")))
             )
         if (isLastLoadPattern) {
-            return IrisXIntent.QueryLastExerciseLoad(exerciseName = extractLastExerciseTarget(norm))
+            val target = extractLastExerciseTarget(norm)
+            // "¿cuántas series hice la semana pasada?" asks about a period, not an exercise:
+            // looking up an exercise called "la semana pasada" can only produce a wrong answer.
+            val isTemporalTarget = target != null && Regex(
+                "\\b(?:semana|semanas|mes|meses|dia|dias|hoy|ayer|anio|ano|total|todas)\\b"
+            ).containsMatchIn(target)
+            if (!isTemporalTarget) {
+                return IrisXIntent.QueryLastExerciseLoad(exerciseName = target)
+            }
         }
 
         // 1c. Query exercise alternatives: e.g. "¿qué ejercicio puedo hacer en lugar de este?", "alternativa a press de banca", "reemplazo de sentadilla"
@@ -552,6 +567,17 @@ class IrisXCore(
         }
 
         val intent = parseInput(input)
+
+        // Clearing deletes every conversation, including the one on screen. Persisting this
+        // turn (or later ones) into the deleted conversation would leave orphan rows that no
+        // screen can ever reach, so hand the UI a live replacement conversation instead.
+        if (intent is IrisXIntent.ClearConversationHistory) {
+            val cleared = execute(intent, referenceTimeMillis) as IrisXResponse.Success
+            val fresh = repository.createNewConversation("Conversación principal")
+            contextState = fresh.toState()
+            return cleared.copy(payload = fresh)
+        }
+
         repository.appendMessage(
             IrisxMessageEntity(
                 conversationId = activeConv.id,

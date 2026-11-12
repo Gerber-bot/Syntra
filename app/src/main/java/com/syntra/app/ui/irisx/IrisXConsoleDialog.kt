@@ -14,6 +14,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLocale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -121,7 +122,9 @@ fun IrisXConsoleDialog(
         if (effectiveNeuralEngine.isModelLoaded()) return@LaunchedEffect
 
         val prefModelName = ModelManager.getActiveModelPreference(context)
-        val installed = ModelManager.listInstalledModels(context)
+        val installed = withContext(Dispatchers.IO) {
+            ModelManager.listInstalledModels(context)
+        }
         val modelToLoad = if (!prefModelName.isNullOrBlank()) {
             installed.firstOrNull { it.fileName == prefModelName }?.file
                 ?: installed.firstOrNull()?.file
@@ -256,6 +259,17 @@ fun IrisXConsoleDialog(
             // IrisXCore.ask() is the single writer of deterministic turns: it persists the USER
             // message and the IRISX reply. Persisting here too created the duplicated pairs.
             val resp = irisXCore.ask(userMessage, conversation = conversation)
+            // "borrar conversación" deletes every chat: continue in the live replacement the core
+            // created, otherwise later turns would be saved into a conversation that no longer exists.
+            ((resp as? IrisXResponse.Success)?.payload as? IrisxConversationEntity)
+                ?.takeIf { resp.actionTaken == "CLEAR_CONVERSATIONS" }
+                ?.let { replacement ->
+                    conversationMutex.withLock {
+                        messages.clear()
+                        activeConversation = replacement
+                        loadedConversationId = replacement.id
+                    }
+                }
             replyText = when (resp) {
                 is IrisXResponse.Success -> resp.message
                 is IrisXResponse.RequiresConfirmation -> "${resp.question}\nPara confirmar escribí: ${resp.confirmCommand}"
@@ -511,7 +525,7 @@ fun IrisXConsoleDialog(
                                                 fontWeight = FontWeight.Bold,
                                                 color = if (isCurrent) SyntraColors.NeonMint else SyntraColors.TextPrimary
                                             )
-                                            val dateStr = SimpleDateFormat("dd/MM HH:mm", Locale.getDefault()).format(Date(conv.updatedAtMillis))
+                                            val dateStr = SimpleDateFormat("dd/MM HH:mm", LocalLocale.current.platformLocale).format(Date(conv.updatedAtMillis))
                                             Text(
                                                 text = dateStr,
                                                 style = MaterialTheme.typography.labelSmall,

@@ -99,39 +99,65 @@ object IrisXGuardian {
     private fun evaluateMemory(context: Context, modelSizeBytes: Long): GuardianCheckResult {
         return try {
             val actManager = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+                ?: return GuardianCheckResult(
+                    safetyLevel = GuardianSafetyLevel.WARNING,
+                    canProceed = true,
+                    reason = "No se pudo consultar la memoria RAM disponible."
+                )
             val memInfo = ActivityManager.MemoryInfo()
-            actManager?.getMemoryInfo(memInfo)
-
-            val avail = memInfo.availMem
-            val needed = modelSizeBytes + MIN_FREE_MEMORY_BYTES
-
-            when {
-                memInfo.lowMemory || avail < MIN_FREE_MEMORY_BYTES -> {
-                    GuardianCheckResult(
-                        safetyLevel = GuardianSafetyLevel.CRITICAL,
-                        canProceed = false,
-                        reason = "Memoria RAM insuficiente (${avail / (1024 * 1024)} MB libres). Riesgo de cierre por el sistema.",
-                        availableMemoryBytes = avail
-                    )
-                }
-                avail < needed -> {
-                    GuardianCheckResult(
-                        safetyLevel = GuardianSafetyLevel.WARNING,
-                        canProceed = true,
-                        reason = "Memoria libre ajustada (${avail / (1024 * 1024)} MB). Se recomienda limitar contexto.",
-                        availableMemoryBytes = avail
-                    )
-                }
-                else -> {
-                    GuardianCheckResult(
-                        safetyLevel = GuardianSafetyLevel.SAFE,
-                        canProceed = true,
-                        availableMemoryBytes = avail
-                    )
-                }
-            }
+            actManager.getMemoryInfo(memInfo)
+            evaluateMemoryValues(
+                avail = memInfo.availMem,
+                lowMemory = memInfo.lowMemory,
+                modelSizeBytes = modelSizeBytes
+            )
         } catch (_: Exception) {
-            GuardianCheckResult(GuardianSafetyLevel.SAFE, canProceed = true)
+            GuardianCheckResult(
+                safetyLevel = GuardianSafetyLevel.WARNING,
+                canProceed = true,
+                reason = "No se pudo verificar la memoria RAM disponible."
+            )
+        }
+    }
+
+    internal fun evaluateMemoryValues(
+        avail: Long,
+        lowMemory: Boolean,
+        modelSizeBytes: Long
+    ): GuardianCheckResult {
+        val needed = modelSizeBytes + MIN_FREE_MEMORY_BYTES
+        return when {
+            lowMemory || avail < MIN_FREE_MEMORY_BYTES -> {
+                GuardianCheckResult(
+                    safetyLevel = GuardianSafetyLevel.CRITICAL,
+                    canProceed = false,
+                    reason = "Memoria RAM insuficiente (${avail / (1024 * 1024)} MB libres). Riesgo de cierre por el sistema.",
+                    availableMemoryBytes = avail
+                )
+            }
+            modelSizeBytes > 0L && avail < modelSizeBytes -> {
+                GuardianCheckResult(
+                    safetyLevel = GuardianSafetyLevel.CRITICAL,
+                    canProceed = false,
+                    reason = "Memoria RAM libre (${avail / (1024 * 1024)} MB) inferior al tamaño del modelo (${modelSizeBytes / (1024 * 1024)} MB).",
+                    availableMemoryBytes = avail
+                )
+            }
+            avail < needed -> {
+                GuardianCheckResult(
+                    safetyLevel = GuardianSafetyLevel.WARNING,
+                    canProceed = true,
+                    reason = "Memoria libre ajustada (${avail / (1024 * 1024)} MB). Se recomienda limitar contexto.",
+                    availableMemoryBytes = avail
+                )
+            }
+            else -> {
+                GuardianCheckResult(
+                    safetyLevel = GuardianSafetyLevel.SAFE,
+                    canProceed = true,
+                    availableMemoryBytes = avail
+                )
+            }
         }
     }
 
@@ -218,7 +244,11 @@ object IrisXGuardian {
                 else -> GuardianCheckResult(GuardianSafetyLevel.SAFE, canProceed = true, batteryPct = pct, isCharging = isCharging)
             }
         } catch (_: Exception) {
-            GuardianCheckResult(GuardianSafetyLevel.SAFE, canProceed = true)
+            GuardianCheckResult(
+                safetyLevel = GuardianSafetyLevel.WARNING,
+                canProceed = true,
+                reason = "No se pudo verificar el nivel de batería."
+            )
         }
     }
 }

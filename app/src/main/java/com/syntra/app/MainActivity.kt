@@ -20,6 +20,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -140,26 +141,51 @@ private fun TrainerApp(db: AppDatabase) {
 
     var loaded by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
-    var page by remember { mutableStateOf("Inicio") }
-    var isEditingProfile by remember { mutableStateOf(false) }
+    var isSavingWeight by remember { mutableStateOf(false) }
+    var page by rememberSaveable { mutableStateOf("Inicio") }
+    var isEditingProfile by rememberSaveable { mutableStateOf(false) }
     var showIrisXConsole by remember { mutableStateOf(false) }
     var analyzerDraftText by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(db) {
-        val existing = db.exerciseDao().getAll()
-        if (existing.isEmpty()) {
-            db.exerciseDao().insertAll(ExerciseCatalog.toEntities())
-            for (catEx in ExerciseCatalog.DEFAULT_CATALOG) {
-                val entity = db.exerciseDao().findByNormalizedName(catEx.normalizedName)
-                if (entity != null) {
-                    val aliases = catEx.aliases.map {
-                        ExerciseAliasEntity(
-                            exerciseId = entity.id,
-                            normalizedAlias = WorkoutTextParser.normalize(it)
-                        )
+        db.withTransaction {
+            val existing = db.exerciseDao().getAll()
+            if (existing.isEmpty()) {
+                db.exerciseDao().insertAll(ExerciseCatalog.toEntities())
+                for (catEx in ExerciseCatalog.DEFAULT_CATALOG) {
+                    val entity = db.exerciseDao().findByNormalizedName(catEx.normalizedName)
+                    if (entity != null) {
+                        val aliases = catEx.aliases.map {
+                            ExerciseAliasEntity(
+                                exerciseId = entity.id,
+                                normalizedAlias = WorkoutTextParser.normalize(it)
+                            )
+                        }
+                        db.exerciseAliasDao().insertAll(aliases)
                     }
-                    db.exerciseAliasDao().insertAll(aliases)
                 }
+            }
+            if (db.categoryDao().getAll().isEmpty()) {
+                val defaultCategories = listOf(
+                    Triple("Pecho", "🛡️", 0),
+                    Triple("Espalda", "🏹", 1),
+                    Triple("Piernas", "🦵", 2),
+                    Triple("Hombros", "🏋️", 3),
+                    Triple("Brazos", "💪", 4),
+                    Triple("Full Body", "⚡", 5),
+                    Triple("Torso", "🏛️", 6),
+                    Triple("Push", "↗️", 7),
+                    Triple("Pull", "↙️", 8)
+                ).map { (name, icon, order) ->
+                    CategoryEntity(
+                        name = name,
+                        icon = icon,
+                        orderIndex = order,
+                        isHidden = false,
+                        colorHex = "#75D9C1"
+                    )
+                }
+                db.categoryDao().insertAll(defaultCategories)
             }
         }
         profileFlow.first()
@@ -345,17 +371,21 @@ private fun TrainerApp(db: AppDatabase) {
                     },
                     onNavigateToHistory = { page = "Historial" }
                 )
-                "Peso" -> WeightScreen(db, error) { input ->
+                "Peso" -> WeightScreen(db, error, isSaving = isSavingWeight) { input ->
+                    if (isSavingWeight) return@WeightScreen
                     val grams = weightGrams(input)
                     if (grams == null) {
                         error = "Introducí un peso válido entre 20 y 400 kg."
                     } else {
+                        isSavingWeight = true
                         scope.launch {
                             try {
                                 db.weighInDao().insert(WeighInEntity(weightGrams = grams, measuredAtMillis = System.currentTimeMillis()))
                                 error = null
                             } catch (e: Exception) {
                                 error = "No se pudo registrar el pesaje."
+                            } finally {
+                                isSavingWeight = false
                             }
                         }
                     }
@@ -478,14 +508,16 @@ private fun ProfileViewScreen(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri ->
         if (uri != null) {
-            when (val validation = backupManager.readAndValidateFromUri(context, uri)) {
-                is BackupValidationResult.Success -> {
-                    pendingRestorePayload = validation.payload
-                    errorMessage = null
-                }
-                is BackupValidationResult.Error -> {
-                    errorMessage = "Archivo no válido: ${validation.message}"
-                    statusMessage = null
+            scope.launch {
+                when (val validation = backupManager.readAndValidateFromUri(context, uri)) {
+                    is BackupValidationResult.Success -> {
+                        pendingRestorePayload = validation.payload
+                        errorMessage = null
+                    }
+                    is BackupValidationResult.Error -> {
+                        errorMessage = "Archivo no válido: ${validation.message}"
+                        statusMessage = null
+                    }
                 }
             }
         }
@@ -1054,12 +1086,12 @@ private fun ProfileForm(
     onCancel: () -> Unit,
     onSave: (String, String, Int, Int, String, String) -> Unit
 ) {
-    var name by remember(current) { mutableStateOf(current?.name ?: "") }
-    var preferred by remember(current) { mutableStateOf(current?.preferredName ?: "") }
-    var height by remember(current) { mutableStateOf(current?.heightCm?.toString() ?: "") }
-    var weight by remember(current) { mutableStateOf(current?.initialWeightGrams?.let(::displayKg) ?: "") }
-    var activity by remember(current) { mutableStateOf(current?.activityLevel ?: "Sedentario") }
-    var goal by remember(current) { mutableStateOf(current?.goal ?: "Seguimiento general") }
+    var name by rememberSaveable(current?.id) { mutableStateOf(current?.name ?: "") }
+    var preferred by rememberSaveable(current?.id) { mutableStateOf(current?.preferredName ?: "") }
+    var height by rememberSaveable(current?.id) { mutableStateOf(current?.heightCm?.toString() ?: "") }
+    var weight by rememberSaveable(current?.id) { mutableStateOf(current?.initialWeightGrams?.let(::displayKg) ?: "") }
+    var activity by rememberSaveable(current?.id) { mutableStateOf(current?.activityLevel ?: "Sedentario") }
+    var goal by rememberSaveable(current?.id) { mutableStateOf(current?.goal ?: "Seguimiento general") }
     var validation by remember { mutableStateOf<String?>(null) }
 
     Column(
@@ -1360,45 +1392,47 @@ private fun HomeScreen(
                             val now = System.currentTimeMillis()
                             val steps = NextSessionPlanner.parseSequenceSteps(sequenceInputText)
                             val serialized = NextSessionPlanner.serializeSequenceSteps(steps)
-                            val existingSteps = db.irisxMemoryDao().findByTypeAndKey(
-                                NextSessionPlanner.MEMORY_TYPE_SEQUENCE,
-                                NextSessionPlanner.KEY_STEPS
-                            )
-                            if (serialized.isNotBlank()) {
-                                db.irisxMemoryDao().insert(
-                                    IrisxMemoryEntity(
-                                        id = existingSteps?.id ?: 0,
-                                        memoryType = NextSessionPlanner.MEMORY_TYPE_SEQUENCE,
-                                        sourceKey = NextSessionPlanner.KEY_STEPS,
-                                        targetValue = serialized,
-                                        confidence = 1.0,
-                                        createdAtMillis = existingSteps?.createdAtMillis ?: now,
-                                        updatedAtMillis = now
-                                    )
-                                )
-                            } else if (existingSteps != null) {
-                                db.irisxMemoryDao().deleteById(existingSteps.id)
-                            }
-
-                            val existingManual = db.irisxMemoryDao().findByTypeAndKey(
-                                NextSessionPlanner.MEMORY_TYPE_SEQUENCE,
-                                NextSessionPlanner.KEY_MANUAL_NEXT
-                            )
                             val cleanManual = manualStepInput.trim()
-                            if (cleanManual.isNotBlank()) {
-                                db.irisxMemoryDao().insert(
-                                    IrisxMemoryEntity(
-                                        id = existingManual?.id ?: 0,
-                                        memoryType = NextSessionPlanner.MEMORY_TYPE_SEQUENCE,
-                                        sourceKey = NextSessionPlanner.KEY_MANUAL_NEXT,
-                                        targetValue = cleanManual,
-                                        confidence = 1.0,
-                                        createdAtMillis = existingManual?.createdAtMillis ?: now,
-                                        updatedAtMillis = now
-                                    )
+                            db.withTransaction {
+                                val existingSteps = db.irisxMemoryDao().findByTypeAndKey(
+                                    NextSessionPlanner.MEMORY_TYPE_SEQUENCE,
+                                    NextSessionPlanner.KEY_STEPS
                                 )
-                            } else if (existingManual != null && manualStepInput.isNotEmpty()) {
-                                db.irisxMemoryDao().deleteById(existingManual.id)
+                                if (serialized.isNotBlank()) {
+                                    db.irisxMemoryDao().insert(
+                                        IrisxMemoryEntity(
+                                            id = existingSteps?.id ?: 0,
+                                            memoryType = NextSessionPlanner.MEMORY_TYPE_SEQUENCE,
+                                            sourceKey = NextSessionPlanner.KEY_STEPS,
+                                            targetValue = serialized,
+                                            confidence = 1.0,
+                                            createdAtMillis = existingSteps?.createdAtMillis ?: now,
+                                            updatedAtMillis = now
+                                        )
+                                    )
+                                } else if (existingSteps != null) {
+                                    db.irisxMemoryDao().deleteById(existingSteps.id)
+                                }
+
+                                val existingManual = db.irisxMemoryDao().findByTypeAndKey(
+                                    NextSessionPlanner.MEMORY_TYPE_SEQUENCE,
+                                    NextSessionPlanner.KEY_MANUAL_NEXT
+                                )
+                                if (cleanManual.isNotBlank()) {
+                                    db.irisxMemoryDao().insert(
+                                        IrisxMemoryEntity(
+                                            id = existingManual?.id ?: 0,
+                                            memoryType = NextSessionPlanner.MEMORY_TYPE_SEQUENCE,
+                                            sourceKey = NextSessionPlanner.KEY_MANUAL_NEXT,
+                                            targetValue = cleanManual,
+                                            confidence = 1.0,
+                                            createdAtMillis = existingManual?.createdAtMillis ?: now,
+                                            updatedAtMillis = now
+                                        )
+                                    )
+                                } else if (existingManual != null && manualStepInput.isNotEmpty()) {
+                                    db.irisxMemoryDao().deleteById(existingManual.id)
+                                }
                             }
                             manualStepInput = ""
                             showSequenceConfigDialog = false
@@ -1784,9 +1818,14 @@ private fun HomeScreen(
 }
 
 @Composable
-private fun WeightScreen(db: AppDatabase, error: String?, save: (String) -> Unit) {
+private fun WeightScreen(
+    db: AppDatabase,
+    error: String?,
+    isSaving: Boolean = false,
+    save: (String) -> Unit
+) {
     val history by remember(db) { db.weighInDao().observeAll() }.collectAsState(initial = emptyList())
-    var weightInput by remember { mutableStateOf("") }
+    var weightInput by rememberSaveable { mutableStateOf("") }
 
     Column(
         modifier = Modifier.fillMaxSize(),
@@ -1816,10 +1855,13 @@ private fun WeightScreen(db: AppDatabase, error: String?, save: (String) -> Unit
                     )
                 )
                 SyntraButton(
-                    text = "Registrar pesaje",
+                    text = if (isSaving) "Guardando..." else "Registrar pesaje",
+                    enabled = !isSaving,
                     onClick = {
-                        save(weightInput)
-                        if (weightGrams(weightInput) != null) weightInput = ""
+                        if (isSaving) return@SyntraButton
+                        val trimmedInput = weightInput
+                        save(trimmedInput)
+                        if (weightGrams(trimmedInput) != null) weightInput = ""
                     },
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -1878,8 +1920,8 @@ private fun ParserScreen(
     onNavigateToHistory: () -> Unit,
     onOpenRoutines: () -> Unit = {}
 ) {
-    var input by remember { mutableStateOf("") }
-    var analyzed by remember { mutableStateOf(false) }
+    var input by rememberSaveable { mutableStateOf("") }
+    var analyzed by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(initialDraft) {
         if (!initialDraft.isNullOrBlank()) {
@@ -1889,6 +1931,7 @@ private fun ParserScreen(
         }
     }
     var showSaveConfirmation by remember { mutableStateOf(false) }
+    var isSavingSession by remember { mutableStateOf(false) }
     var saveSuccess by remember { mutableStateOf(false) }
     var saveError by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
@@ -1934,24 +1977,26 @@ private fun ParserScreen(
                         val normAlias = WorkoutTextParser.normalize(originalName)
                         val normCanonical = WorkoutTextParser.normalize(updated.name)
                         val now = System.currentTimeMillis()
-                        db.irisxMemoryDao().insert(
-                            IrisxMemoryEntity(
-                                memoryType = "ALIAS",
-                                sourceKey = normAlias,
-                                targetValue = updated.name,
-                                confidence = 1.0,
-                                createdAtMillis = now,
-                                updatedAtMillis = now
-                            )
-                        )
-                        val ex = db.exerciseDao().findByNormalizedName(normCanonical)
-                        if (ex != null) {
-                            db.exerciseAliasDao().insert(
-                                ExerciseAliasEntity(
-                                    exerciseId = ex.id,
-                                    normalizedAlias = normAlias
+                        db.withTransaction {
+                            db.irisxMemoryDao().insert(
+                                IrisxMemoryEntity(
+                                    memoryType = "ALIAS",
+                                    sourceKey = normAlias,
+                                    targetValue = updated.name,
+                                    confidence = 1.0,
+                                    createdAtMillis = now,
+                                    updatedAtMillis = now
                                 )
                             )
+                            val ex = db.exerciseDao().findByNormalizedName(normCanonical)
+                            if (ex != null) {
+                                db.exerciseAliasDao().insert(
+                                    ExerciseAliasEntity(
+                                        exerciseId = ex.id,
+                                        normalizedAlias = normAlias
+                                    )
+                                )
+                            }
                         }
                     }
                 }
@@ -2003,18 +2048,30 @@ private fun ParserScreen(
             },
             confirmButton = {
                 Button(
+                    enabled = !isSavingSession,
                     onClick = {
+                        if (isSavingSession) return@Button
+                        isSavingSession = true
                         scope.launch {
                             try {
                                 val now = System.currentTimeMillis()
                                 val title = preview.sessionTitle ?: "Entrenamiento"
+                                val resolvedCategory = WorkoutCategoryClassifier.resolveSessionCategory(
+                                    explicitCategory = null,
+                                    routineCategory = null,
+                                    title = title,
+                                    exerciseNames = currentExercises.map { it.name },
+                                    learnedAliases = mergedAliases
+                                )
                                 db.withTransaction {
                                     val sId = db.workoutSessionDao().insert(
                                         WorkoutSessionEntity(
                                             title = title,
+                                            category = resolvedCategory,
                                             startedAtMillis = now,
                                             finishedAtMillis = now,
-                                            notes = ""
+                                            notes = "",
+                                            sessionUuid = java.util.UUID.randomUUID().toString()
                                         )
                                     )
                                     var execOrder = 1
@@ -2033,13 +2090,15 @@ private fun ParserScreen(
                                                     createdAtMillis = now
                                                 )
                                             )
-                                            exEntity = db.exerciseDao().findById(newId) ?: ExerciseEntity(
-                                                id = newId,
-                                                displayName = ex.name,
-                                                normalizedName = norm,
-                                                muscleGroup = "General",
-                                                createdAtMillis = now
-                                            )
+                                            exEntity = (if (newId > 0L) db.exerciseDao().findById(newId) else null)
+                                                ?: db.exerciseDao().findByNormalizedName(norm)
+                                                ?: ExerciseEntity(
+                                                    id = newId,
+                                                    displayName = ex.name,
+                                                    normalizedName = norm,
+                                                    muscleGroup = "General",
+                                                    createdAtMillis = now
+                                                )
                                         }
                                         ex.sets.forEachIndexed { idx, s ->
                                             db.workoutSetDao().insert(
@@ -2068,6 +2127,8 @@ private fun ParserScreen(
                             } catch (e: Exception) {
                                 saveError = "Error al guardar sesión: ${e.message}"
                                 showSaveConfirmation = false
+                            } finally {
+                                isSavingSession = false
                             }
                         }
                     },
@@ -2076,7 +2137,7 @@ private fun ParserScreen(
                         contentColor = Color.Black
                     )
                 ) {
-                    Text("Confirmar y guardar", fontWeight = FontWeight.Bold)
+                    Text(if (isSavingSession) "Guardando..." else "Confirmar y guardar", fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {
@@ -2772,7 +2833,7 @@ private fun SessionHistoryCard(
                                 isDumbbell = s.isDumbbell,
                                 note = s.note,
                                 loadUnit = s.loadUnit,
-                                rawLoadValue = s.loadGrams / 1000.0,
+                                rawLoadValue = UnitConverter.toRawValue(s.loadGrams, s.loadUnit),
                                 isToFailure = s.isToFailure
                             )
                         }

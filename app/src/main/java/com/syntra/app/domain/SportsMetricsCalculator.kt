@@ -172,6 +172,7 @@ object SportsMetricsCalculator {
         var assistedGrams = 0L
 
         var regularSets = 0
+        var machineBlocksSets = 0
         var dumbbellSets = 0
         var unilateralSets = 0
         var weightedBwSets = 0
@@ -210,8 +211,8 @@ object SportsMetricsCalculator {
                     barbellMachineGrams += setGrams * reps
                 }
                 LoadModality.MACHINE_BLOCKS -> {
-                    // Machine blocks/plates: counted in completed sets without corrupting kg tonnage
-                    regularSets++
+                    // Machine blocks/plates: tracked separately so barbell/machine kg set count is accurate
+                    machineBlocksSets++
                 }
             }
         }
@@ -234,6 +235,7 @@ object SportsMetricsCalculator {
         if (weightedBwKg > 0) details.add("+${formatKg(weightedBwKg)} lastre ($weightedBwSets series)")
         if (assistedSets > 0) details.add("$assistedSets series asistidas (-${formatKg(assistedKg)} contrapeso)")
         if (bodyweightSets > 0) details.add("$bodyweightSets series corporales")
+        if (machineBlocksSets > 0) details.add("$machineBlocksSets series en bloques/placas")
 
         if (details.isNotEmpty()) {
             parts.add("Desglose: ${details.joinToString(" • ")}.")

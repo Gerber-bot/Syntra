@@ -14,6 +14,19 @@
 #define LOGi(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 #define LOGe(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
+static void jni_throw(JNIEnv *env, const char *class_name, const char *message) {
+    if (!env) return;
+    jclass cls = env->FindClass(class_name);
+    if (!cls) {
+        env->ExceptionClear();
+        cls = env->FindClass("java/lang/RuntimeException");
+    }
+    if (cls) {
+        env->ThrowNew(cls, message);
+        env->DeleteLocalRef(cls);
+    }
+}
+
 static std::atomic<uint64_t> g_active_generation_id{0};
 static std::atomic<uint64_t> g_cancelled_generation_id{0};
 static uint64_t g_buffer_generation_id{0};
@@ -180,9 +193,18 @@ static void log_callback(ggml_log_level level, const char * fmt, void * data) {
 extern "C"
 JNIEXPORT jlong JNICALL
 Java_android_llama_cpp_LLamaAndroid_load_1model(JNIEnv *env, jobject, jstring filename) {
+    if (!filename) {
+        jni_throw(env, "java/lang/IllegalArgumentException", "Model filename cannot be null");
+        return 0;
+    }
+
     llama_model_params model_params = llama_model_default_params();
 
     auto path_to_model = env->GetStringUTFChars(filename, 0);
+    if (!path_to_model) {
+        LOGe("load_model(): GetStringUTFChars failed");
+        return 0;
+    }
     LOGi("Loading model from %s", path_to_model);
 
     auto model = llama_model_load_from_file(path_to_model, model_params);
@@ -190,8 +212,17 @@ Java_android_llama_cpp_LLamaAndroid_load_1model(JNIEnv *env, jobject, jstring fi
 
     if (!model) {
         LOGe("load_model() failed");
-        env->ThrowNew(env->FindClass("java/lang/IllegalStateException"), "load_model() failed");
+        jni_throw(env, "java/lang/IllegalStateException", "load_model() failed");
         return 0;
+    }
+
+    // Reset cooperative generation state cleanly for the new native model lifecycle
+    g_active_generation_id.store(0);
+    g_cancelled_generation_id.store(0);
+    {
+        std::lock_guard<std::mutex> lock(g_token_chars_mutex);
+        cached_token_chars.clear();
+        g_buffer_generation_id = 0;
     }
 
     return reinterpret_cast<jlong>(model);
@@ -211,7 +242,7 @@ Java_android_llama_cpp_LLamaAndroid_new_1context(JNIEnv *env, jobject, jlong jmo
 
     if (!model) {
         LOGe("new_context(): model cannot be null");
-        env->ThrowNew(env->FindClass("java/lang/IllegalArgumentException"), "Model cannot be null");
+        jni_throw(env, "java/lang/IllegalArgumentException", "Model cannot be null");
         return 0;
     }
 
@@ -228,8 +259,8 @@ Java_android_llama_cpp_LLamaAndroid_new_1context(JNIEnv *env, jobject, jlong jmo
 
     if (!context) {
         LOGe("llama_init_from_model() returned null)");
-        env->ThrowNew(env->FindClass("java/lang/IllegalStateException"),
-                      "llama_init_from_model() returned null)");
+        jni_throw(env, "java/lang/IllegalStateException",
+                  "llama_init_from_model() returned null)");
         return 0;
     }
 
@@ -268,6 +299,15 @@ Java_android_llama_cpp_LLamaAndroid_bench_1model(
         jint pl,
         jint nr
         ) {
+    if (!context_pointer || !model_pointer || !batch_pointer) {
+        jni_throw(env, "java/lang/IllegalArgumentException", "bench_model(): invalid null pointers");
+        return env->NewStringUTF("");
+    }
+    if (nr <= 0 || pp <= 0 || tg < 0 || pl <= 0) {
+        jni_throw(env, "java/lang/IllegalArgumentException", "bench_model(): parameters must be positive");
+        return env->NewStringUTF("");
+    }
+
     auto pp_avg = 0.0;
     auto tg_avg = 0.0;
     auto pp_std = 0.0;
@@ -278,6 +318,7 @@ Java_android_llama_cpp_LLamaAndroid_bench_1model(
     const auto batch = reinterpret_cast<llama_batch *>(batch_pointer);
 
     const int n_ctx = llama_n_ctx(context);
+    const int safe_pp = std::min(pp, std::min(2048, std::max(1, n_ctx)));
 
     LOGi("n_ctx = %d", n_ctx);
 
@@ -288,7 +329,7 @@ Java_android_llama_cpp_LLamaAndroid_bench_1model(
 
         common_batch_clear(*batch);
 
-        const int n_tokens = pp;
+        const int n_tokens = safe_pp;
         for (i = 0; i < n_tokens; i++) {
             common_batch_add(*batch, 0, i, { 0 }, false);
         }
@@ -325,11 +366,11 @@ Java_android_llama_cpp_LLamaAndroid_bench_1model(
 
         llama_kv_self_clear(context);
 
-        const auto t_pp = double(t_pp_end - t_pp_start) / 1000000.0;
-        const auto t_tg = double(t_tg_end - t_tg_start) / 1000000.0;
+        const auto t_pp = std::max(1e-9, double(t_pp_end - t_pp_start) / 1000000.0);
+        const auto t_tg = std::max(1e-9, double(t_tg_end - t_tg_start) / 1000000.0);
 
-        const auto speed_pp = double(pp) / t_pp;
-        const auto speed_tg = double(pl * tg) / t_tg;
+        const auto speed_pp = double(safe_pp) / t_pp;
+        const auto speed_tg = (tg > 0) ? (double(pl * tg) / t_tg) : 0.0;
 
         pp_avg += speed_pp;
         tg_avg += speed_tg;
@@ -465,27 +506,32 @@ Java_android_llama_cpp_LLamaAndroid_completion_1init(
 
     if (g_cancelled_generation_id.load() >= static_cast<uint64_t>(gen_id)) {
         LOGi("completion_init: generation %llu was cancelled prior to initialization", (unsigned long long)gen_id);
-        env->ThrowNew(env->FindClass("java/util/concurrent/CancellationException"),
-                      "Generación cancelada antes de inicializar");
+        jni_throw(env, "java/util/concurrent/CancellationException",
+                  "Generación cancelada antes de inicializar");
         return -1;
     }
 
     if (!context_pointer || !batch_pointer || !jtext) {
         LOGe("completion_init: invalid null pointers passed");
-        env->ThrowNew(env->FindClass("java/lang/IllegalArgumentException"), "Punteros nulos pasados a completion_init");
+        jni_throw(env, "java/lang/IllegalArgumentException", "Punteros nulos pasados a completion_init");
         return -1;
     }
 
-    // Reset sampler state across generations to avoid penalty/state contamination
+    // Reset sampler and KV cache across generations to avoid state contamination
     if (sampler_pointer) {
         llama_sampler_reset(reinterpret_cast<llama_sampler *>(sampler_pointer));
     }
 
     const auto text = env->GetStringUTFChars(jtext, 0);
+    if (!text) {
+        LOGe("completion_init: GetStringUTFChars failed");
+        return -1;
+    }
     const auto context = reinterpret_cast<llama_context *>(context_pointer);
     const auto batch = reinterpret_cast<llama_batch *>(batch_pointer);
+    llama_kv_self_clear(context);
 
-    bool has_chatml = (format_chat == JNI_TRUE) || (text != nullptr && strstr(text, "<|im_start|>") != nullptr);
+    bool has_chatml = (format_chat == JNI_TRUE) || (strstr(text, "<|im_start|>") != nullptr);
     bool parse_special = has_chatml;
     bool add_special = !has_chatml; // Avoid double BOS token corruption when ChatML is present
     const auto tokens_list = common_tokenize(context, text, add_special, parse_special);
@@ -499,8 +545,8 @@ Java_android_llama_cpp_LLamaAndroid_completion_1init(
     if (tokens_list.empty()) {
         LOGe("completion_init: prompt produced 0 tokens");
         env->ReleaseStringUTFChars(jtext, text);
-        env->ThrowNew(env->FindClass("java/lang/IllegalArgumentException"),
-                      "El prompt no produjo tokens válidos");
+        jni_throw(env, "java/lang/IllegalArgumentException",
+                  "El prompt no produjo tokens válidos");
         return -1;
     }
 
@@ -508,16 +554,16 @@ Java_android_llama_cpp_LLamaAndroid_completion_1init(
         LOGe("completion_init: prompt tokens (%zu) + n_len (%d) > n_ctx (%u), context overflow",
              tokens_list.size(), n_len, n_ctx);
         env->ReleaseStringUTFChars(jtext, text);
-        env->ThrowNew(env->FindClass("java/lang/IllegalArgumentException"),
-                      "El prompt excede el tamaño máximo de contexto del modelo");
+        jni_throw(env, "java/lang/IllegalArgumentException",
+                  "El prompt excede el tamaño máximo de contexto del modelo");
         return -1;
     }
 
     if (g_cancelled_generation_id.load() >= static_cast<uint64_t>(gen_id)) {
         LOGi("completion_init: aborted due to cancellation");
         env->ReleaseStringUTFChars(jtext, text);
-        env->ThrowNew(env->FindClass("java/util/concurrent/CancellationException"),
-                      "Inferencia cancelada durante la preparación");
+        jni_throw(env, "java/util/concurrent/CancellationException",
+                  "Inferencia cancelada durante la preparación");
         return -1;
     }
 
@@ -539,8 +585,8 @@ Java_android_llama_cpp_LLamaAndroid_completion_1init(
         LOGe("llama_decode() failed on prompt evaluation");
         llama_kv_self_clear(context);
         env->ReleaseStringUTFChars(jtext, text);
-        env->ThrowNew(env->FindClass("java/lang/IllegalStateException"),
-                      "llama_decode() falló al evaluar el prompt inicial");
+        jni_throw(env, "java/lang/IllegalStateException",
+                  "llama_decode() falló al evaluar el prompt inicial");
         return -2;
     }
 
@@ -568,15 +614,15 @@ Java_android_llama_cpp_LLamaAndroid_completion_1loop(
         if (g_buffer_generation_id == static_cast<uint64_t>(gen_id)) {
             cached_token_chars.clear();
         }
-        env->ThrowNew(env->FindClass("java/util/concurrent/CancellationException"),
-                      "Inferencia cancelada por el usuario");
+        jni_throw(env, "java/util/concurrent/CancellationException",
+                  "Inferencia cancelada por el usuario");
         return nullptr;
     }
 
     if (!context_pointer || !batch_pointer || !sampler_pointer) {
         LOGe("completion_loop: invalid null pointers passed");
-        env->ThrowNew(env->FindClass("java/lang/IllegalArgumentException"),
-                      "Punteros nativos nulos en completion_loop");
+        jni_throw(env, "java/lang/IllegalArgumentException",
+                  "Punteros nativos nulos en completion_loop");
         return nullptr;
     }
 
@@ -596,8 +642,8 @@ Java_android_llama_cpp_LLamaAndroid_completion_1loop(
         if (g_buffer_generation_id == static_cast<uint64_t>(gen_id)) {
             cached_token_chars.clear();
         }
-        env->ThrowNew(env->FindClass("java/util/concurrent/CancellationException"),
-                      "Inferencia cancelada por el usuario");
+        jni_throw(env, "java/util/concurrent/CancellationException",
+                  "Inferencia cancelada por el usuario");
         return nullptr;
     }
 
@@ -633,8 +679,8 @@ Java_android_llama_cpp_LLamaAndroid_completion_1loop(
         if (g_buffer_generation_id == static_cast<uint64_t>(gen_id)) {
             cached_token_chars.clear();
         }
-        env->ThrowNew(env->FindClass("java/lang/IllegalStateException"),
-                      "llama_decode() falló durante la generación");
+        jni_throw(env, "java/lang/IllegalStateException",
+                  "llama_decode() falló durante la generación");
         return nullptr;
     }
 

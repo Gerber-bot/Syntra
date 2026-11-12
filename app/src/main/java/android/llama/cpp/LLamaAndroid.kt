@@ -95,7 +95,7 @@ class LLamaAndroid {
             if (ensureNativeLoaded()) {
                 try {
                     log_to_android()
-                    backend_init(false)
+                    backend_init()
                     Log.d(tag, system_info())
                 } catch (e: Throwable) {
                     Log.w(tag, "Failed to initialize native backend: ${e.message}")
@@ -182,7 +182,7 @@ class LLamaAndroid {
     private external fun free_model(model: Long)
     private external fun new_context(model: Long): Long
     private external fun free_context(context: Long)
-    private external fun backend_init(numa: Boolean)
+    private external fun backend_init()
     private external fun backend_free()
     private external fun new_batch(nTokens: Int, embd: Int, nSeqMax: Int): Long
     private external fun free_batch(batch: Long)

@@ -4,12 +4,44 @@ import android.content.Context
 import android.net.Uri
 import androidx.room.withTransaction
 import com.syntra.app.data.*
-import java.io.BufferedReader
-import java.io.InputStreamReader
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
+import java.io.InputStream
 import java.io.OutputStreamWriter
 import java.nio.charset.StandardCharsets
 
 class BackupManager(private val db: AppDatabase) {
+
+    companion object {
+        internal const val MAX_BACKUP_BYTES = 25 * 1024 * 1024 // 25 MB safety limit
+
+        internal fun shouldReplaceOptionalSnapshotTable(
+            formatVersion: Int,
+            hasIncomingData: Boolean
+        ): Boolean = formatVersion >= 2 || hasIncomingData
+
+        internal fun readBoundedUtf8Text(
+            inputStream: InputStream,
+            maxBytes: Int = MAX_BACKUP_BYTES
+        ): String {
+            val buffer = ByteArray(8 * 1024)
+            val output = ByteArrayOutputStream()
+            var totalBytes = 0
+            while (true) {
+                val read = inputStream.read(buffer)
+                if (read == -1) break
+                totalBytes += read
+                if (totalBytes > maxBytes) {
+                    throw IllegalArgumentException(
+                        "El archivo de respaldo supera el límite permitido (${maxBytes / (1024 * 1024)} MB)."
+                    )
+                }
+                output.write(buffer, 0, read)
+            }
+            return output.toString(StandardCharsets.UTF_8.name())
+        }
+    }
 
     suspend fun createBackupPayload(): SyntraBackupPayload = db.withTransaction {
         val profileEntity = db.profileDao().get()
@@ -211,25 +243,25 @@ class BackupManager(private val db: AppDatabase) {
         )
     }
 
-    suspend fun exportToFile(context: Context, uri: Uri): Result<SyntraBackupPayload> = runCatching {
-        val payload = createBackupPayload()
-        val jsonString = BackupSerializer.serialize(payload)
-        context.contentResolver.openOutputStream(uri)?.use { outputStream ->
-            OutputStreamWriter(outputStream, StandardCharsets.UTF_8).use { writer ->
-                writer.write(jsonString)
-                writer.flush()
-            }
-        } ?: throw IllegalStateException("No se pudo abrir el destino para escribir el respaldo.")
-        payload
+    suspend fun exportToFile(context: Context, uri: Uri): Result<SyntraBackupPayload> = withContext(Dispatchers.IO) {
+        runCatching {
+            val payload = createBackupPayload()
+            val jsonString = BackupSerializer.serialize(payload)
+            context.contentResolver.openOutputStream(uri)?.use { outputStream ->
+                OutputStreamWriter(outputStream, StandardCharsets.UTF_8).use { writer ->
+                    writer.write(jsonString)
+                    writer.flush()
+                }
+            } ?: throw IllegalStateException("No se pudo abrir el destino para escribir el respaldo.")
+            payload
+        }
     }
 
-    fun readAndValidateFromUri(context: Context, uri: Uri): BackupValidationResult {
-        return try {
+    suspend fun readAndValidateFromUri(context: Context, uri: Uri): BackupValidationResult = withContext(Dispatchers.IO) {
+        try {
             val jsonString = context.contentResolver.openInputStream(uri)?.use { inputStream ->
-                BufferedReader(InputStreamReader(inputStream, StandardCharsets.UTF_8)).use { reader ->
-                    reader.readText()
-                }
-            } ?: return BackupValidationResult.Error("No se pudo leer el archivo seleccionado.")
+                readBoundedUtf8Text(inputStream)
+            } ?: return@withContext BackupValidationResult.Error("No se pudo leer el archivo seleccionado.")
             BackupSerializer.deserializeAndValidate(jsonString)
         } catch (e: Exception) {
             BackupValidationResult.Error("Error al acceder al archivo: ${e.message}")
@@ -360,8 +392,14 @@ class BackupManager(private val db: AppDatabase) {
                 )
             }
 
-            db.irisxConversationDao().deleteAllMessages()
-            db.irisxConversationDao().deleteAllConversations()
+            if (shouldReplaceOptionalSnapshotTable(
+                    payload.formatVersion,
+                    payload.irisxConversations.isNotEmpty() || payload.irisxMessages.isNotEmpty()
+                )
+            ) {
+                db.irisxConversationDao().deleteAllMessages()
+                db.irisxConversationDao().deleteAllConversations()
+            }
             if (payload.irisxConversations.isNotEmpty()) {
                 db.irisxConversationDao().insertAllConversations(
                     payload.irisxConversations.map { c ->
@@ -396,8 +434,14 @@ class BackupManager(private val db: AppDatabase) {
                 )
             }
 
-            db.routineDao().deleteAllRoutineExercises()
-            db.routineDao().deleteAllRoutines()
+            if (shouldReplaceOptionalSnapshotTable(
+                    payload.formatVersion,
+                    payload.routines.isNotEmpty() || payload.routineExercises.isNotEmpty()
+                )
+            ) {
+                db.routineDao().deleteAllRoutineExercises()
+                db.routineDao().deleteAllRoutines()
+            }
             if (payload.routines.isNotEmpty()) {
                 db.routineDao().insertAllRoutines(
                     payload.routines.map { r ->
@@ -433,7 +477,9 @@ class BackupManager(private val db: AppDatabase) {
                 )
             }
 
-            db.activeWorkoutDraftDao().deleteAllDrafts()
+            if (shouldReplaceOptionalSnapshotTable(payload.formatVersion, payload.activeWorkoutDraft != null)) {
+                db.activeWorkoutDraftDao().deleteAllDrafts()
+            }
             if (payload.activeWorkoutDraft != null) {
                 val d = payload.activeWorkoutDraft
                 db.activeWorkoutDraftDao().saveDraft(

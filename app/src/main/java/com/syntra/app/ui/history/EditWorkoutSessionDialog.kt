@@ -55,6 +55,7 @@ fun EditWorkoutSessionDialog(
     var editableSets by remember { mutableStateOf<List<WorkoutSetEntity>>(emptyList()) }
     var setsLoaded by remember { mutableStateOf(false) }
     var tempIdCounter by remember { mutableLongStateOf(-1L) }
+    var isSaving by remember { mutableStateOf(false) }
 
     // Sub-dialog states
     var setBeingEdited by remember { mutableStateOf<WorkoutSetEntity?>(null) }
@@ -414,32 +415,37 @@ fun EditWorkoutSessionDialog(
                     )
                     Spacer(Modifier.width(10.dp))
                     SyntraButton(
-                        text = "Guardar cambios",
+                        text = if (isSaving) "Guardando..." else "Guardar cambios",
+                        enabled = !isSaving,
                         onClick = {
+                            if (isSaving) return@SyntraButton
+                            isSaving = true
                             scope.launch {
-                                db.withTransaction {
-                                    db.workoutSessionDao().update(
-                                        session.copy(
-                                            title = title.trim().ifEmpty { "Entrenamiento" },
-                                            category = category.trim(),
-                                            notes = notes.trim()
+                                try {
+                                    db.withTransaction {
+                                        db.workoutSessionDao().update(
+                                            session.copy(
+                                                title = title.trim().ifEmpty { "Entrenamiento" },
+                                                category = category.trim(),
+                                                notes = notes.trim()
+                                            )
                                         )
-                                    )
-                                    // 1. Delete removed sets
-                                    val currentSetIds = editableSets.map { it.id }.toSet()
-                                    initialSets.forEach { origSet ->
-                                        if (origSet.id !in currentSetIds) {
-                                            db.workoutSetDao().delete(origSet)
+                                        // 1. Delete removed sets
+                                        val currentSetIds = editableSets.map { it.id }.toSet()
+                                        initialSets.forEach { origSet ->
+                                            if (origSet.id !in currentSetIds) {
+                                                db.workoutSetDao().delete(origSet)
+                                            }
                                         }
-                                    }
-                                    // 2. Insert or update sets with re-indexed order
-                                    var globalExecOrder = 1
-                                    val groupedByExercise = editableSets.groupBy { it.exerciseId }
-                                    groupedByExercise.forEach { (_, setsForEx) ->
-                                        setsForEx.forEachIndexed { idxInEx, set ->
+                                        // 2. Preserve original superset / UI sequence order for executionOrder,
+                                        // while tracking per-exercise orderInExercise independently
+                                        val perExerciseCount = mutableMapOf<Long, Int>()
+                                        editableSets.forEachIndexed { idx, set ->
+                                            val nextOrderInEx = (perExerciseCount[set.exerciseId] ?: 0) + 1
+                                            perExerciseCount[set.exerciseId] = nextOrderInEx
                                             val adjusted = set.copy(
-                                                orderInExercise = idxInEx + 1,
-                                                executionOrder = globalExecOrder++
+                                                orderInExercise = nextOrderInEx,
+                                                executionOrder = idx + 1
                                             )
                                             if (adjusted.id <= 0L) {
                                                 db.workoutSetDao().insert(adjusted.copy(id = 0L))
@@ -448,8 +454,10 @@ fun EditWorkoutSessionDialog(
                                             }
                                         }
                                     }
+                                    onDismiss()
+                                } finally {
+                                    isSaving = false
                                 }
-                                onDismiss()
                             }
                         }
                     )
