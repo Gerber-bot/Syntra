@@ -997,7 +997,7 @@ private fun ProfileViewScreen(
                 }
                 Text(
                     text = if (neuralEngine.isModelLoaded())
-                        "Modelo activo: ${neuralEngine.currentModelFile?.name} (${String.format("%.1f", (neuralEngine.currentModelFile?.length() ?: 0) / (1024.0 * 1024.0))} MB). Inferencia offline lista."
+                        "Modelo activo: ${neuralEngine.currentModelFile?.name} (${String.format(java.util.Locale.US, "%.1f", (neuralEngine.currentModelFile?.length() ?: 0) / (1024.0 * 1024.0))} MB). Inferencia offline lista."
                     else
                         "Importá y administrá modelos como Qwen3-0.6B Q4_K_M para ejecutar inferencia neuronal privada 100% offline con llama.cpp en tu teléfono.",
                     style = MaterialTheme.typography.bodySmall,

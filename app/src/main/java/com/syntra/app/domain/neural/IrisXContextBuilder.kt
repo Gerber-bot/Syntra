@@ -3,13 +3,17 @@ package com.syntra.app.domain.neural
 import com.syntra.app.data.AppDatabase
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import java.text.SimpleDateFormat
-import java.util.Date
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 object IrisXContextBuilder {
 
-    private val dateFormat = SimpleDateFormat("dd/MM/yyyy", Locale.getDefault())
+    private fun formatContextDate(millis: Long): String {
+        val formatter = DateTimeFormatter.ofPattern("dd/MM/yyyy", Locale.getDefault())
+        return Instant.ofEpochMilli(millis).atZone(ZoneId.systemDefault()).format(formatter)
+    }
 
     /**
      * Builds a bounded, privacy-preserving prompt for local neural inference.
@@ -33,7 +37,7 @@ object IrisXContextBuilder {
         val weighIns = db.weighInDao().getAll()
         val latestWeighIn = weighIns.firstOrNull()
         if (latestWeighIn != null) {
-            val dateStr = dateFormat.format(Date(latestWeighIn.measuredAtMillis))
+            val dateStr = formatContextDate(latestWeighIn.measuredAtMillis)
             facts.append("- Último pesaje: ${latestWeighIn.weightGrams / 1000.0} kg ($dateStr).\n")
         }
 
@@ -63,7 +67,7 @@ object IrisXContextBuilder {
         if (recentSessions.isNotEmpty()) {
             facts.append("- Sesiones recientes:\n")
             for (s in recentSessions) {
-                val dateStr = dateFormat.format(Date(s.startedAtMillis))
+                val dateStr = formatContextDate(s.startedAtMillis)
                 facts.append("  • $dateStr: \"${s.title}\" (Categoría: ${s.category.ifEmpty { "General" }})\n")
             }
         }

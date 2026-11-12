@@ -52,7 +52,7 @@ fun AnalyticsAndCoachScreen(
         memories.filter { it.memoryType == "PREFERENCE" }.associate { it.sourceKey to it.targetValue }
     }
 
-    var activeTab by remember { mutableStateOf(0) } // 0: Progresión, 1: Tendencias, 2: IrisX Coach
+    var activeTab by remember { mutableIntStateOf(0) } // 0: Progresión, 1: Tendencias, 2: IrisX Coach
 
     val exercisesWithHistory = remember(exercises, allSets) {
         val usedIds = allSets.map { it.exerciseId }.toSet()

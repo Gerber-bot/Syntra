@@ -220,7 +220,7 @@ fun RestTimerBar(
             if (timerState.isRunning || timerState.isPaused) {
                 val displayMins = timerState.secondsLeft / 60
                 val displaySecs = timerState.secondsLeft % 60
-                val timeString = String.format("%02d:%02d", displayMins, displaySecs)
+                val timeString = String.format(java.util.Locale.US, "%02d:%02d", displayMins, displaySecs)
                 val progress = if (timerState.totalSeconds > 0) {
                     (timerState.secondsLeft.toFloat() / timerState.totalSeconds.toFloat()).coerceIn(0f, 1f)
                 } else 0f

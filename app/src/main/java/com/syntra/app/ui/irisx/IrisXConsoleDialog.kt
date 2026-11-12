@@ -341,7 +341,7 @@ fun IrisXConsoleDialog(
 
             val metrics = effectiveNeuralEngine.metrics
             val footer = if (metrics.tokensPerSecond > 0.0) {
-                "⚡ ${String.format("%.1f", metrics.tokensPerSecond)} t/s • ${metrics.lastInferenceDurationMillis} ms • ${effectiveNeuralEngine.currentModelFile?.name}"
+                "⚡ ${String.format(Locale.US, "%.1f", metrics.tokensPerSecond)} t/s • ${metrics.lastInferenceDurationMillis} ms • ${effectiveNeuralEngine.currentModelFile?.name}"
             } else {
                 null
             }

@@ -158,14 +158,14 @@ fun ManageNeuralModelDialog(
 
                             if (engine.isModelLoaded()) {
                                 Text(
-                                    text = "Tamaño: ${String.format("%.1f", (engine.currentModelFile?.length() ?: 0) / (1024.0 * 1024.0))} MB • TPS previo: ${String.format("%.1f", engine.metrics.tokensPerSecond)}",
+                                    text = "Tamaño: ${String.format(java.util.Locale.US, "%.1f", (engine.currentModelFile?.length() ?: 0) / (1024.0 * 1024.0))} MB • TPS previo: ${String.format(java.util.Locale.US, "%.1f", engine.metrics.tokensPerSecond)}",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = SyntraColors.TextSecondary
                                 )
                             }
 
                             Text(
-                                text = "Guardián: ${guardian.safetyLevel} (RAM libre: ${String.format("%.1f", guardian.availableMemoryBytes / (1024.0 * 1024.0 * 1024.0))} GB, Batería: ${guardian.batteryPct}%)",
+                                text = "Guardián: ${guardian.safetyLevel} (RAM libre: ${String.format(java.util.Locale.US, "%.1f", guardian.availableMemoryBytes / (1024.0 * 1024.0 * 1024.0))} GB, Batería: ${guardian.batteryPct}%)",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = when (guardian.safetyLevel) {
                                     GuardianSafetyLevel.SAFE -> SyntraColors.NeonMint
@@ -247,7 +247,7 @@ fun ManageNeuralModelDialog(
                                                         val totalTime = (System.currentTimeMillis() - testStartTime).coerceAtLeast(1L)
                                                         val ttft = firstTokenTime?.let { it - testStartTime } ?: totalTime
                                                         val tps = (count * 1000.0) / totalTime
-                                                        testMetricsSummary = "TTFT: ${ttft} ms • $count tokens • ${String.format("%.1f", tps)} tok/s • Total: ${totalTime} ms"
+                                                        testMetricsSummary = "TTFT: ${ttft} ms • $count tokens • ${String.format(java.util.Locale.US, "%.1f", tps)} tok/s • Total: ${totalTime} ms"
                                                         isTestingInference = false
                                                     }
                                                 }
@@ -430,7 +430,7 @@ private fun ModelItemCard(
                 )
                 val isQwen3 = model.fileName.contains("qwen3", ignoreCase = true)
                 Text(
-                    text = "${String.format("%.1f", model.sizeBytes / (1024.0 * 1024.0))} MB • GGUF v${model.ggufVersion}${if (isQwen3) " • ✦ Qwen3" else ""}",
+                    text = "${String.format(java.util.Locale.US, "%.1f", model.sizeBytes / (1024.0 * 1024.0))} MB • GGUF v${model.ggufVersion}${if (isQwen3) " • ✦ Qwen3" else ""}",
                     style = MaterialTheme.typography.bodySmall,
                     color = if (isQwen3) SyntraColors.NeonMint else SyntraColors.TextMuted
                 )
