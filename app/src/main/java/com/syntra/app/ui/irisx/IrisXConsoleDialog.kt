@@ -102,7 +102,7 @@ fun IrisXConsoleDialog(
         if (markAsStopped && streamingId != null) {
             replaceMessage(streamingId) { msg ->
                 if (msg.text.isBlank() || msg.text == IrisXReplyAccumulator.PLACEHOLDER) {
-                    msg.copy(text = "⏹ Generación detenida por el usuario.", kind = ChatMessageKind.NOTICE)
+                    msg.copy(text = "Generación detenida por el usuario.", kind = ChatMessageKind.NOTICE)
                 } else {
                     msg
                 }
@@ -341,7 +341,7 @@ fun IrisXConsoleDialog(
 
             val metrics = effectiveNeuralEngine.metrics
             val footer = if (metrics.tokensPerSecond > 0.0) {
-                "⚡ ${String.format(Locale.US, "%.1f", metrics.tokensPerSecond)} t/s • ${metrics.lastInferenceDurationMillis} ms • ${effectiveNeuralEngine.currentModelFile?.name}"
+                "${String.format(Locale.US, "%.1f", metrics.tokensPerSecond)} t/s • ${metrics.lastInferenceDurationMillis} ms • ${effectiveNeuralEngine.currentModelFile?.name}"
             } else {
                 null
             }
@@ -537,13 +537,13 @@ fun IrisXConsoleDialog(
                                                 onClick = { conversationToRename = conv },
                                                 modifier = Modifier.size(28.dp)
                                             ) {
-                                                Text("✏", fontSize = 12.sp, color = SyntraColors.SoftMint)
+                                                Text("✎", fontSize = 12.sp, color = SyntraColors.SoftMint)
                                             }
                                             IconButton(
                                                 onClick = { conversationToDelete = conv },
                                                 modifier = Modifier.size(28.dp)
                                             ) {
-                                                Text("🗑", fontSize = 12.sp, color = SyntraColors.Error)
+                                                Text("✕", fontSize = 12.sp, color = SyntraColors.Error, fontWeight = FontWeight.Bold)
                                             }
                                         }
                                     }
@@ -723,7 +723,7 @@ fun IrisXConsoleDialog(
                             },
                             contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
                         ) {
-                            Text("💬 Chats", style = MaterialTheme.typography.labelSmall, color = SyntraColors.SoftMint)
+                            Text("Conversaciones", style = MaterialTheme.typography.labelSmall, color = SyntraColors.SoftMint)
                         }
                         IconButton(
                             onClick = {
@@ -756,7 +756,7 @@ fun IrisXConsoleDialog(
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             Text(
-                                text = "⚠ $notice",
+                                text = "Aviso: $notice",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = SyntraColors.TextSecondary,
                                 modifier = Modifier.weight(1f)

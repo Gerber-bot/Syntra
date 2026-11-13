@@ -416,15 +416,18 @@ fun ActiveWorkoutScreen(
                         )
                     )
                 } else {
+                    val prefixCandidate = line.rawText.split(Regex("[:,-]")).firstOrNull()?.trim().orEmpty()
+                    val suggestedName = if (prefixCandidate.length in 3..25 && !prefixCandidate.contains(Regex("\\d"))) prefixCandidate else ""
                     exerciseToEdit = ParsedExercise(
-                        name = line.rawText.take(40),
+                        name = suggestedName,
                         sets = listOf(
                             ParsedSet(
                                 weightGrams = 20000,
                                 rawLoadValue = 20.0,
                                 loadUnit = "KG",
                                 repetitions = 10,
-                                isToFailure = false
+                                isToFailure = false,
+                                note = line.rawText
                             )
                         )
                     )

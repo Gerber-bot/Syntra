@@ -141,6 +141,24 @@ fun EditExercisePreviewDialog(
                     )
                 )
 
+                // Reference original raw text if available from uninterpreted line
+                val referenceRawText = exercise.sets.firstOrNull()?.note?.takeIf { it.isNotBlank() && !it.startsWith("[") }
+                if (referenceRawText != null) {
+                    Surface(
+                        color = SyntraColors.SurfaceCardElevated,
+                        shape = RoundedCornerShape(8.dp),
+                        border = BorderStroke(1.dp, SyntraColors.BorderSubtle),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = "Texto original de referencia: \"$referenceRawText\"",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = SyntraColors.TextMuted,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                        )
+                    }
+                }
+
                 // If name changed on existing exercise, offer IrisX alias learning
                 if (!isCreatingNew && nameChanged && name.isNotBlank()) {
                     Row(
@@ -214,133 +232,152 @@ fun EditExercisePreviewDialog(
                             border = BorderStroke(1.dp, SyntraColors.BorderSubtle),
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Row(
+                            Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(8.dp),
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                verticalAlignment = Alignment.CenterVertically
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
-                                Text(
-                                    text = "#${idx + 1}",
-                                    color = SyntraColors.SoftMint,
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 12.sp,
-                                    modifier = Modifier.width(22.dp)
-                                )
+                                // Primary row: set number, load, unit, reps, and delete action
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "#${idx + 1}",
+                                        color = SyntraColors.SoftMint,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 12.sp,
+                                        modifier = Modifier.width(24.dp)
+                                    )
 
-                                // Load field
-                                if (setItem.unit != "BW") {
+                                    // Load field
+                                    if (setItem.unit != "BW") {
+                                        OutlinedTextField(
+                                            value = setItem.loadText,
+                                            onValueChange = { setItem.loadText = it },
+                                            label = { Text("Carga") },
+                                            isError = !setItem.isLoadValid,
+                                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                                            singleLine = true,
+                                            modifier = Modifier.weight(1.3f),
+                                            colors = OutlinedTextFieldDefaults.colors(
+                                                focusedBorderColor = SyntraColors.NeonMint,
+                                                unfocusedBorderColor = if (!setItem.isLoadValid) SyntraColors.Error else SyntraColors.BorderSubtle,
+                                                errorBorderColor = SyntraColors.Error
+                                            )
+                                        )
+                                    } else {
+                                        Box(
+                                            modifier = Modifier.weight(1.3f).height(56.dp),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text("Corporal", style = MaterialTheme.typography.bodySmall, color = SyntraColors.NeonMint)
+                                        }
+                                    }
+
+                                    // Unit selector button
+                                    Button(
+                                        onClick = {
+                                            val nextIdx = (availableUnits.indexOf(setItem.unit) + 1) % availableUnits.size
+                                            setItem.unit = availableUnits[nextIdx]
+                                            if (setItem.unit == "BW") setItem.loadText = ""
+                                        },
+                                        colors = ButtonDefaults.buttonColors(containerColor = SyntraColors.SurfaceHighlight),
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                                        shape = RoundedCornerShape(8.dp),
+                                        modifier = Modifier.height(52.dp)
+                                    ) {
+                                        Text(
+                                            text = setItem.unit.lowercase(),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = SyntraColors.NeonMint
+                                        )
+                                    }
+
+                                    // Reps field
                                     OutlinedTextField(
-                                        value = setItem.loadText,
-                                        onValueChange = { setItem.loadText = it },
-                                        label = { Text("Carga") },
-                                        isError = !setItem.isLoadValid,
-                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                                        value = setItem.repsText,
+                                        onValueChange = { setItem.repsText = it },
+                                        label = { Text("Reps") },
+                                        isError = !setItem.isRepsValid,
+                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                                         singleLine = true,
                                         modifier = Modifier.weight(1.1f),
                                         colors = OutlinedTextFieldDefaults.colors(
                                             focusedBorderColor = SyntraColors.NeonMint,
-                                            unfocusedBorderColor = if (!setItem.isLoadValid) SyntraColors.Error else SyntraColors.BorderSubtle,
+                                            unfocusedBorderColor = if (!setItem.isRepsValid) SyntraColors.Error else SyntraColors.BorderSubtle,
                                             errorBorderColor = SyntraColors.Error
                                         )
                                     )
-                                } else {
-                                    Box(
-                                        modifier = Modifier.weight(1.1f),
-                                        contentAlignment = Alignment.Center
+
+                                    // Delete set button
+                                    IconButton(
+                                        onClick = {
+                                            if (sets.size > 1) {
+                                                sets.removeAt(idx)
+                                            }
+                                        },
+                                        enabled = sets.size > 1,
+                                        modifier = Modifier.size(34.dp)
                                     ) {
-                                        Text("Corporal", style = MaterialTheme.typography.labelSmall, color = SyntraColors.NeonMint)
+                                        Text(
+                                            text = "✕",
+                                            color = if (sets.size > 1) SyntraColors.Error else Color.DarkGray,
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
                                     }
                                 }
 
-                                // Unit selector button (cycles through units on tap)
-                                Button(
-                                    onClick = {
-                                        val nextIdx = (availableUnits.indexOf(setItem.unit) + 1) % availableUnits.size
-                                        setItem.unit = availableUnits[nextIdx]
-                                        if (setItem.unit == "BW") setItem.loadText = ""
-                                    },
-                                    colors = ButtonDefaults.buttonColors(containerColor = SyntraColors.SurfaceHighlight),
-                                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
-                                    shape = RoundedCornerShape(8.dp)
+                                // Secondary controls row
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(start = 30.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Text(
-                                        text = setItem.unit.lowercase(),
-                                        style = MaterialTheme.typography.labelSmall,
-                                        fontWeight = FontWeight.Bold,
-                                        color = SyntraColors.NeonMint
+                                    FilterChip(
+                                        selected = setItem.isDumbbell,
+                                        onClick = { setItem.isDumbbell = !setItem.isDumbbell },
+                                        label = { Text("Mancuerna", fontSize = 10.sp, fontWeight = FontWeight.SemiBold) },
+                                        colors = FilterChipDefaults.filterChipColors(
+                                            selectedContainerColor = SyntraColors.DarkMint,
+                                            selectedLabelColor = SyntraColors.NeonMint,
+                                            containerColor = SyntraColors.SurfaceHighlight,
+                                            labelColor = SyntraColors.TextMuted
+                                        ),
+                                        border = BorderStroke(1.dp, if (setItem.isDumbbell) SyntraColors.NeonMint else SyntraColors.BorderSubtle)
                                     )
-                                }
 
-                                // Reps field
-                                OutlinedTextField(
-                                    value = setItem.repsText,
-                                    onValueChange = { setItem.repsText = it },
-                                    label = { Text("Reps") },
-                                    isError = !setItem.isRepsValid,
-                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                    singleLine = true,
-                                    modifier = Modifier.weight(1.0f),
-                                    colors = OutlinedTextFieldDefaults.colors(
-                                        focusedBorderColor = SyntraColors.NeonMint,
-                                        unfocusedBorderColor = if (!setItem.isRepsValid) SyntraColors.Error else SyntraColors.BorderSubtle,
-                                        errorBorderColor = SyntraColors.Error
+                                    FilterChip(
+                                        selected = setItem.isAssisted,
+                                        onClick = { setItem.isAssisted = !setItem.isAssisted },
+                                        label = { Text("Asistida", fontSize = 10.sp, fontWeight = FontWeight.SemiBold) },
+                                        colors = FilterChipDefaults.filterChipColors(
+                                            selectedContainerColor = SyntraColors.DarkMint,
+                                            selectedLabelColor = SyntraColors.NeonMint,
+                                            containerColor = SyntraColors.SurfaceHighlight,
+                                            labelColor = SyntraColors.TextMuted
+                                        ),
+                                        border = BorderStroke(1.dp, if (setItem.isAssisted) SyntraColors.NeonMint else SyntraColors.BorderSubtle)
                                     )
-                                )
 
-                                // Mancuerna toggle chip
-                                FilterChip(
-                                    selected = setItem.isDumbbell,
-                                    onClick = { setItem.isDumbbell = !setItem.isDumbbell },
-                                    label = { Text("manc", fontSize = 10.sp, fontWeight = FontWeight.SemiBold) },
-                                    colors = FilterChipDefaults.filterChipColors(
-                                        selectedContainerColor = SyntraColors.DarkMint,
-                                        selectedLabelColor = SyntraColors.NeonMint,
-                                        containerColor = SyntraColors.SurfaceHighlight,
-                                        labelColor = SyntraColors.TextMuted
-                                    ),
-                                    border = BorderStroke(1.dp, if (setItem.isDumbbell) SyntraColors.NeonMint else SyntraColors.BorderSubtle)
-                                )
-
-                                // Asistida toggle chip
-                                FilterChip(
-                                    selected = setItem.isAssisted,
-                                    onClick = { setItem.isAssisted = !setItem.isAssisted },
-                                    label = { Text("asist", fontSize = 10.sp, fontWeight = FontWeight.SemiBold) },
-                                    colors = FilterChipDefaults.filterChipColors(
-                                        selectedContainerColor = SyntraColors.DarkMint,
-                                        selectedLabelColor = SyntraColors.NeonMint,
-                                        containerColor = SyntraColors.SurfaceHighlight,
-                                        labelColor = SyntraColors.TextMuted
-                                    ),
-                                    border = BorderStroke(1.dp, if (setItem.isAssisted) SyntraColors.NeonMint else SyntraColors.BorderSubtle)
-                                )
-
-                                // Fallo toggle button
-                                FilterChip(
-                                    selected = setItem.toFailure,
-                                    onClick = { setItem.toFailure = !setItem.toFailure },
-                                    label = { Text("f", fontWeight = FontWeight.Bold) },
-                                    colors = FilterChipDefaults.filterChipColors(
-                                        selectedContainerColor = SyntraColors.DarkMint,
-                                        selectedLabelColor = SyntraColors.NeonMint,
-                                        containerColor = SyntraColors.SurfaceHighlight,
-                                        labelColor = SyntraColors.TextMuted
-                                    ),
-                                    border = BorderStroke(1.dp, if (setItem.toFailure) SyntraColors.NeonMint else SyntraColors.BorderSubtle)
-                                )
-
-                                IconButton(
-                                    onClick = {
-                                        if (sets.size > 1) {
-                                            sets.removeAt(idx)
-                                        }
-                                    },
-                                    enabled = sets.size > 1,
-                                    modifier = Modifier.size(32.dp)
-                                ) {
-                                    Text("🗑", color = if (sets.size > 1) SyntraColors.Error else Color.DarkGray, fontSize = 14.sp)
+                                    FilterChip(
+                                        selected = setItem.toFailure,
+                                        onClick = { setItem.toFailure = !setItem.toFailure },
+                                        label = { Text("Al fallo", fontSize = 10.sp, fontWeight = FontWeight.Bold) },
+                                        colors = FilterChipDefaults.filterChipColors(
+                                            selectedContainerColor = SyntraColors.DarkMint,
+                                            selectedLabelColor = SyntraColors.NeonMint,
+                                            containerColor = SyntraColors.SurfaceHighlight,
+                                            labelColor = SyntraColors.TextMuted
+                                        ),
+                                        border = BorderStroke(1.dp, if (setItem.toFailure) SyntraColors.NeonMint else SyntraColors.BorderSubtle)
+                                    )
                                 }
                             }
                         }

@@ -284,6 +284,84 @@ class WorkoutTextParserTest {
     }
 
     @Test
+    fun parsesChainedBlocksCaseAndPreservesUnitWithoutConvertingToKg() {
+        val input = "Camilla adelante : 15bls 12, 9. 14bls 12"
+        val preview = WorkoutTextParser.parse(input)
+
+        assertEquals(1, preview.exercises.size)
+        val ex = preview.exercises.first()
+        assertEquals("Camilla adelante", ex.name)
+        assertEquals(3, ex.sets.size)
+
+        // Set 1: 15 bloques, 12 reps
+        assertEquals("BLOQUES", ex.sets[0].loadUnit)
+        assertEquals(15.0, ex.sets[0].rawLoadValue, 0.001)
+        assertEquals(12, ex.sets[0].repetitions)
+
+        // Set 2: 15 bloques, 9 reps
+        assertEquals("BLOQUES", ex.sets[1].loadUnit)
+        assertEquals(15.0, ex.sets[1].rawLoadValue, 0.001)
+        assertEquals(9, ex.sets[1].repetitions)
+
+        // Set 3: 14 bloques, 12 reps
+        assertEquals("BLOQUES", ex.sets[2].loadUnit)
+        assertEquals(14.0, ex.sets[2].rawLoadValue, 0.001)
+        assertEquals(12, ex.sets[2].repetitions)
+
+        // Presentation verification
+        val compact = WorkoutPresentation.toCompactList(preview.exercises).first()
+        assertEquals(2, compact.groups.size)
+        assertEquals("15 bloques", compact.groups[0].formattedWeight())
+        assertEquals("12, 9", compact.groups[0].formattedReps())
+        assertEquals("14 bloques", compact.groups[1].formattedWeight())
+        assertEquals("12", compact.groups[1].formattedReps())
+
+        // Verify end-to-end entity persistence contract:
+        val gramsSet0 = ex.sets[0].weightGrams
+        val restoredRaw0 = UnitConverter.toRawValue(gramsSet0, ex.sets[0].loadUnit)
+        assertEquals(15.0, restoredRaw0, 0.001)
+        val display0 = UnitConverter.formatDisplay(gramsSet0, ex.sets[0].loadUnit)
+        assertEquals("15 bloques", display0)
+        assertFalse("Must never output 'kg' for BLOQUES unit", display0.contains("kg", ignoreCase = true))
+    }
+
+    @Test
+    fun parsesChainedBlocksWithPlannedTargetSeparated() {
+        val input = "Camilla adelante (3 series de 12–15) : 15bls 12, 9. 14bls 12"
+        val preview = WorkoutTextParser.parse(input)
+
+        assertEquals(1, preview.exercises.size)
+        val ex = preview.exercises.first()
+        assertEquals("Camilla adelante", ex.name)
+        assertEquals("3 series de 12–15 repeticiones", ex.plannedTarget)
+        assertEquals(3, ex.sets.size)
+
+        assertEquals(15.0, ex.sets[0].rawLoadValue, 0.001)
+        assertEquals(12, ex.sets[0].repetitions)
+        assertEquals("BLOQUES", ex.sets[0].loadUnit)
+
+        assertEquals(15.0, ex.sets[1].rawLoadValue, 0.001)
+        assertEquals(9, ex.sets[1].repetitions)
+        assertEquals("BLOQUES", ex.sets[1].loadUnit)
+
+        assertEquals(14.0, ex.sets[2].rawLoadValue, 0.001)
+        assertEquals(12, ex.sets[2].repetitions)
+        assertEquals("BLOQUES", ex.sets[2].loadUnit)
+    }
+
+    @Test
+    fun preservesRawTextOnUnrecognizedLinesWithoutCorruptingName() {
+        val input = "Nota de estiramiento suave sin pesos"
+        val preview = WorkoutTextParser.parse(input)
+
+        assertEquals(0, preview.exercises.size)
+        assertEquals(1, preview.unrecognizedLines.size)
+        val unrec = preview.unrecognizedLines.first()
+        assertEquals(input, unrec.rawText)
+        assertTrue(unrec.reason.isNotEmpty())
+    }
+
+    @Test
     fun formatsWeightGramsCorrectly() {
         assertEquals("80.00", InputValidators.formatWeightKg(80000))
         assertEquals("7.50", InputValidators.formatWeightKg(7500))

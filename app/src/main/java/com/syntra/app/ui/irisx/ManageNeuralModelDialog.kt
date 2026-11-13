@@ -44,6 +44,23 @@ fun ManageNeuralModelDialog(
     var importStatusMessage by remember { mutableStateOf<String?>(null) }
     var isLoadingModel by remember { mutableStateOf(false) }
 
+    // Automatic download state
+    var downloadState by remember { mutableStateOf<DownloadState>(DownloadState.Idle) }
+    var downloadJob by remember { mutableStateOf<Job?>(null) }
+    var showMeteredWarningDialog by remember { mutableStateOf(false) }
+
+    fun startDownloading() {
+        downloadJob?.cancel()
+        downloadJob = scope.launch {
+            val res = ModelDownloader.downloadModel(context) { st ->
+                downloadState = st
+            }
+            if (res.isSuccess) {
+                installedModels = ModelManager.listInstalledModels(context, res.getOrNull()?.name)
+            }
+        }
+    }
+
     // Test bench state
     var isTestingInference by remember { mutableStateOf(false) }
     var testResultText by remember { mutableStateOf("") }
@@ -70,6 +87,37 @@ fun ManageNeuralModelDialog(
                 }
             }
         }
+    }
+
+    if (showMeteredWarningDialog) {
+        AlertDialog(
+            onDismissRequest = { showMeteredWarningDialog = false },
+            title = { Text("Conexión con datos móviles", color = SyntraColors.TextPrimary, fontWeight = FontWeight.Bold) },
+            text = {
+                Text(
+                    "Estás conectado a una red móvil. La descarga del modelo neuronal Qwen3 consumirá aproximadamente 380 MB de tu plan de datos.\n\n¿Deseás descargar igualmente o esperar a conectarte a una red Wi-Fi?",
+                    color = SyntraColors.TextSecondary,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            },
+            confirmButton = {
+                SyntraButton(
+                    text = "Descargar igualmente",
+                    onClick = {
+                        showMeteredWarningDialog = false
+                        startDownloading()
+                    }
+                )
+            },
+            dismissButton = {
+                SyntraSecondaryButton(
+                    text = "Esperar a Wi-Fi",
+                    onClick = { showMeteredWarningDialog = false }
+                )
+            },
+            containerColor = SyntraColors.SurfaceCardElevated,
+            shape = RoundedCornerShape(16.dp)
+        )
     }
 
     Dialog(onDismissRequest = {
@@ -301,7 +349,7 @@ fun ManageNeuralModelDialog(
 
                             if (testMetricsSummary != null) {
                                 Text(
-                                    text = "📊 ${testMetricsSummary ?: ""}",
+                                    text = testMetricsSummary ?: "",
                                     style = MaterialTheme.typography.labelSmall,
                                     fontWeight = FontWeight.Bold,
                                     color = SyntraColors.NeonMint
@@ -310,7 +358,7 @@ fun ManageNeuralModelDialog(
 
                             if (testError != null) {
                                 Text(
-                                    text = "⚠️ ${testError ?: ""}",
+                                    text = testError ?: "",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = SyntraColors.Error
                                 )
@@ -319,10 +367,163 @@ fun ManageNeuralModelDialog(
                     }
                 }
 
-                // Import button
+                // Automatic Provisioning Section
                 item {
-                    SyntraButton(
-                        text = if (isImporting) "Importando archivo..." else "📁 Importar modelo (.gguf)",
+                    val isQwenInstalled = installedModels.any { it.fileName.contains("qwen", ignoreCase = true) }
+                    Surface(
+                        color = Color(0xFF0D1F1C),
+                        shape = RoundedCornerShape(12.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, SyntraColors.DarkMint),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(14.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text(
+                                text = "Aprovisionamiento Automático (HTTPS)",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = SyntraColors.NeonMint
+                            )
+                            Text(
+                                text = "Descarga oficial y verificación de integridad criptográfica (SHA-256 + GGUF) de Qwen3-0.6B-Q4_K_M (~380 MB). Una vez descargado, funciona 100% offline.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = SyntraColors.TextSecondary
+                            )
+
+                            when (val st = downloadState) {
+                                is DownloadState.Idle -> {
+                                    if (isQwenInstalled) {
+                                        Text(
+                                            text = "Modelo Qwen3 disponible en almacenamiento local. Listo para operar offline.",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = SyntraColors.SoftMint,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                    } else {
+                                        SyntraButton(
+                                            text = "Descargar Qwen3 automáticamente",
+                                            onClick = {
+                                                if (ModelDownloader.isNetworkMetered(context)) {
+                                                    showMeteredWarningDialog = true
+                                                } else {
+                                                    startDownloading()
+                                                }
+                                            },
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+                                    }
+                                }
+                                is DownloadState.CheckingNetwork -> {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = SyntraColors.NeonMint)
+                                        Text("Comprobando conexión y espacio en almacenamiento...", style = MaterialTheme.typography.bodySmall, color = SyntraColors.SoftMint)
+                                    }
+                                }
+                                is DownloadState.Downloading -> {
+                                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween
+                                        ) {
+                                            Text(
+                                                text = "Descargando: ${st.progressPercent}%",
+                                                style = MaterialTheme.typography.labelMedium,
+                                                fontWeight = FontWeight.Bold,
+                                                color = SyntraColors.NeonMint
+                                            )
+                                            val currentMb = String.format(java.util.Locale.US, "%.1f", st.bytesDownloaded / (1024.0 * 1024.0))
+                                            val totalMb = String.format(java.util.Locale.US, "%.1f", st.totalBytes / (1024.0 * 1024.0))
+                                            Text(
+                                                text = "$currentMb MB / $totalMb MB",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = SyntraColors.TextMuted
+                                            )
+                                        }
+                                        LinearProgressIndicator(
+                                            progress = { (st.progressPercent / 100f).coerceIn(0f, 1f) },
+                                            modifier = Modifier.fillMaxWidth().height(8.dp),
+                                            color = SyntraColors.NeonMint,
+                                            trackColor = SyntraColors.SurfaceHighlight
+                                        )
+                                        SyntraSecondaryButton(
+                                            text = "Cancelar descarga",
+                                            onClick = {
+                                                downloadJob?.cancel()
+                                                downloadState = DownloadState.Cancelled
+                                            },
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+                                    }
+                                }
+                                is DownloadState.ValidatingIntegrity -> {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = SyntraColors.NeonMint)
+                                        Text("Verificando cabecera binaria GGUF y hash SHA-256...", style = MaterialTheme.typography.bodySmall, color = SyntraColors.SoftMint)
+                                    }
+                                }
+                                is DownloadState.Success -> {
+                                    Text(
+                                        text = "Descarga completada y verificada exitosamente (${st.file.name}).",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = SyntraColors.NeonMint
+                                    )
+                                }
+                                is DownloadState.Error -> {
+                                    Text(
+                                        text = "Error: ${st.message}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = SyntraColors.Error
+                                    )
+                                    if (st.canRetry) {
+                                        SyntraButton(
+                                            text = "Reintentar descarga",
+                                            onClick = {
+                                                if (ModelDownloader.isNetworkMetered(context)) {
+                                                    showMeteredWarningDialog = true
+                                                } else {
+                                                    startDownloading()
+                                                }
+                                            },
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+                                    }
+                                }
+                                is DownloadState.Cancelled -> {
+                                    Text(
+                                        text = "Descarga cancelada por el usuario.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = SyntraColors.TextMuted
+                                    )
+                                    SyntraButton(
+                                        text = "Reanudar descarga",
+                                        onClick = {
+                                            if (ModelDownloader.isNetworkMetered(context)) {
+                                                showMeteredWarningDialog = true
+                                            } else {
+                                                startDownloading()
+                                            }
+                                        },
+                                        modifier = Modifier.fillMaxWidth()
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Import button (local SAF fallback)
+                item {
+                    SyntraSecondaryButton(
+                        text = if (isImporting) "Importando archivo..." else "Importar archivo local (.gguf)",
                         onClick = {
                             safLauncher.launch(arrayOf("*/*"))
                         },

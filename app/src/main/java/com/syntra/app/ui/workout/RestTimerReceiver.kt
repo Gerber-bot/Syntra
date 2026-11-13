@@ -1,6 +1,7 @@
 package com.syntra.app.ui.workout
 
 import android.app.AlarmManager
+import android.app.KeyguardManager
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -8,6 +9,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.media.AudioAttributes
+import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
@@ -303,12 +305,14 @@ class RestTimerReceiver : BroadcastReceiver() {
         val driftMillis = if (targetElapsed > 0L) nowElapsed - targetElapsed else 0L
 
         val powerManager = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
+        val keyguardManager = context.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
         val isScreenInteractive = powerManager?.isInteractive ?: true
+        val isKeyguardLocked = keyguardManager?.isKeyguardLocked ?: false
         val canExact = RestTimerAlarmScheduler.canScheduleExactAlarms(context)
 
         RestTimerDiagnostics.log(
             "TIMER_RECEIVED",
-            "driftMillis=${driftMillis}ms screenOn=$isScreenInteractive canExact=$canExact"
+            "driftMillis=${driftMillis}ms screenOn=$isScreenInteractive keyguardLocked=$isKeyguardLocked canExact=$canExact"
         )
 
         // Discard stale alarm that expired more than 60 seconds ago (avoid delayed wake-up vibrations)
@@ -318,65 +322,121 @@ class RestTimerReceiver : BroadcastReceiver() {
             return
         }
 
-        val pendingResult = goAsync()
-        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Default).launch {
-            val wakeLock = try {
-                powerManager?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "syntra:rest_timer_wakelock")?.apply {
-                    acquire(3000L)
-                }
-            } catch (e: Exception) {
-                RestTimerDiagnostics.log("WAKELOCK_ERROR", e.message ?: "Failed to acquire WakeLock")
-                null
+        // Acquire WakeLock synchronously so CPU stays awake on locked screen until vibration IPC finishes
+        val wakeLock = try {
+            powerManager?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "syntra:rest_timer_wakelock")?.apply {
+                setReferenceCounted(false)
+                acquire(5000L)
+            }
+        } catch (e: Throwable) {
+            RestTimerDiagnostics.log("WAKELOCK_ERROR", e.message ?: "Failed to acquire WakeLock")
+            null
+        }
+
+        try {
+            // Eslabón 3: Hardware Vibrator & Audio Attributes
+            val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+            val ringerMode = audioManager?.ringerMode ?: -1
+            val ringerDesc = when (ringerMode) {
+                AudioManager.RINGER_MODE_SILENT -> "SILENT"
+                AudioManager.RINGER_MODE_VIBRATE -> "VIBRATE"
+                AudioManager.RINGER_MODE_NORMAL -> "NORMAL"
+                else -> "UNKNOWN($ringerMode)"
             }
 
-            try {
-                // 1. Dual-path vibration with USAGE_ALARM attributes for screen-off & locked vibration
-                val waveform = longArrayOf(0, 450, 150, 450)
-                val amplitudes = intArrayOf(0, 255, 0, 255)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    val vibratorManager = context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager
-                    val vibrator = vibratorManager?.defaultVibrator
-                    val effect = VibrationEffect.createWaveform(waveform, amplitudes, -1)
-                    val attributes = VibrationAttributes.Builder()
-                        .setUsage(VibrationAttributes.USAGE_ALARM)
-                        .build()
-                    vibrator?.vibrate(effect, attributes)
-                    RestTimerDiagnostics.log("VIBRATION_REQUESTED", "VibratorManager USAGE_ALARM max amp (screenOn=$isScreenInteractive)")
-                } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    @Suppress("DEPRECATION")
-                    val vibrator = context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
-                    val effect = VibrationEffect.createWaveform(waveform, amplitudes, -1)
-                    val audioAttributes = AudioAttributes.Builder()
-                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                        .setUsage(AudioAttributes.USAGE_ALARM)
-                        .build()
-                    vibrator?.vibrate(effect, audioAttributes)
-                    RestTimerDiagnostics.log("VIBRATION_REQUESTED", "Vibrator USAGE_ALARM max amp (screenOn=$isScreenInteractive)")
-                } else {
-                    @Suppress("DEPRECATION")
-                    val vibrator = context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
-                    vibrator?.vibrate(waveform, -1)
-                    RestTimerDiagnostics.log("VIBRATION_REQUESTED", "Vibrator legacy (screenOn=$isScreenInteractive)")
+            val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val vm = context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager
+                vm?.defaultVibrator ?: (context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator)
+            } else {
+                @Suppress("DEPRECATION")
+                context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+            }
+
+            val hasVibrator = vibrator?.hasVibrator() ?: false
+            val hasAmpCtrl = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                vibrator?.hasAmplitudeControl() ?: false
+            } else false
+
+            RestTimerDiagnostics.log(
+                "VIBRATOR_HARDWARE",
+                "hasVibrator=$hasVibrator hasAmpCtrl=$hasAmpCtrl ringerMode=$ringerDesc"
+            )
+
+            val waveform = longArrayOf(0, 450, 150, 450)
+            val amplitudes = intArrayOf(0, 255, 0, 255)
+
+            if (vibrator != null && hasVibrator) {
+                try {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        val effect = if (hasAmpCtrl) {
+                            VibrationEffect.createWaveform(waveform, amplitudes, -1)
+                        } else {
+                            VibrationEffect.createWaveform(waveform, -1)
+                        }
+                        val attributes = VibrationAttributes.Builder()
+                            .setUsage(VibrationAttributes.USAGE_ALARM)
+                            .build()
+                        vibrator.vibrate(effect, attributes)
+                        RestTimerDiagnostics.log("VIBRATION_TRIGGERED", "VibratorManager USAGE_ALARM (ampCtrl=$hasAmpCtrl)")
+                    } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        val effect = if (hasAmpCtrl) {
+                            VibrationEffect.createWaveform(waveform, amplitudes, -1)
+                        } else {
+                            VibrationEffect.createWaveform(waveform, -1)
+                        }
+                        val audioAttributes = AudioAttributes.Builder()
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                            .setUsage(AudioAttributes.USAGE_ALARM)
+                            .build()
+                        vibrator.vibrate(effect, audioAttributes)
+                        RestTimerDiagnostics.log("VIBRATION_TRIGGERED", "Vibrator USAGE_ALARM (ampCtrl=$hasAmpCtrl)")
+                    } else {
+                        @Suppress("DEPRECATION")
+                        vibrator.vibrate(waveform, -1)
+                        RestTimerDiagnostics.log("VIBRATION_TRIGGERED", "Vibrator legacy waveform")
+                    }
+                } catch (vEx: Throwable) {
+                    RestTimerDiagnostics.log("VIBRATION_FALLBACK", "Primary vibrate error: ${vEx.message}. Retrying legacy...")
+                    try {
+                        @Suppress("DEPRECATION")
+                        vibrator.vibrate(waveform, -1)
+                    } catch (fEx: Throwable) {
+                        RestTimerDiagnostics.log("VIBRATION_ERROR", "Fallback vibrate error: ${fEx.message}")
+                    }
+                }
+            } else {
+                RestTimerDiagnostics.log("VIBRATION_ERROR", "Device reports hasVibrator=false")
+            }
+
+            // High priority notification with vibration channel
+            val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+            if (notificationManager != null) {
+                val channelId = "syntra_rest_timer"
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    val channel = NotificationChannel(
+                        channelId,
+                        "Temporizador de descanso",
+                        NotificationManager.IMPORTANCE_HIGH
+                    ).apply {
+                        description = "Avisos de finalización de tiempo de descanso"
+                        enableVibration(true)
+                        vibrationPattern = waveform
+                        setSound(null, null)
+                    }
+                    notificationManager.createNotificationChannel(channel)
                 }
 
-                // 2. High priority notification without sound (silent, vibration only)
-                val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
-                if (notificationManager != null) {
-                    val channelId = "syntra_rest_timer"
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                        val channel = NotificationChannel(
-                            channelId,
-                            "Temporizador de descanso",
-                            NotificationManager.IMPORTANCE_HIGH
-                        ).apply {
-                            description = "Avisos de finalización de tiempo de descanso"
-                            enableVibration(true)
-                            vibrationPattern = waveform
-                            setSound(null, null)
-                        }
-                        notificationManager.createNotificationChannel(channel)
-                    }
+                val areNotificationsEnabled = notificationManager.areNotificationsEnabled()
+                val channelImportance = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    notificationManager.getNotificationChannel(channelId)?.importance ?: -1
+                } else -1
 
+                RestTimerDiagnostics.log(
+                    "NOTIFICATION_STATUS",
+                    "enabled=$areNotificationsEnabled channelImportance=$channelImportance"
+                )
+
+                if (areNotificationsEnabled) {
                     val notification = NotificationCompat.Builder(context, channelId)
                         .setSmallIcon(R.mipmap.ic_launcher)
                         .setContentTitle("Syntra — Descanso completado")
@@ -385,31 +445,24 @@ class RestTimerReceiver : BroadcastReceiver() {
                         .setCategory(NotificationCompat.CATEGORY_ALARM)
                         .setAutoCancel(true)
                         .build()
-
-                    if (notificationManager.areNotificationsEnabled()) {
-                        try {
-                            notificationManager.notify(NOTIFICATION_ID, notification)
-                        } catch (sec: SecurityException) {
-                            RestTimerDiagnostics.log("NOTIFICATION_DENIED", sec.message ?: "POST_NOTIFICATIONS denied")
-                        }
-                    } else {
-                        RestTimerDiagnostics.log("NOTIFICATION_DISABLED", "Notifications disabled by system/user")
+                    try {
+                        notificationManager.notify(NOTIFICATION_ID, notification)
+                    } catch (sec: SecurityException) {
+                        RestTimerDiagnostics.log("NOTIFICATION_DENIED", sec.message ?: "POST_NOTIFICATIONS denied")
                     }
                 }
-
-                // 3. Update central timer state
-                RestTimerManager.onTimerCompleted(context)
-                kotlinx.coroutines.delay(1000L)
-            } catch (e: Throwable) {
-                RestTimerDiagnostics.log("VIBRATION_ERROR", e.message ?: "Error during vibration/notification")
-            } finally {
-                try {
-                    if (wakeLock?.isHeld == true) {
-                        wakeLock.release()
-                    }
-                } catch (_: Throwable) {}
-                pendingResult.finish()
             }
+
+            // Update central timer state
+            RestTimerManager.onTimerCompleted(context)
+        } catch (e: Throwable) {
+            RestTimerDiagnostics.log("VIBRATION_ERROR", e.message ?: "General error during timer expiration")
+        } finally {
+            try {
+                if (wakeLock?.isHeld == true) {
+                    wakeLock.release()
+                }
+            } catch (_: Throwable) {}
         }
     }
 

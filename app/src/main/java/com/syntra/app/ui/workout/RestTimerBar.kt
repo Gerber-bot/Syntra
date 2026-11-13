@@ -370,7 +370,7 @@ fun RestTimerBar(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = if (canExact) "Alarma exacta: Concedido ✅" else "Alarma exacta: Denegado ⚠️",
+                                text = if (canExact) "Alarma exacta: Habilitada" else "Alarma exacta: Inexacta (Requiere permiso)",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = if (canExact) SyntraColors.NeonMint else SyntraColors.Error
                             )
@@ -379,10 +379,35 @@ fun RestTimerBar(
                                     onClick = { RestTimerAlarmScheduler.openExactAlarmSetting(context) },
                                     contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)
                                 ) {
-                                    Text("Ajustes ↗", style = MaterialTheme.typography.labelSmall, color = SyntraColors.NeonMint)
+                                    Text("Ajustes", style = MaterialTheme.typography.labelSmall, color = SyntraColors.NeonMint)
                                 }
                             }
                         }
+
+                        // Test button for the 3 scenarios (app visible, background, locked screen)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            OutlinedButton(
+                                onClick = {
+                                    RestTimerDiagnostics.log("TEST_INITIATED", "Iniciando prueba de 5 segundos...")
+                                    RestTimerManager.startTimer(context, 5)
+                                },
+                                shape = RoundedCornerShape(8.dp),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, SyntraColors.NeonMint),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                            ) {
+                                Text("Probar 5s (Verificar en Redmi)", style = MaterialTheme.typography.labelSmall, color = SyntraColors.NeonMint, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                        Text(
+                            text = "Guía: Tocá 'Probar 5s' y evaluá: (1) con app abierta, (2) minimizando a otra app, o (3) apagando la pantalla con el botón de bloqueo.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = SyntraColors.TextMuted,
+                            fontSize = 10.sp
+                        )
 
                         Text(
                             text = "Últimos eventos registrados:",

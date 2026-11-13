@@ -16,8 +16,8 @@ object UnitConverter {
         return when {
             u.startsWith("kg") || u.startsWith("kilo") -> "KG"
             u.startsWith("lb") || u.startsWith("libra") -> "LBS"
-            u.startsWith("bloque") -> "BLOQUES"
-            u.startsWith("placa") -> "PLACAS"
+            u.startsWith("bloque") || u.startsWith("bl") -> "BLOQUES"
+            u.startsWith("placa") || u.startsWith("plc") -> "PLACAS"
             u == "bw" || u.contains("corporal") -> "BW"
             else -> null
         }

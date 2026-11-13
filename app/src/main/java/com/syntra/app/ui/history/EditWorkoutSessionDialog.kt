@@ -215,7 +215,7 @@ fun EditWorkoutSessionDialog(
                                 onClick = { showAddExerciseDialog = true },
                                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
                             ) {
-                                Text("＋ Ejercicio", color = SyntraColors.NeonMint, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelMedium)
+                                Text("+ Ejercicio", color = SyntraColors.NeonMint, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelMedium)
                             }
                         }
                     }
@@ -303,14 +303,14 @@ fun EditWorkoutSessionDialog(
                                                     },
                                                     contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
                                                 ) {
-                                                    Text("＋ Serie", color = SyntraColors.SoftMint, style = MaterialTheme.typography.labelSmall)
+                                                    Text("+ Serie", color = SyntraColors.SoftMint, style = MaterialTheme.typography.labelSmall)
                                                 }
                                                 // Delete whole exercise
                                                 IconButton(
                                                     onClick = { exerciseToDelete = exId to exName },
                                                     modifier = Modifier.size(32.dp)
                                                 ) {
-                                                    Text("🗑", color = SyntraColors.Error, fontSize = 14.sp)
+                                                    Text("✕", color = SyntraColors.Error, fontSize = 14.sp, fontWeight = FontWeight.Bold)
                                                 }
                                             }
                                         }
@@ -378,11 +378,11 @@ fun EditWorkoutSessionDialog(
                                                     }
 
                                                     Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                                                        IconButton(
+                                                        TextButton(
                                                             onClick = { setBeingEdited = currentSet },
-                                                            modifier = Modifier.size(32.dp)
+                                                            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 2.dp)
                                                         ) {
-                                                            Text("✏️", fontSize = 12.sp)
+                                                            Text("Editar", color = SyntraColors.NeonMint, style = MaterialTheme.typography.labelSmall)
                                                         }
                                                         IconButton(
                                                             onClick = {

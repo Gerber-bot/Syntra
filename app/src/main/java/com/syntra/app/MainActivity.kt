@@ -140,6 +140,8 @@ private fun TrainerApp(db: AppDatabase) {
     }
 
     var loaded by remember { mutableStateOf(false) }
+    var initError by remember { mutableStateOf<String?>(null) }
+    var retryTrigger by remember { mutableStateOf(0) }
     var error by remember { mutableStateOf<String?>(null) }
     var isSavingWeight by remember { mutableStateOf(false) }
     var page by rememberSaveable { mutableStateOf("Inicio") }
@@ -147,57 +149,96 @@ private fun TrainerApp(db: AppDatabase) {
     var showIrisXConsole by remember { mutableStateOf(false) }
     var analyzerDraftText by remember { mutableStateOf<String?>(null) }
 
-    LaunchedEffect(db) {
-        db.withTransaction {
-            val existing = db.exerciseDao().getAll()
-            if (existing.isEmpty()) {
-                db.exerciseDao().insertAll(ExerciseCatalog.toEntities())
-                for (catEx in ExerciseCatalog.DEFAULT_CATALOG) {
-                    val entity = db.exerciseDao().findByNormalizedName(catEx.normalizedName)
-                    if (entity != null) {
-                        val aliases = catEx.aliases.map {
-                            ExerciseAliasEntity(
-                                exerciseId = entity.id,
-                                normalizedAlias = WorkoutTextParser.normalize(it)
-                            )
+    LaunchedEffect(db, retryTrigger) {
+        try {
+            initError = null
+            db.withTransaction {
+                val existing = db.exerciseDao().getAll()
+                if (existing.isEmpty()) {
+                    db.exerciseDao().insertAll(ExerciseCatalog.toEntities())
+                    for (catEx in ExerciseCatalog.DEFAULT_CATALOG) {
+                        val entity = db.exerciseDao().findByNormalizedName(catEx.normalizedName)
+                        if (entity != null) {
+                            val aliases = catEx.aliases.map {
+                                ExerciseAliasEntity(
+                                    exerciseId = entity.id,
+                                    normalizedAlias = WorkoutTextParser.normalize(it)
+                                )
+                            }
+                            db.exerciseAliasDao().insertAll(aliases)
                         }
-                        db.exerciseAliasDao().insertAll(aliases)
                     }
                 }
-            }
-            if (db.categoryDao().getAll().isEmpty()) {
-                val defaultCategories = listOf(
-                    Triple("Pecho", "🛡️", 0),
-                    Triple("Espalda", "🏹", 1),
-                    Triple("Piernas", "🦵", 2),
-                    Triple("Hombros", "🏋️", 3),
-                    Triple("Brazos", "💪", 4),
-                    Triple("Full Body", "⚡", 5),
-                    Triple("Torso", "🏛️", 6),
-                    Triple("Push", "↗️", 7),
-                    Triple("Pull", "↙️", 8)
-                ).map { (name, icon, order) ->
-                    CategoryEntity(
-                        name = name,
-                        icon = icon,
-                        orderIndex = order,
-                        isHidden = false,
-                        colorHex = "#75D9C1"
-                    )
+                if (db.categoryDao().getAll().isEmpty()) {
+                    val defaultCategories = listOf(
+                        Triple("Pecho", "🛡️", 0),
+                        Triple("Espalda", "🏹", 1),
+                        Triple("Piernas", "🦵", 2),
+                        Triple("Hombros", "🏋️", 3),
+                        Triple("Brazos", "💪", 4),
+                        Triple("Full Body", "⚡", 5),
+                        Triple("Torso", "🏛️", 6),
+                        Triple("Push", "↗️", 7),
+                        Triple("Pull", "↙️", 8)
+                    ).map { (name, icon, order) ->
+                        CategoryEntity(
+                            name = name,
+                            icon = icon,
+                            orderIndex = order,
+                            isHidden = false,
+                            colorHex = "#75D9C1"
+                        )
+                    }
+                    db.categoryDao().insertAll(defaultCategories)
                 }
-                db.categoryDao().insertAll(defaultCategories)
             }
+            profileFlow.first()
+            loaded = true
+        } catch (t: Throwable) {
+            initError = "Error al iniciar base de datos: ${t.message ?: "Fallo inesperado"}"
         }
-        profileFlow.first()
-        loaded = true
     }
 
     if (!loaded) {
         Box(
-            modifier = Modifier.fillMaxSize().background(Color.Black),
+            modifier = Modifier.fillMaxSize().background(SyntraColors.BackgroundBlack),
             contentAlignment = Alignment.Center
         ) {
-            CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+            if (initError != null) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier.padding(24.dp)
+                ) {
+                    Text(
+                        text = initError!!,
+                        color = SyntraColors.Error,
+                        style = MaterialTheme.typography.bodyMedium,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    )
+                    SyntraButton(
+                        text = "Reintentar",
+                        onClick = { retryTrigger++ }
+                    )
+                }
+            } else {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    CircularProgressIndicator(
+                        color = SyntraColors.NeonMint,
+                        modifier = Modifier.size(36.dp),
+                        strokeWidth = 3.dp
+                    )
+                    Text(
+                        text = "Preparando Syntra…",
+                        color = SyntraColors.SoftMint,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+            }
         }
         return
     }
@@ -2032,14 +2073,14 @@ private fun ParserScreen(
                     )
                     if (newExercises.isNotEmpty()) {
                         Text(
-                            text = "✨ Se incorporarán a tu biblioteca los siguientes ejercicios nuevos: ${newExercises.joinToString { it.name }}.",
+                            text = "Se incorporarán a tu biblioteca los siguientes ejercicios nuevos: ${newExercises.joinToString { it.name }}.",
                             color = Color(0xFF81C784),
                             style = MaterialTheme.typography.bodySmall
                         )
                     }
                     if (preview.warnings.isNotEmpty()) {
                         Text(
-                            text = "⚠ Se detectaron advertencias en el texto. Verificalas antes de guardar.",
+                            text = "Aviso: Se detectaron observaciones en el texto. Verificalas antes de guardar.",
                             color = MaterialTheme.colorScheme.error,
                             style = MaterialTheme.typography.bodySmall
                         )
@@ -2256,42 +2297,56 @@ private fun ParserScreen(
                     shape = RoundedCornerShape(12.dp)
                 ) {
                     Column(Modifier.padding(14.dp)) {
-                        Row(
+                        Column(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
                             Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text(
-                                    text = exercise.name,
-                                    style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                                if (exercise.isNewExercise) {
+                                Row(
+                                    modifier = Modifier.weight(1f, fill = false),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
                                     Text(
-                                        text = "✨ Nuevo",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = Color(0xFF81C784)
+                                        text = exercise.name,
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.primary
                                     )
+                                    if (exercise.isNewExercise) {
+                                        Surface(
+                                            color = Color(0xFF1B382B),
+                                            shape = RoundedCornerShape(4.dp),
+                                            border = BorderStroke(1.dp, Color(0xFF2E7D5B))
+                                        ) {
+                                            Text(
+                                                text = "Nuevo",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = Color(0xFF81C784),
+                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                                fontWeight = FontWeight.SemiBold
+                                            )
+                                        }
+                                    }
                                 }
-                            }
-                            OutlinedButton(
-                                onClick = {
-                                    exerciseToEdit = currentExercises.find { it.uid == exercise.uid }
-                                },
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
-                            ) {
-                                Text("✎ Editar", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                                OutlinedButton(
+                                    onClick = {
+                                        exerciseToEdit = currentExercises.find { it.uid == exercise.uid }
+                                    },
+                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp)
+                                ) {
+                                    Text("Editar", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+                                }
                             }
                         }
 
                         if (exercise.plannedTarget != null) {
                             Text(
-                                text = "🎯 Plan: ${exercise.plannedTarget}",
+                                text = "Plan: ${exercise.plannedTarget}",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = Color.LightGray
                             )

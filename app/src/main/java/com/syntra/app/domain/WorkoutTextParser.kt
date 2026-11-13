@@ -54,14 +54,14 @@ data class ParsePreview(
 }
 
 object WorkoutTextParser {
-    private val loadWithUnitRegex = Regex("(?i)([-+]?\\d+(?:[.,]\\d+)?)\\s*(kg|kgs?|kilos?|lbs?|libras?|bloques?|placas?)\\b")
+    private val loadWithUnitRegex = Regex("(?i)([-+]?\\d+(?:[.,]\\d+)?)\\s*(kg|kgs?|kilos?|lbs?|libras?|bloques?|placas?|bls?|blqs?|plc)\\b")
     private val bodyweightRegex = Regex("(?i)\\b(?:peso corporal|corporal|sin peso|bw)\\b")
     private val repTokenRegex = Regex("(?i)\\b(\\d{1,2})\\s*(?:f|al fallo|fallo)\\b|\\b(\\d{1,2})f\\b|\\b(\\d{1,2})\\b")
     private val failureNoteRegex = Regex("(?i)\\(?(fallo[^)]*)\\)?")
     private val irisxCommandPrefix = Regex("^(?i)(?:irisx|@irisx)[:,-]?\\s*(.+)$")
     private val knownTitles = setOf("piernas", "pecho", "espalda", "hombros", "brazos", "full body", "torso", "empuje", "tiron", "push", "pull")
 
-    private val planningRegex = Regex("(?i)\\b(\\d+)\\s*(?:x|de)\\s*(\\d+)(?:\\s*(?:a|-)\\s*(\\d+))?\\s*(?:reps?|repeticiones)?\\b")
+    private val planningRegex = Regex("(?i)(?:(?:objetivo|plan):?\\s*)?\\b(\\d+)\\s*(?:x|de|series?\\s*(?:de|x)?)\\s*(\\d+)(?:\\s*(?:a|-|–)\\s*(\\d+))?\\s*(?:reps?|repeticiones)?\\b")
     private val ambiguousSumRegex = Regex("(?i)\\b(\\d+)\\s*\\+\\s*(\\d+)\\b")
     private val dumbbellRegex = Regex("(?i)\\b(?:mancuernas?|por brazo|cada mano|c/u)\\b")
     private val assistedRegex = Regex("(?i)\\b(?:asistid[oa]s?|ayuda)\\b")
@@ -138,7 +138,7 @@ object WorkoutTextParser {
                     } else {
                         "$setsCount series de $minReps repeticiones"
                     }
-                    val cleanName = line.removeRange(planMatch.range).trim(' ', ':', '-', '–', ',')
+                    val cleanName = line.removeRange(planMatch.range).trim(' ', ':', '-', '–', ',', '(', ')')
                     if (cleanName.isNotBlank()) {
                         val resolvedName = aliasIndex[normalize(cleanName)] ?: cleanName
                         exercises += ParsedExercise(
@@ -190,20 +190,32 @@ object WorkoutTextParser {
             var plannedTarget: String? = null
             var exerciseNameRaw = prefix
 
-            val planMatch = planningRegex.find(prefix)
-            if (planMatch != null) {
-                val setsCount = planMatch.groups[1]?.value
-                val minReps = planMatch.groups[2]?.value
-                val maxReps = planMatch.groups[3]?.value
+            val planMatchInPrefix = planningRegex.find(prefix)
+            if (planMatchInPrefix != null) {
+                val setsCount = planMatchInPrefix.groups[1]?.value
+                val minReps = planMatchInPrefix.groups[2]?.value
+                val maxReps = planMatchInPrefix.groups[3]?.value
                 plannedTarget = if (maxReps != null) {
                     "$setsCount series de $minReps–$maxReps repeticiones"
                 } else {
                     "$setsCount series de $minReps repeticiones"
                 }
-                exerciseNameRaw = prefix.removeRange(planMatch.range)
+                exerciseNameRaw = prefix.removeRange(planMatchInPrefix.range)
             }
 
-            val cleanName = exerciseNameRaw.trim(' ', ':', '-', '–', ',')
+            val planMatchInValues = if (plannedTarget == null) planningRegex.find(values) else null
+            if (planMatchInValues != null) {
+                val setsCount = planMatchInValues.groups[1]?.value
+                val minReps = planMatchInValues.groups[2]?.value
+                val maxReps = planMatchInValues.groups[3]?.value
+                plannedTarget = if (maxReps != null) {
+                    "$setsCount series de $minReps–$maxReps repeticiones"
+                } else {
+                    "$setsCount series de $minReps repeticiones"
+                }
+            }
+
+            val cleanName = exerciseNameRaw.trim(' ', ':', '-', '–', ',', '(', ')')
             if (cleanName.isBlank()) {
                 unrecognizedLines += UnrecognizedLine(lineNumber + 1, line, "Falta el nombre del ejercicio previo a la carga.")
                 warnings += "Línea ${lineNumber + 1}: falta el nombre del ejercicio."
@@ -255,8 +267,10 @@ object WorkoutTextParser {
             data class RepMatch(val range: IntRange, val reps: Int, val isFailure: Boolean)
             val repMatches = mutableListOf<RepMatch>()
 
+            val planValuesRange = planMatchInValues?.range
             for (m in repTokenRegex.findAll(values)) {
                 if (loadRanges.any { lr -> m.range.first in lr || m.range.last in lr }) continue
+                if (planValuesRange != null && (m.range.first in planValuesRange || m.range.last in planValuesRange)) continue
 
                 val group1 = m.groups[1]?.value
                 val group2 = m.groups[2]?.value

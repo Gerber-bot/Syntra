@@ -102,7 +102,9 @@ Inspección directa con `.android-sdk\build-tools\35.0.0\aapt2.exe` y verificaci
 - **`application-label`:** `Syntra`
 - **`versionCode` / `versionName`:** `27` / `0.7.0-alpha18`
 - **`launchable-activity`:** `com.syntra.app.MainActivity` (`exported=true`)
-- **Permisos declarados (idénticos en `debug` y `release`, sin `INTERNET`):**
+- **Permisos declarados:**
+  - `android.permission.INTERNET` (para descarga HTTPS segura de modelos GGUF y consultas públicas)
+  - `android.permission.ACCESS_NETWORK_STATE` (para detección de redes medidas / Wi-Fi vs datos móviles)
   - `android.permission.VIBRATE`
   - `android.permission.SCHEDULE_EXACT_ALARM`
   - `android.permission.WAKE_LOCK`
@@ -123,7 +125,7 @@ Inspección directa con `.android-sdk\build-tools\35.0.0\aapt2.exe` y verificaci
 
 ## 7. Riesgos Pendientes
 
-1. **Validación física en Android 15 / Redmi Note 13 4G aún no ejecutada:** el funcionamiento real sobre hardware ARM64, Room en dispositivo, permisos en tiempo de ejecución y comportamiento HyperOS siguen pendientes.
+1. **Validación física en Android 15 / Redmi Note 13 4G aún no ejecutada:** el funcionamiento real sobre hardware ARM64, Room en dispositivo, permisos en tiempo de ejecución, comportamiento HyperOS y prueba háptica en los 3 escenarios del temporizador siguen pendientes.
 2. **Actualización sobre instalación existente (`com.syntra.app`):** al abandonar `.lab`, la próxima instalación se hará sobre la app real (`adb install -r`); **nunca desinstalar** previamente para no perder `/data/data/com.syntra.app`, y exportar antes un respaldo JSON por SAF.
 3. **Variante `debug` vs `release` para uso final:** `app-debug.apk` es apta para esta validación controlada; para una entrega final sin `debuggable=true` ni tooling de pruebas será necesario firmar `app-release-unsigned.apk` con keystore productivo.
 
@@ -133,8 +135,8 @@ Inspección directa con `.android-sdk\build-tools\35.0.0\aapt2.exe` y verificaci
 
 - **APK candidata para validación controlada en Redmi (`com.syntra.app`):**
   - Ruta: `app/build/outputs/apk/debug/app-debug.apk`
-  - Tamaño: `18402576 bytes`
-  - SHA-256: `BCE93E629050024BA7DF12B997605C65FD41664C8948617A99CAE438AE36901F`
+  - Tamaño: `18402635 bytes`
+  - SHA-256: `F74095911BB2891389546E9EAA0CEEA794886FF1659318F22C397A5E831B80AD`
 - **APK Release compilada (sin firmar, sin código de pruebas):**
   - Ruta: `app/build/outputs/apk/release/app-release-unsigned.apk`
   - Tamaño: `13836543 bytes`
